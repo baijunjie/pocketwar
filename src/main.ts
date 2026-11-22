@@ -4,6 +4,7 @@ import { FACTION_IDS, FactionId } from './sim/defs';
 import { GameOptions } from './sim/setup';
 import { showMenu } from './ui/menu';
 import { loadAssets } from './render/assets';
+import { modelAssets } from './render/models/spec';
 
 const app = document.getElementById('app')!;
 let game: GameApp | null = null;
@@ -57,7 +58,7 @@ if (q.has('view')) {
   boot.className = 'loading';
   boot.textContent = '正在加载模型…';
   app.appendChild(boot);
-  void loadAssets().then(() => {
+  void loadAssets(modelAssets()).then(() => {
     boot.remove();
     if (!q.has('f')) return toMenu();
   const pick = (v: string | null, d: FactionId): FactionId => (FACTION_IDS.includes(v as FactionId) ? (v as FactionId) : d);

@@ -4,23 +4,22 @@ import { GLTF, GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const cache = new Map<string, GLTF>();
 const pixels = new Map<unknown, ImageData>();
-let pending: Promise<void> | null = null;
+const loading = new Map<string, Promise<void>>();
 
-function manifest(): string[] {
-  return ['quaternius/horse.glb'];
-}
-
-/** 预加载全部模型；可重复调用 */
-export function loadAssets(onProgress?: (done: number, total: number) => void): Promise<void> {
-  if (pending) return pending;
+/** 预加载模型（清单由 models/spec.ts 的 modelAssets() 给出）；已加载过的不会重复加载 */
+export function loadAssets(list: string[], onProgress?: (done: number, total: number) => void): Promise<void> {
   const loader = new GLTFLoader();
-  const list = manifest();
   let done = 0;
-  pending = Promise.all(list.map(async p => {
-    cache.set(p, await loader.loadAsync(`${import.meta.env.BASE_URL}assets/${p}`));
-    onProgress?.(++done, list.length);
+  return Promise.all(list.map(p => {
+    let job = loading.get(p);
+    if (!job) {
+      job = loader.loadAsync(`${import.meta.env.BASE_URL}assets/${p}`).then(g => {
+        cache.set(p, g);
+      });
+      loading.set(p, job);
+    }
+    return job.then(() => onProgress?.(++done, list.length));
   })).then(() => undefined);
-  return pending;
 }
 
 export function asset(path: string): GLTF {

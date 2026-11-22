@@ -1,7 +1,7 @@
 /** 代码建模的士兵：真人比例的骨架与肢体，盔甲、头盔、盾牌、武器按兵种拼装，动作由程序生成 */
 import * as THREE from 'three';
-import { ball, box, cone, cyl, join, tube, xf } from './prims';
-import { RigBuilder } from './rig';
+import { ball, box, cone, cyl, join, tube, xf } from '../prims';
+import { RigBuilder } from '../rig';
 
 export type Weapon = 'sword' | 'katana' | 'spear' | 'halberd' | 'naginata' | 'lance' | 'javelin' | 'bow' | 'longbow'
   | 'crossbow' | 'gun';
@@ -169,6 +169,11 @@ export class Human {
   /** 武器拿在哪只手：0 右手，1 左手（弓） */
   private readonly wHand: number;
 
+  /** 长柄兵器可以立枪拒马 */
+  get canBrace(): boolean {
+    return this.pole && this.L.weapon !== 'javelin';
+  }
+
   constructor(rb: RigBuilder, parent: THREE.Object3D, private readonly L: HumanLook, team: THREE.Color, private readonly mounted = false) {
     const { body, hips, torso, head, arm, fore, grip, leg, shin } = this;
     parent.add(body);
@@ -303,7 +308,7 @@ export class Human {
     }
   }
 
-  pose(action: 'idle' | 'move' | 'attack' | 'die', k: number): void {
+  pose(action: 'idle' | 'walk' | 'run' | 'attack' | 'die' | 'charge' | 'brace' | 'guard' | 'guardWalk', k: number): void {
     const { body, torso, head, L } = this;
     body.rotation.set(0, 0, 0);
     body.position.set(0, 0, 0);
@@ -316,7 +321,16 @@ export class Human {
       torso.rotation.z = Math.sin(a) * 0.015;
       head.rotation.y = Math.sin(a) * 0.12;
       this.carry(Math.sin(a) * 0.02);
-    } else if (action === 'move') {
+    } else if (action === 'walk') {
+      // 行军：步子小、上身挺直，兵器扛着走
+      if (!this.mounted) this.legs(k, 0.5);
+      torso.rotation.z = this.mounted ? -0.03 : -0.05;
+      const sw = this.mounted ? 0 : Math.sin(a + 1.2);
+      torso.rotation.y = sw * 0.06;
+      head.rotation.y = -sw * 0.04;
+      this.carry(sw * 0.07);
+      if (!this.mounted && !L.shield && !this.ranged) this.setArm(1, -sw * 0.35 + 0.05, 0.45);
+    } else if (action === 'run') {
       if (!this.mounted) this.legs(k, 1);
       torso.rotation.z = this.mounted ? -0.1 : -0.2;
       // 上身随对侧腿前摆而扭转，空着的手臂屈肘摆动
@@ -325,6 +339,33 @@ export class Human {
       head.rotation.y = -sw * 0.1;
       this.carry(sw * 0.12);
       if (!this.mounted && !L.shield && !this.ranged) this.setArm(1, -sw * 0.75 + 0.1, 1.35);
+    } else if (action === 'charge') {
+      // 冲锋：俯身前倾，长枪放平夹在腋下；刀剑前指
+      torso.rotation.z = -0.32;
+      head.rotation.z = 0.2;
+      if (this.pole) this.setArm(0, 0.25, 1.25, -Math.PI / 2 - 0.2);
+      else this.setArm(0, 1.7, 0.35, -1.9, 0.2);
+      this.setArm(1, L.shield ? 0.55 : 0.5, L.shield ? 1.25 : 0.9);
+    } else if (action === 'brace') {
+      // 立枪：前腿弓、后腿蹬，枪尾抵地、枪尖斜指前上方
+      this.hips.position.y = 0.8;
+      this.leg[1].rotation.z = 0.85;
+      this.shin[1].rotation.z = -1.1;
+      this.leg[0].rotation.z = -0.55;
+      this.shin[0].rotation.z = -0.35;
+      torso.rotation.z = -0.28;
+      torso.rotation.y = 0.3;
+      this.setArm(0, 0.15, 0.9, -1.12);
+      if (L.shield) this.setArm(1, 0.75, 1.2);
+      else this.setArm(1, 1.0, 0.35);
+    } else if (action === 'guard' || action === 'guardWalk') {
+      // 举盾：盾举到头前，身子缩在后面
+      if (action === 'guardWalk' && !this.mounted) this.legs(k, 0.45);
+      torso.rotation.z = -0.16;
+      head.rotation.z = 0.12;
+      this.carry(0);
+      this.arm[1].rotation.set(-0.5, 0, 1.75);
+      this.fore[1].rotation.z = 0.75;
     } else if (action === 'attack') {
       this.attack(k);
     } else {

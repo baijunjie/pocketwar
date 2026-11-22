@@ -1,7 +1,7 @@
 /** 一局游戏：主循环、镜头、选择与指令输入 */
 import { DT, FactionDef, SITE_INFO } from './sim/defs';
 import { Game, GameOptions, createGame } from './sim/setup';
-import { MAX_UNITS, World } from './sim/world';
+import { MAX_UNITS, S_ROUT, World } from './sim/world';
 import { Minimap } from './render/minimap';
 import { Renderer } from './render/renderer';
 import { Hud } from './ui/hud';
@@ -225,6 +225,7 @@ export class GameApp {
       else if (k === 's') this.command('stop');
       else if (k === 'h') this.command('hold');
       else if (k === 'r') this.command('rally');
+      else if (k === 't') this.command('torch');
       else if (e.code.startsWith('Digit')) {
         // 用物理键位判断：Mac 上 Option+数字 输出的是特殊字符，Cmd+数字 又会被浏览器拿去切标签页
         const g = Number(e.code.slice(5));
@@ -236,7 +237,7 @@ export class GameApp {
           const grp = this.groups[g];
           if (!grp) return;
           const w = this.world;
-          const alive = grp.slots.filter((s, i) => w.alive[s] && w.uid[s] === grp.uids[i]);
+          const alive = grp.slots.filter((s, i) => w.controllable(s) && w.uid[s] === grp.uids[i]);
           this.setSelection(alive);
           const now = performance.now();
           if (this.lastGroup.g === g && now - this.lastGroup.t < 400 && alive.length) {
@@ -297,8 +298,9 @@ export class GameApp {
     let k = 0, changed = false;
     for (let m = 0; m < this.selList.length; m++) {
       const s = this.selList[m];
-      if (!w.alive[s] || w.uid[s] !== this.selUid[m]) {
-        if (w.uid[s] !== this.selUid[m] || !w.alive[s]) this.sel[s] = 0;
+      // 阵亡的、溃逃中的都从选择里拿掉
+      if (!w.alive[s] || w.uid[s] !== this.selUid[m] || w.state[s] & S_ROUT) {
+        this.sel[s] = 0;
         changed = true;
         continue;
       }
@@ -318,14 +320,14 @@ export class GameApp {
     const k = rd.pxPerUnit;
     let best = -1, bd = 1e9;
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.team[i] !== team) continue;
+      if (!w.alive[i] || w.team[i] !== team || (team === w.humanTeam && w.state[i] & S_ROUT)) continue;
       const p = rd.worldToScreen(w.x[i], w.y[i], 8);
       if (!p) continue;
       const r = 7 + w.rad[i] * k * 1.2;
       const dx = p.x - sx, dy = p.y - sy;
       const d = dx * dx + dy * dy;
       if (d < r * r && d < bd) {
-        if (visibleOnly && w.fog && !w.isVisible(w.x[i], w.y[i])) continue;
+        if (visibleOnly && !w.unitVisible(i)) continue;
         bd = d;
         best = i;
       }
@@ -350,7 +352,7 @@ export class GameApp {
       rd.updateCamera();
       const list: number[] = [];
       for (let i = 0; i < w.n; i++) {
-        if (!w.alive[i] || w.team[i] !== human || w.type[i] !== type) continue;
+        if (!w.controllable(i) || w.team[i] !== human || w.type[i] !== type) continue;
         const p = rd.worldToScreen(w.x[i], w.y[i], 8);
         if (p && p.x > 0 && p.y > 0 && p.x < rd.viewW && p.y < rd.viewH) list.push(i);
       }
@@ -375,7 +377,7 @@ export class GameApp {
     const list = add ? this.selList.slice() : [];
     const have = new Set(list);
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.team[i] !== human || have.has(i)) continue;
+      if (!w.controllable(i) || w.team[i] !== human || have.has(i)) continue;
       const p = rd.worldToScreen(w.x[i], w.y[i], 8);
       if (p && p.x >= ax && p.x <= bx && p.y >= ay && p.y <= by) list.push(i);
     }
@@ -388,16 +390,23 @@ export class GameApp {
   }
 
   // ------------------------------------------------------------------ 指令
-  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'all'): void {
+  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch'): void {
     const w = this.world;
     if (!w.humanTeam) return;
     if (c === 'all') {
       const list: number[] = [];
-      for (let i = 0; i < w.n; i++) if (w.alive[i] && w.team[i] === w.humanTeam) list.push(i);
+      for (let i = 0; i < w.n; i++) if (w.controllable(i) && w.team[i] === w.humanTeam) list.push(i);
       this.setSelection(list);
     } else if (c === 'rally') this.setMode(this.mode === 'rally' ? '' : 'rally');
     else if (!this.selList.length) return;
     else if (c === 'amove') this.setMode(this.mode === 'amove' ? '' : 'amove');
+    else if (c === 'torch') {
+      // 所选部队里只要有人没熄火把就全部熄灭，否则全部点燃
+      const off = this.selList.some(s => w.defs[w.type[s]].abilities.torch && !w.torchOff[s]);
+      w.orderTorch(this.selList, !off);
+      const lit = w.env.night && !w.env.raining;
+      this.hud.message(off ? '火把已熄灭' : lit ? '火把已点燃' : '已下令：入夜且不下雨时点燃火把', 'info');
+    }
     else w.orderStop(this.selList, c === 'hold');
   }
 
@@ -440,6 +449,10 @@ export class GameApp {
       if (bid >= 0) {
         const b = w.buildings[bid];
         if (b.alive && b.owner !== human && (b.owner !== 0 || force) && (!w.fog || w.isExplored(b.cx, b.cy))) {
+          if (b.def.fort && !this.selList.some(s => w.defs[w.type[s]].siege)) {
+            this.hud.message(`${b.def.name}只有器械和战象能破坏`, 'info');
+            return;
+          }
           w.orderAttackBuilding(this.selList, b);
           this.renderer.addMarker(b.cx, b.cy, 1, 0.25, 0.2);
           return;
@@ -527,11 +540,30 @@ export class GameApp {
         this.hud.showGameOver(human ? e.winner === human : null, () => this.onExit());
         continue;
       }
+      if (e.kind === 'rout') {
+        if (e.count < 3) continue;
+        if (e.team === human) this.hud.message(`我军 ${e.count} 人士气崩溃，正在溃逃！`, 'bad', e.x, e.y);
+        else if (!human) this.hud.message(`${f[e.team].name} ${e.count} 人溃逃`, 'info', e.x, e.y);
+        else if (w.isVisible(e.x, e.y)) this.hud.message(`敌军 ${e.count} 人溃逃`, 'good', e.x, e.y);
+        continue;
+      }
+      if (e.kind === 'weather') {
+        this.hud.message(e.rain ? '下雨了：火把点不着，行军变慢，士气下降' : '雨停了', 'info');
+        continue;
+      }
+      if (e.kind === 'daynight') {
+        this.hud.message(e.night ? '入夜：视野缩小，可点火把（T）' : '天亮了', 'info');
+        continue;
+      }
+      if (e.kind === 'hunger') {
+        if (e.team === human) this.hud.message(e.on ? '粮草耗尽，全军挨饿，士气持续下降！多占据点' : '粮草恢复供应', e.on ? 'bad' : 'good');
+        continue;
+      }
       const s = w.sites[e.site];
       if (e.kind === 'captured') {
         this.minimap.pings.push({ x: s.x, y: s.y, t: 0, color: colors[e.team] });
         if (!human) this.hud.message(`${f[e.team].name} 占领了 ${s.name}`, 'info', s.x, s.y);
-        else if (e.team === human) this.hud.message(`已占领 ${s.name}，将定时获得${SITE_INFO[s.type].provides}`, 'good', s.x, s.y);
+        else if (e.team === human) this.hud.message(`已占领 ${s.name}${e.repaired ? '并修复' : ''}，将定时获得${SITE_INFO[s.type].provides}`, 'good', s.x, s.y);
         else if (e.from === human) this.hud.message(`${s.name} 失守！`, 'bad', s.x, s.y);
         else this.hud.message(`敌军占领了 ${s.name}`, 'info', s.x, s.y);
       } else if (e.kind === 'reinforce') {
@@ -541,7 +573,7 @@ export class GameApp {
           this.minimap.pings.push({ x: sp.x, y: sp.y, t: 0, color: '#fff' });
         }
       } else if (e.kind === 'razed') {
-        this.hud.message(`${s.name} 已被摧毁，不再提供援军`, e.team === human ? 'info' : 'bad', s.x, s.y);
+        this.hud.message(`${s.name} 已成废墟，重新占领后才会修复`, e.team === human ? 'info' : 'bad', s.x, s.y);
       }
     }
     w.events.length = 0;

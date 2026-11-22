@@ -1,10 +1,11 @@
 /** 游戏内界面：顶栏、据点与援军、选中面板、指令按钮、战报、帮助与结算 */
-import { CLASS_NAMES, FactionDef, SITE_INFO, UNITS, UnitDef } from '../sim/defs';
+import { CLASS_NAMES, FactionDef, LEVELS, RULES, SITE_CATEGORY_NAMES, SITE_INFO, SIZES, UNITS, UnitDef } from '../sim/defs';
+import { teamMoraleFactors } from '../sim/systems/morale';
 import { World } from '../sim/world';
 import { unitPortrait } from '../render/portrait';
 
 export interface HudCallbacks {
-  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'all'): void;
+  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch'): void;
   selectType(defIdx: number, remove: boolean): void;
   setSpeed(s: number): void;
   focus(x: number, y: number): void;
@@ -24,9 +25,15 @@ export function unitTip(d: UnitDef): string {
   const lines = [
     `${d.name}（${CLASS_NAMES[d.cls]}）`, d.desc,
     `生命 ${d.hp}　攻击 ${d.dmg}${d.splash ? '（范围）' : ''}　攻速 ${d.cd}s`,
-    `射程 ${d.range ? d.range : '近战'}　护甲 ${d.armM}/${d.armP}　移速 ${d.speed}`,
+    `射程 ${d.range ? d.range : '近战'}　护甲 ${d.armM}/${d.armP}`,
+    `体型 ${SIZES[d.size].name}　行军 ${d.walk}　奔跑 ${d.speed}　口粮 ${d.upkeep}`,
   ];
-  if (d.charge) lines.push(`冲锋 +${d.charge}`);
+  const ab = d.abilities;
+  if (ab.charge) lines.push(`冲锋：远距离接敌时突进，冲撞伤害 ${ab.charge.impact}`);
+  if (ab.brace) lines.push(`拒马：敌人冲来时立枪，反伤 ${ab.brace.dmg}`);
+  if (ab.shield) lines.push(`举盾：遇远程敌人时远程伤害 −${Math.round(ab.shield.block * 100)}%，移动稍慢`);
+  if (ab.torch) lines.push('夜间可打火把');
+  lines.push(d.siege ? '工程类：能破坏城墙与箭楼' : '打建筑时投掷火把，烧不动城墙与箭楼');
   if (d.vsBld >= 2) lines.push(`对建筑 ×${d.vsBld}`);
   return lines.join('\n');
 }
@@ -46,6 +53,9 @@ export class Hud {
   private readonly portraits = new Map<number, string>();
   private selKey = '?';
   private readonly dbg: HTMLSpanElement;
+  private readonly envBox: HTMLSpanElement;
+  private readonly foodBox: HTMLSpanElement;
+  private readonly moraleBox: HTMLSpanElement;
 
   constructor(parent: HTMLElement, private readonly world: World, private readonly teamRgb: [number, number, number][],
     private readonly cb: HudCallbacks) {
@@ -58,7 +68,10 @@ export class Hud {
     this.counts = el('div', 'counts');
     this.clock = el('span', 'clock', '00:00');
     this.dbg = el('span', 'dbg');
-    top.append(this.counts, this.clock, this.dbg);
+    this.envBox = el('span', 'env');
+    this.foodBox = el('span', 'food');
+    this.moraleBox = el('span', 'morale');
+    top.append(this.counts, this.clock, this.envBox, this.foodBox, this.moraleBox, this.dbg);
     root.appendChild(top);
 
     const ctl = el('div', 'panel ctl');
@@ -110,6 +123,7 @@ export class Hud {
         ['停止', 'S', 'stop', '停止当前行动'],
         ['坚守', 'H', 'hold', '原地坚守，不追击'],
         ['集结点', 'R', 'rally', '设置援军集结位置'],
+        ['火把', 'T', 'torch', '点燃 / 熄灭所选部队的火把：点着看得远，也更容易被发现'],
         ['全军', 'Ctrl+A', 'all', '选中全部部队'],
       ];
       for (const [name, key, cmd, tip] of defs) {
@@ -136,12 +150,16 @@ export class Hud {
           <tr><td>A + 左键</td><td>攻击移动：沿途遇敌即战，遇墙自动破城</td></tr>
           <tr><td>S / H</td><td>停止 / 坚守</td></tr>
           <tr><td>R + 左键</td><td>设置援军集结点</td></tr>
+          <tr><td>T</td><td>点燃 / 熄灭所选部队的火把（夜间）</td></tr>
           <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
           <tr><td>方向键、中键拖动、小地图</td><td>移动镜头；滚轮缩放</td></tr>
           <tr><td>空格 / + −</td><td>暂停 / 调整速度</td></tr>
         </table>
-        <p><b>目标：</b>摧毁敌方大本营的主堡。占领村庄、马场、工坊、营地、城镇与城池后，援军会定时从己方后方入场；摧毁据点主建筑可使其永久失效。</p>
+        <p><b>目标：</b>摧毁敌方大本营的主堡。<b>占领据点：</b>先肃清圈内守军，再派人站到中央旗帜下读秒；敌人回到圈内读秒暂停，旗下没人则清零。占领后援军定时从己方后方入场，被毁的建筑也会修好。</p>
+        <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙和箭楼只有器械与战象能破（城门可以慢慢烧开）。己方单位可以走上自家城墙驻守，射得更远、挨箭更轻。</p>
         <p>高地上的远程部队射程与伤害更高；森林减免远程伤害并拖慢骑兵；浅滩可涉水但行动迟缓。</p>
+        <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会变白溃逃，逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
+        <p><b>粮草：</b>据点产粮、部队吃粮，只靠大本营养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。</p>
         <button class="primary">开始指挥</button>
       </div>`);
     this.help.querySelector('button')!.onclick = () => this.toggleHelp();
@@ -199,6 +217,30 @@ export class Hud {
       <span class="tag" style="--c:${css(this.teamRgb[other])}">${f[other].name}</span><b>${w.teamCount[other]}</b>`;
     const t = Math.floor(w.time);
     this.clock.textContent = `${String((t / 60) | 0).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+    // 时辰与天气
+    const env = w.env;
+    const ck = env.clock;
+    const E = RULES.env;
+    const part = env.night ? '夜晚' : ck < E.sunrise + 0.06 ? '清晨' : ck > E.sunset - 0.06 ? '黄昏' : ck < 0.44 ? '上午' : ck < 0.56 ? '正午' : '下午';
+    this.envBox.textContent = `${part} · ${env.raining ? '雨' : '晴'}`;
+    this.envBox.className = `env${env.night ? ' night' : ''}${env.raining ? ' rain' : ''}`;
+    this.envBox.title = `夜间视野 ×${E.nightVision}，火把 ×${E.torchVision}；雨天行军 ×${E.rainSpeed}，火把点不着`;
+    // 粮草
+    if (w.upkeep0[human] > 0) {
+      const net = w.foodIn[human] - w.foodOut[human];
+      this.foodBox.hidden = false;
+      this.foodBox.textContent = `粮草 ${Math.round(w.food[human])}（${net >= 0 ? '+' : ''}${Math.round(net)}/分）`;
+      this.foodBox.className = `food${w.hunger[human] > 0.15 ? ' bad' : net < 0 ? ' warn' : ''}`;
+      this.foodBox.title = `每分钟产 ${Math.round(w.foodIn[human])}、耗 ${Math.round(w.foodOut[human])}，粮仓上限 ${Math.round(w.foodCap[human])}`
+        + (w.hunger[human] > 0.01 ? `\n断粮：士气 −${Math.round(w.hunger[human] * RULES.morale.hunger)}` : '');
+    } else this.foodBox.hidden = true;
+    // 士气
+    const mor = Math.round(w.avgMorale[human]);
+    const rout = w.routing[human];
+    this.moraleBox.textContent = `士气 ${mor}${rout ? ` · 溃逃 ${rout}` : ''}`;
+    this.moraleBox.className = `morale${mor < 40 ? ' bad' : mor < 55 ? ' warn' : ''}`;
+    this.moraleBox.title = ['全军士气的加减项：', ...teamMoraleFactors(w, human).map(f => `${f.label} ${f.value > 0 ? '+' : ''}${f.value}`),
+      '另受附近敌我兵力对比、伤亡、负伤影响'].join('\n');
     // 据点列表
     let html = '<h3>据点与援军</h3>';
     const order = w.sites.slice().sort((a, b) => (a.owner === human ? 0 : a.owner === 0 ? 1 : 2) - (b.owner === human ? 0 : b.owner === 0 ? 1 : 2));
@@ -206,12 +248,13 @@ export class Hud {
       const info = SITE_INFO[s.type];
       const c = css(this.teamRgb[s.owner]);
       let state: string;
-      if (s.disabled) state = '<i>已毁</i>';
+      if (s.disabled) state = '<i>废墟 · 占领后修复</i>';
       else if (s.owner === human || (!w.humanTeam && s.owner)) {
         const sec = Math.max(0, Math.ceil(s.timer));
         const full = w.teamCount[s.owner] >= w.unitCap[s.owner];
-        state = full ? '<i>兵力已满</i>' : `<b>${info.provides}</b> ${(sec / 60) | 0}:${String(sec % 60).padStart(2, '0')}`;
-      } else state = `<i>${s.owner ? '敌占' : '中立'} · ${info.provides}</i>`;
+        const food = w.upkeep0[s.owner] > 0 ? ` <i>粮 +${Math.round((info.food * w.upkeep0[s.owner]) / 100)}</i>` : '';
+        state = (full ? '<i>兵力已满</i>' : `<b>${info.provides}</b> ${(sec / 60) | 0}:${String(sec % 60).padStart(2, '0')}`) + food;
+      } else state = `<i>${s.owner ? '敌占' : '中立'}${SITE_CATEGORY_NAMES[info.category]} · ${info.provides}</i>`;
       const cap = s.cap > 0 && s.capTeam ? `<u style="width:${Math.round(s.cap * 100)}%;background:${css(this.teamRgb[s.capTeam])}"></u>` : '';
       html += `<div class="site" data-id="${s.id}"><span class="dot" style="background:${s.disabled ? '#555' : c}"></span><span class="nm">${s.name}</span>${state}${cap}</div>`;
     }
@@ -222,7 +265,7 @@ export class Hud {
     const key = defIdx * 4 + team;
     let url = this.portraits.get(key);
     if (!url) {
-      url = unitPortrait(UNITS[defIdx].key, this.teamRgb[team], 44).toDataURL();
+      url = unitPortrait(UNITS[defIdx].model, this.teamRgb[team], 44).toDataURL();
       this.portraits.set(key, url);
     }
     return url;
@@ -230,16 +273,21 @@ export class Hud {
 
   updateSelection(sel: number[]): void {
     const w = this.world;
-    const count = new Map<number, { n: number; hp: number }>();
+    const count = new Map<number, { n: number; hp: number; lv: number; top: number; morale: number }>();
+    let moraleSum = 0;
     for (const s of sel) {
       const t = w.type[s];
       let e = count.get(t);
-      if (!e) count.set(t, (e = { n: 0, hp: 0 }));
+      if (!e) count.set(t, (e = { n: 0, hp: 0, lv: 0, top: 0, morale: 0 }));
       e.n++;
-      e.hp += w.hp[s] / UNITS[t].hp;
+      e.hp += w.hp[s] / w.maxHp[s];
+      e.lv += w.level[s];
+      if (w.level[s] > e.top) e.top = w.level[s];
+      e.morale += w.morale[s];
+      moraleSum += w.morale[s];
     }
-    let key = '';
-    for (const [t, e] of count) key += `${t}:${e.n}:${Math.round((e.hp / e.n) * 20)},`;
+    let key = `${Math.round(moraleSum / (sel.length || 1) / 4)}|`;
+    for (const [t, e] of count) key += `${t}:${e.n}:${Math.round((e.hp / e.n) * 20)}:${Math.round((e.lv / e.n) * 4)}:${e.top},`;
     if (key === this.selKey) return;
     this.selKey = key;
     if (!sel.length) {
@@ -248,7 +296,8 @@ export class Hud {
         : '<div class="hint">观战模式：方向键 / 拖动小地图移动镜头，滚轮缩放</div>';
       return;
     }
-    this.selBox.innerHTML = `<div class="total">已选 <b>${sel.length}</b></div>`;
+    const mAvg = Math.round(moraleSum / sel.length);
+    this.selBox.innerHTML = `<div class="total">已选 <b>${sel.length}</b><span class="${mAvg < 40 ? 'bad' : mAvg < 55 ? 'warn' : ''}">士气 ${mAvg}</span></div>`;
     const types = [...count.keys()].sort((a, b) => UNITS[a].row - UNITS[b].row || a - b);
     for (const t of types) {
       const e = count.get(t)!;
@@ -257,8 +306,11 @@ export class Hud {
         <img src="${this.portrait(t, w.humanTeam)}" draggable="false">
         <span class="n">${e.n}</span>
         <span class="nm">${d.name}</span>
+        ${e.top > 0 ? `<span class="lv">${'◆'.repeat(Math.max(1, Math.round(e.lv / e.n)))}</span>` : ''}
         <span class="hp"><u style="width:${Math.round((e.hp / e.n) * 100)}%"></u></span>`);
-      card.title = unitTip(d);
+      const routAt = d.lvRout[Math.round(e.lv / e.n)];
+      card.title = `${unitTip(d)}\n—\n平均等级 ${LEVELS.names[Math.round(e.lv / e.n)]}（最高 ${LEVELS.names[e.top]}）　士气 ${Math.round(e.morale / e.n)}`
+        + `　${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}`;
       card.onclick = ev => this.cb.selectType(t, ev.shiftKey || ev.ctrlKey || ev.metaKey);
       this.selBox.appendChild(card);
     }
@@ -278,6 +330,7 @@ export class Hud {
           <tr><th></th><th>${f[human].name}</th><th>${f[other].name}</th></tr>
           <tr><td>歼敌</td><td>${w.kills[human]}</td><td>${w.kills[other]}</td></tr>
           <tr><td>损失</td><td>${w.lost[human]}</td><td>${w.lost[other]}</td></tr>
+          <tr><td>其中逃散</td><td>${w.deserted[human]}</td><td>${w.deserted[other]}</td></tr>
           <tr><td>援军</td><td>${w.arrived[human]}</td><td>${w.arrived[other]}</td></tr>
           <tr><td>残存</td><td>${w.teamCount[human]}</td><td>${w.teamCount[other]}</td></tr>
         </table>

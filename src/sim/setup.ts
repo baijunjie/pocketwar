@@ -1,8 +1,9 @@
 /** 开局：生成地图、摆放建筑与据点、部署双方部队 */
-import { AI } from './ai';
+import { COMMANDERS, Commander } from './ai';
 import { BUILDINGS, FACTIONS, FactionDef, FactionId, SITE_CAMP, SITE_HQ, SITE_INFO, TILE, UNIT_BY_KEY } from './defs';
 import { generateMap } from './map';
 import { RNG } from './rng';
+import { initSupply } from './systems/supply';
 import { World } from './world';
 
 export interface GameOptions {
@@ -17,11 +18,17 @@ export interface GameOptions {
   /** 观战：双方都由 AI 指挥 */
   spectate: boolean;
   mapSize?: number;
+  /** 昼夜与天气，缺省开启 */
+  environment?: boolean;
+  /** 粮草，缺省开启 */
+  supply?: boolean;
+  /** 电脑一方用哪套指挥算法（见 ai/commander.ts），缺省 strategic */
+  ai?: string;
 }
 
 export interface Game {
   world: World;
-  ais: AI[];
+  ais: Commander[];
   opts: GameOptions;
 }
 
@@ -42,6 +49,7 @@ export function createGame(opts: GameOptions): Game {
   const rng = new RNG(opts.seed + 77);
   world.humanTeam = opts.spectate ? 0 : 1;
   world.fog = opts.fog && !opts.spectate;
+  world.env.enabled = opts.environment !== false;
   world.factions = [null, FACTIONS[opts.factions[0]], FACTIONS[opts.factions[1]]];
 
   for (let si = 0; si < map.sites.length; si++) {
@@ -52,7 +60,7 @@ export function createGame(opts: GameOptions): Game {
       name: s.type === SITE_HQ ? `${world.factions[s.owner]!.name}大本营` : s.name,
       x: s.tx * TILE, y: s.ty * TILE, radius: info.radius, owner: s.owner, capTeam: 0, cap: 0,
       timer: info.interval * rng.range(0.6, 1), interval: info.interval, buildings: [], main: -1, disabled: false,
-      count: [0, 0, 0],
+      count: [0, 0, 0], flag: [0, 0, 0],
     });
   }
   for (const spec of map.buildings) {
@@ -64,7 +72,8 @@ export function createGame(opts: GameOptions): Game {
   }
 
   const aiSizeMult = [0.8, 1, 1.2][opts.difficulty];
-  const ais: AI[] = [];
+  const ais: Commander[] = [];
+  const makeAI = COMMANDERS[opts.ai ?? 'strategic'];
   for (let tm = 1; tm <= 2; tm++) {
     const fac = world.factions[tm]!;
     const isAI = tm === 2 || opts.spectate;
@@ -88,7 +97,7 @@ export function createGame(opts: GameOptions): Game {
     };
     const hq = world.sites.find(s => s.type === SITE_HQ && s.owner === tm)!;
     const camp = world.sites.find(s => s.type === SITE_CAMP && s.owner === tm);
-    const ai = isAI ? new AI(world, tm, opts.spectate ? 1 : opts.difficulty) : null;
+    const ai = isAI ? makeAI(world, tm, opts.spectate ? 1 : opts.difficulty) : null;
     if (ai) ais.push(ai);
     if (camp) {
       const g = world.spawnGroup(tm, take(0.08), camp.x, camp.y + 40, dp.dx, dp.dy);
@@ -108,11 +117,13 @@ export function createGame(opts: GameOptions): Game {
       world.spawnGroup(tm, list.slice(cursor), dp.x, dp.y, dp.dx, dp.dy);
     }
   }
+  if (opts.supply !== false) initSupply(world);
+  world.systems.find(s => s.name === 'environment')!.run(world);
   world.refreshVision();
   return { world, ais, opts };
 }
 
-function chain(prev: World['onReinforce'], tm: number, ai: AI): World['onReinforce'] {
+function chain(prev: World['onReinforce'], tm: number, ai: Commander): World['onReinforce'] {
   return (team, slots) => {
     prev?.(team, slots);
     if (team === tm) ai.addReinforcements(slots);

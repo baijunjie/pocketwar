@@ -2,12 +2,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { FACTIONS, UNITS } from '../sim/defs';
-import { loadAssets } from '../render/assets';
-import { buildUnitModel } from '../render/unitModels';
+import { asset, loadAssets } from '../render/assets';
+import { CLIP_FALLBACK, buildUnitModel, gltfModel, modelAssets } from '../render/models/spec';
+import { clipOf } from '../render/rig';
 import { UnitBatch } from '../render/units';
 
 export async function runViewer(root: HTMLElement, mode: string, q: URLSearchParams): Promise<void> {
-  await loadAssets();
+  await loadAssets(modelAssets());
   const canvas = document.createElement('canvas');
   canvas.className = 'view';
   root.appendChild(canvas);
@@ -44,31 +45,54 @@ export async function runViewer(root: HTMLElement, mode: string, q: URLSearchPar
       col = 0;
       for (const d of UNITS) {
         if (d.faction !== fid || (only && d.key !== only)) continue;
-        const b = new UnitBatch(buildUnitModel(d.key, FACTIONS[fid].color));
+        const b = new UnitBatch(buildUnitModel(d.model, FACTIONS[fid].color));
         scene.add(b.mesh);
-        batches.push({ b, x: col * 75, z: row * 80 });
+        batches.push(only ? { b, x: 0, z: 0 } : { b, x: col * 95, z: row * 100 });
         col++;
       }
       row++;
     }
-    cam.position.set(240, 300, 620);
-    ctl.target.set(240, 0, 130);
+    cam.position.set(300, 380, 780);
+    ctl.target.set(300, 0, 170);
     if (only) {
-      cam.position.set(Number(q.get('cx')) || 15, 24, 75);
-      ctl.target.set(15, 9, 16);
+      cam.position.set(Number(q.get('cx')) || 26, 46, 140);
+      ctl.target.set(26, 9, 22);
     }
   }
   ctl.update();
-  const clipNames = ['idle', 'move', 'attack', 'die'];
+  // &gltf=路径.glb：直接预览任意 glTF 模型走通用烘焙流程的结果（动作名自动按常见叫法对应）
+  const gltf = q.get('gltf');
+  if (gltf) {
+    await loadAssets([gltf]);
+    const names = asset(gltf).animations.map(a => a.name).filter(n => !n.includes('|'));
+    const find = (...keys: string[]): string | undefined => names.find(n => keys.some(k => n.toLowerCase() === k))
+      ?? names.find(n => keys.some(k => n.toLowerCase().includes(k)));
+    const clips: Record<string, string> = {};
+    for (const [std, keys] of Object.entries({ idle: ['idle'], walk: ['walk'], run: ['run', 'gallop'], attack: ['attack'], die: ['death', 'die'] })) {
+      const n = find(...keys);
+      if (n) clips[std] = n;
+    }
+    console.log('动画：', names.join(', '), '→', clips);
+    const b = new UnitBatch(gltfModel({ kind: 'gltf', src: gltf, height: Number(q.get('h')) || 2, yaw: Number(q.get('ry') ?? Math.PI / 2), clips },
+      new THREE.Color(0.8, 0.2, 0.17)));
+    scene.add(b.mesh);
+    batches.push({ b, x: 0, z: 0 });
+    cam.position.set(60, 60, 150);
+    ctl.target.set(40, 10, 20);
+    ctl.update();
+  }
+  // 每个模型把它有的标准动作排成一排
+  const order = ['idle', 'walk', 'run', 'attack', 'die', 'charge', 'brace', 'guard', 'guardWalk'];
   const fixed = q.get('clip');
   const tick = (now: number): void => {
     requestAnimationFrame(tick);
     const t = now / 1000;
     for (const { b, x, z } of batches) {
       b.begin();
-      clipNames.forEach((c, i) => {
-        const clip = b.clips[fixed ?? c];
-        b.add(x + (i % 2) * 30, 0, z + ((i / 2) | 0) * 32, Number(q.get('yaw')) || 0, clip, (t / (clip.n / 30)) % 1);
+      const list = fixed ? [fixed] : order.filter(c => b.clips[c]);
+      list.forEach((c, i) => {
+        const clip = clipOf(b.model, c, CLIP_FALLBACK);
+        b.add(x + (i % 3) * 26, 0, z + ((i / 3) | 0) * 26, Number(q.get('yaw')) || 0, clip, (t / (clip.n / 30)) % 1);
       });
       b.end();
     }

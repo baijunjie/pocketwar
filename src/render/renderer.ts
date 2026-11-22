@@ -1,24 +1,27 @@
 /** three.js 渲染器：立体地形、透视镜头、实例化的单位与建筑、贴地标记与粒子 */
 import * as THREE from 'three';
 import {
-  BK_KEEP, BK_WALL, BUILDINGS, DT, PROJ_ARC, P_BALL, P_BIGBOLT, P_BOLT, P_BULLET, P_JAVELIN, P_ROCKET, P_STONE, SITE_HQ,
-  TILE, T_BRIDGE, UNITS,
+  BK_KEEP, BK_WALL, BUILDINGS, DT, PROJ_ARC, P_BALL, P_BIGBOLT, P_BOLT, P_BULLET, P_JAVELIN, P_ROCKET, P_STONE, P_TORCH,
+  RULES, SITE_HQ, TILE, T_BRIDGE, UNITS,
 } from '../sim/defs';
 import { CHUNK } from '../sim/map';
 import {
-  Building, FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_SMOKE, MAX_CORPSE, VIS_CELL, World,
+  Building, FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_FIRE, FX_HIT, FX_IMPACT, FX_LEVEL, FX_SMOKE, MAX_CORPSE,
+  MAX_UNITS, S_BRACE, S_CHARGE, S_ROUT, S_SHIELD, S_TORCH, S_WALL, VIS_CELL, World,
 } from '../sim/world';
 import { bridgeGeo, buildingGeo, flagHeight, propGeo, rubbleGeo, wallGeo } from './buildings';
 import { litMaterial, shared } from './materials';
 import { box, cyl, join } from './prims';
 import { Atlas, Q_AXIS, Q_BILLBOARD, Q_GROUND, Q_SCREEN, Quads, Sprite } from './quads';
 import { Terrain, WATER_Y } from './terrain';
-import { buildUnitModel } from './unitModels';
+import { CLIP_FALLBACK, buildUnitModel } from './models/spec';
+import { Clip, clipOf } from './rig';
 import { UnitBatch } from './units';
 
 const MAXP = 3000;
 const FOV = 30;
 const TAN = Math.tan((FOV / 2) * (Math.PI / 180));
+const DULL = new THREE.Color(0.42, 0.45, 0.48);
 
 export interface Marker {
   x: number;
@@ -50,7 +53,10 @@ export class Renderer {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(FOV, 1, 10, 30000);
   private readonly sun = new THREE.DirectionalLight(0xfff0d6, 2.4);
+  private readonly sky = new THREE.HemisphereLight(0xcfe0ff, 0x6e6548, 1.35);
   private readonly batches: (UnitBatch | null)[][] = [[], [], []];
+  /** [队伍][兵种] 各标准动作解析后的结果（缺的动作已按回退表补上） */
+  private readonly clips: (Record<string, Clip> | null)[][] = [[], [], []];
   private readonly ground: Quads;
   private readonly sprites: Quads;
   private readonly overlay: Quads;
@@ -81,6 +87,8 @@ export class Renderer {
   // 粒子：x y z vx vy vz life life0 size grow r g b a
   private pn = 0;
   private readonly pp = new Float32Array(MAXP * 14);
+  /** 单位上下城墙时的高度过渡 */
+  private readonly lift = new Float32Array(MAX_UNITS);
 
   constructor(readonly canvas: HTMLCanvasElement, readonly world: World) {
     const r = (this.three = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' }));
@@ -94,7 +102,7 @@ export class Renderer {
     const scene = this.scene;
     scene.background = new THREE.Color(0x9db4c4);
     scene.fog = new THREE.Fog(0x9db4c4, 6000, 22000);
-    scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x6e6548, 1.35));
+    scene.add(this.sky);
     const sun = this.sun;
     sun.castShadow = true;
     sun.shadow.mapSize.set(4096, 4096);
@@ -170,8 +178,13 @@ export class Renderer {
       const fac = world.factions[tm]!;
       for (const d of UNITS) {
         if (d.faction !== fac.id) continue;
-        const b = new UnitBatch(buildUnitModel(d.key, this.teamRgb[tm]));
+        const b = new UnitBatch(buildUnitModel(d.model, this.teamRgb[tm]));
         this.batches[tm][d.idx] = b;
+        const set: Record<string, Clip> = {};
+        for (const name of ['idle', 'walk', 'run', 'attack', 'attackMove', 'die', 'charge', 'brace', 'guard', 'guardWalk']) {
+          set[name] = clipOf(b.model, name, CLIP_FALLBACK);
+        }
+        this.clips[tm][d.idx] = set;
         scene.add(b.mesh);
         this.disposables.push(b);
       }
@@ -471,6 +484,38 @@ export class Renderer {
     if (this.flags.instanceColor) this.flags.instanceColor.needsUpdate = true;
   }
 
+  /** 昼夜与天气的画面表现：天光强弱与颜色、天空与雾色 */
+  private applyEnvironment(): void {
+    const env = this.world.env;
+    const L = env.light, wet = env.rain;
+    const c = this.col;
+    // 夜里改成偏蓝的月光；下雨时整体压暗、发灰
+    this.sun.intensity = (0.32 + 2.08 * L) * (1 - wet * 0.45);
+    this.sun.color.setRGB(0.56 + 0.44 * L, 0.66 + 0.28 * L, 1 - 0.16 * L);
+    this.sky.intensity = (0.42 + 0.93 * L) * (1 - wet * 0.2);
+    this.sky.color.setRGB(0.5 + 0.31 * L, 0.6 + 0.28 * L, 1);
+    c.setRGB(0.05 + 0.57 * L, 0.07 + 0.64 * L, 0.13 + 0.64 * L).lerp(DULL, wet * 0.55 * (0.25 + 0.75 * L));
+    (this.scene.background as THREE.Color).copy(c);
+    const fog = this.scene.fog as THREE.Fog;
+    fog.color.copy(c);
+    fog.near = 6000 - wet * 3200;
+    fog.far = 22000 - wet * 9000;
+  }
+
+  /** 雨丝：每帧在视野里随机撒一批斜线 */
+  private drawRain(S: Quads): void {
+    const wet = this.world.env.rain;
+    if (wet <= 0.01) return;
+    const n = Math.round(wet * 420);
+    const sx = this.vx1 - this.vx0, sz = this.vy1 - this.vy0;
+    const len = Math.max(22, this.dist * 0.035), wd = Math.max(0.5, this.dist * 0.0009);
+    const top = this.dist * 0.55;
+    for (let k = 0; k < n; k++) {
+      const x = this.vx0 + Math.random() * sx, z = this.vy0 + Math.random() * sz;
+      S.add(Q_AXIS, this.white, x, this.terrain.heightAt(x, z) + Math.random() * top, z, len, wd, 0.78, 0.84, 0.95, 0.28, 0.5, 0.5, 0.16, -1, 0.06);
+    }
+  }
+
   /** @param fewSel 选中数量较少时，为每个选中单位都画血条；否则只画受伤的 */
   render(alpha: number, dt: number, sel: Uint8Array, fewSel = true): void {
     this.resize();
@@ -531,6 +576,24 @@ export class Renderer {
         case FX_DEATH:
           this.spawn(fx, y + 3, fz, (R() - 0.5) * 16, 6, (R() - 0.5) * 16, 0.5, a * 0.7, 6, 0.6, 0.54, 0.44, 0.5);
           break;
+        case FX_LEVEL:
+          // 升级：一圈金光
+          if (near) {
+            this.spawn(fx, y + 16, fz, 0, 26, 0, 0.7, 5, 9, 1, 0.85, 0.3, 0.9);
+            this.spawn(fx, y + 4, fz, 0, 8, 0, 0.5, 9, 14, 1, 0.9, 0.5, 0.45);
+          }
+          break;
+        case FX_IMPACT:
+          for (let j = 0; j < 4; j++) {
+            const an = R() * 6.28;
+            this.spawn(fx, y + 6, fz, Math.cos(an) * 30, 12 + R() * 14, Math.sin(an) * 30, 0.45, a * 0.5, 9, 0.72, 0.66, 0.54, 0.6);
+          }
+          break;
+        case FX_FIRE:
+          // 火把砸中：一团火苗加黑烟
+          this.spawn(fx, y + 10, fz, (R() - 0.5) * 8, 22, (R() - 0.5) * 8, 0.6, 5, -3, 1, 0.6, 0.15, 0.9);
+          this.spawn(fx, y + 14, fz, 4, 16, 2, 1.2, 4, 10, 0.2, 0.19, 0.18, 0.4);
+          break;
         case FX_COLLAPSE:
           for (let j = 0; j < 8 * a; j++) {
             this.spawn(fx + (R() - 0.5) * a * 30, y + R() * 20, fz + (R() - 0.5) * a * 26, (R() - 0.5) * 30, 8 + R() * 16, (R() - 0.5) * 30, 1 + R() * 1.2, 8, 22, 0.62, 0.58, 0.52, 0.7);
@@ -550,11 +613,14 @@ export class Renderer {
       if (!known) continue;
       const c = tc[s.owner];
       const y = gy(s.x, s.y);
-      if (s.radius > 0 && !s.disabled) {
+      if (s.radius > 0) {
         G.add(Q_GROUND, this.circle, s.x, y, s.y, s.radius * 2, s.radius * 2, c[0], c[1], c[2], 0.55);
-        if (s.cap > 0 && s.capTeam) {
+        // 旗帜区：进攻方要站进这个小圈才开始读秒；读秒进度从小圈向外扩到整个占领圈
+        const fr = RULES.capture.flagRadius * 2;
+        G.add(Q_GROUND, ring, s.x, y, s.y, fr * 1.17, fr * 1.17, 1, 1, 1, 0.35);
+        if (s.capTeam) {
           const cc = tc[s.capTeam];
-          const rr = s.radius * 2 * s.cap;
+          const rr = fr + (s.radius * 2 - fr) * s.cap;
           G.add(Q_GROUND, this.circle, s.x, y, s.y, rr, rr, cc[0], cc[1], cc[2], 0.9);
         }
         m.makeRotationY(wave).scale(this.v.set(2.2, 2.2, 2.2)).setPosition(s.x, y, s.y);
@@ -606,12 +672,15 @@ export class Renderer {
       if (fog && !vis[((z / VIS_CELL) | 0) * vw + ((x / VIS_CELL) | 0)]) continue;
       const b = this.batches[w.cTeam[c]][w.cType[c]];
       if (!b) continue;
-      const clip = b.clips.die;
+      const clip = this.clips[w.cTeam[c]][w.cType[c]]!.die;
       // 最后几秒沉入地面
       const sink = Math.max(0, (age - (CORPSE_LIFE - 150)) / 150);
       b.add(x, gy(x, z) - sink * 6, z, w.cDir[c], clip, (age + alpha) / (clip.n * 1.0), 0, 1, 0.72);
     }
     const showBars = d < 1900;
+    const hbit = 1 << human;
+    const dark = 1 - w.env.light;
+    const wallTop = BUILDINGS.wall.top;
     const n = w.n;
     let drawn = 0;
     for (let i = 0; i < n; i++) {
@@ -619,25 +688,52 @@ export class Renderer {
       const x = w.px[i] + (w.x[i] - w.px[i]) * alpha, z = w.py[i] + (w.y[i] - w.py[i]) * alpha;
       if (!this.inView(x, z)) continue;
       const tm = w.team[i];
-      if (fog && tm !== human && !vis[((z / VIS_CELL) | 0) * vw + ((x / VIS_CELL) | 0)]) continue;
+      // 敌军要被己方看见才画（包括远处打着火把的）
+      if (fog && tm !== human && !(w.seen[i] & hbit)) continue;
       const b = this.batches[tm][w.type[i]]!;
+      const cl = this.clips[tm][w.type[i]]!;
       const def = UNITS[w.type[i]];
-      const y = gy(x, z);
+      const st = w.state[i];
+      // 站上城墙的单位抬到墙顶，上下墙时平滑过渡
+      const up = st & S_WALL ? wallTop : 0;
+      let lf = this.lift[i];
+      if (lf !== up) lf = this.lift[i] = Math.abs(up - lf) < 0.5 || lf > wallTop ? up : lf + (up - lf) * Math.min(1, (dt || 0.016) * 9);
+      const y = gy(x, z) + lf;
       const aa = w.atkAnim[i];
       const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
-      let clip = b.clips.idle, ph: number;
+      let clip: Clip, ph: number;
       if (aa > 0) {
-        clip = sp2 > 900 && b.clips.attackMove ? b.clips.attackMove : b.clips.attack;
+        clip = sp2 > 900 ? cl.attackMove : cl.attack;
         ph = 1 - aa / 0.3;
-      } else if (sp2 > 60) {
-        clip = b.clips.move;
-        // 步幅与行进距离挂钩，脚下不打滑
-        ph = (w.anim[i] * (def.radius > 8 ? 0.26 : 0.32)) % 1;
-      } else ph = (this.time * 0.4 + i * 0.37) % 1;
-      b.add(x, y, z, w.dir[i], clip, ph, w.flash[i] > 0 ? 0.25 : 0);
+      } else if (sp2 > 30) {
+        // 走还是跑看实际速度；步幅与行进距离挂钩，脚下不打滑
+        let name = sp2 > def.walk * def.walk * 1.3 ? 'run' : 'walk';
+        if (st & S_CHARGE) name = 'charge';
+        else if (st & S_SHIELD && !(st & S_ROUT)) name = 'guardWalk';
+        clip = cl[name];
+        ph = (w.odo[i] / (b.model.strides[name] ?? b.model.strides.walk ?? 28)) % 1;
+      } else {
+        clip = st & S_BRACE ? cl.brace : st & S_SHIELD ? cl.guard : cl.idle;
+        ph = (this.time * 0.4 + i * 0.37) % 1;
+      }
+      const torch = (st & S_TORCH) !== 0;
+      // 溃兵发白；夜里打火把的被火光照亮
+      b.add(x, y, z, w.dir[i], clip, ph, st & S_ROUT ? 0.42 : w.flash[i] > 0 ? 0.25 : 0, 1, torch ? 1 + dark * 0.9 : 1);
+      if (torch) {
+        const fl = 4.5 + Math.sin(this.time * 17 + i) * 1.2;
+        const fy = y + Math.min(b.model.height, 26) + 3;
+        S.add(Q_BILLBOARD, soft, x, fy, z, fl * 1.9, fl * 2.3, 1, 0.5, 0.12, 0.85);
+        S.add(Q_BILLBOARD, soft, x, fy - 0.5, z, fl, fl * 1.3, 1, 0.9, 0.55, 1);
+        if (near) G.add(Q_GROUND, soft, x, y, z, 70, 70, 1, 0.62, 0.25, 0.1 + dark * 0.12);
+      }
       drawn++;
-      const hr = w.hp[i] / def.hp;
+      const hr = w.hp[i] / w.maxHp[i];
       const top = b.model.height + 3;
+      const lv = w.level[i];
+      if (lv > 0 && showBars) {
+        // 等级：头顶一排金色小点
+        for (let k = 0; k < lv; k++) S.add(Q_BILLBOARD, white, x, y + top + 3.2, z, 1.7, 1.7, 1, 0.82, 0.25, 1, 0.5 - (k - (lv - 1) / 2) * 1.4, 0.5);
+      }
       if (sel[i]) {
         const r = def.radius * 2.6 + 5;
         G.add(Q_GROUND, ring, x, y, z, r, r, 0.35, 1, 0.4, 0.95);
@@ -690,7 +786,11 @@ export class Renderer {
       const y = gy(x, z) + arc * 4 * t * (1 - t) + 11;
       // 切线方向
       const ax = dx, ay = arc * 4 * (1 - 2 * t), az = dz;
-      if (type === P_STONE || type === P_BALL) {
+      if (type === P_TORCH) {
+        S.add(Q_BILLBOARD, soft, x, y, z, 9, 11, 1, 0.5, 0.12, 0.9);
+        S.add(Q_BILLBOARD, soft, x, y, z, 4.5, 6, 1, 0.9, 0.55, 1);
+        if (Math.random() < 0.5) this.spawn(x, y, z, 0, 5, 0, 0.4, 2, 4, 0.3, 0.28, 0.26, 0.35);
+      } else if (type === P_STONE || type === P_BALL) {
         const r = type === P_STONE ? 7 : 5;
         S.add(Q_BILLBOARD, soft, x, y, z, r * 1.6, r * 1.6, 0.16, 0.15, 0.14, 1);
         S.add(Q_BILLBOARD, soft, x, y, z, r, r, 0.42, 0.4, 0.38, 1);
@@ -742,6 +842,7 @@ export class Renderer {
       G.add(Q_GROUND, ring, mk.x, y, mk.y, sz * 1.7, sz * 1.7, mk.r, mk.g, mk.b, 1 - mk.t);
       G.add(Q_GROUND, ring, mk.x, y, mk.y, sz * 0.9, sz * 0.9, mk.r, mk.g, mk.b, (1 - mk.t) * 0.8);
     }
+    this.drawRain(S);
     G.end(this.viewW, this.viewH);
     S.end(this.viewW, this.viewH);
     O.end(this.viewW, this.viewH);
@@ -755,6 +856,7 @@ export class Renderer {
     const cx = cam.x - sn * fwd, cz = cam.y - cs * fwd;
     this.sun.target.position.set(cx, ty, cz);
     this.sun.position.set(cx - 0.55 * 3000, ty + 0.75 * 3000, cz + 0.42 * 3000);
+    this.applyEnvironment();
     const sc = this.sun.shadow.camera;
     sc.left = sc.bottom = -ext;
     sc.right = sc.top = ext;

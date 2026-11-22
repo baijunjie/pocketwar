@@ -69,7 +69,8 @@ export function wallGeo(mask: number, wood: boolean): G {
     });
     return join(...parts);
   }
-  const H = 26, T = 15;
+  // 墙体厚到墙顶能站人（驻守的单位就站在这个高度，见 BuildingDef.top）
+  const H = 26, T = 24;
   const straight = mask === 5 || mask === 10;
   if (!straight) {
     parts.push(box(T + 3, H + 4, T + 3, STONE_D, 0, (H + 4) / 2, 0));

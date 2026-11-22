@@ -79,7 +79,7 @@ export function showMenu(root: HTMLElement, onStart: (opts: GameOptions) => void
         const cell = document.createElement('div');
         cell.className = 'ru';
         cell.title = unitTip(d);
-        cell.appendChild(unitPortrait(key, FACTIONS[id].color, 40));
+        cell.appendChild(unitPortrait(d.model, FACTIONS[id].color, 40));
         const nm = document.createElement('span');
         nm.textContent = d.name;
         nm.dataset.cls = CLASS_NAMES[d.cls];

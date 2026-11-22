@@ -35,6 +35,8 @@ export interface NavBuilding {
   alive: boolean;
   gate: boolean;
   breach: number;
+  /** 己方可以走上去（城墙顶）；值为额外的寻路代价，0 表示不能 */
+  climb: number;
 }
 
 interface Job {
@@ -115,6 +117,10 @@ export class Nav {
         this.block[t][c] = base === 0 ? 1 : 0;
       } else if (b.gate && (b.owner === 0 || b.owner === t)) {
         this.cost[t][c] = base;
+        this.block[t][c] = 0;
+      } else if (b.owner === t && b.climb > 0) {
+        // 自家城墙：能上去驻守，但寻路时尽量走城门
+        this.cost[t][c] = base + b.climb;
         this.block[t][c] = 0;
       } else if (b.owner === t) {
         this.cost[t][c] = 0;

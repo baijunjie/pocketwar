@@ -1,82 +1,38 @@
-/** 各兵种的立体模型：代码建模的士兵与器械、战象，加上素材包里的马 */
+/** 代码建模的构建器：士兵、骑兵（马用素材包里的模型）、器械、战象 */
 import * as THREE from 'three';
-import { asset } from './assets';
-import { Human, HumanLook } from './human';
-import { ball, box, cone, cyl, join, xf } from './prims';
-import { Puppet, RigBuilder, UnitModel, skinnedBox } from './rig';
+import { asset } from '../assets';
+import { ball, box, cone, cyl, join, xf } from '../prims';
+import { Puppet, RigBuilder, UnitModel, skinnedBox } from '../rig';
+import { Human } from './human';
+import { DEFAULT_MOUNT, FootSpec, HorseSpec } from './spec';
 
 /** 每米对应的世界像素：士兵身高约 1.75 米 */
-const M = 10;
-
-interface Look {
-  kind: 'foot' | 'horse' | 'elephant' | 'onager' | 'trebuchet' | 'ballista' | 'rocket' | 'cannon';
-  human?: HumanLook;
-  coat?: number;
-  /** 马甲颜色 */
-  barding?: number;
-  size?: number;
-}
-
-const STEEL = 0xaab0b8, DARK = 0x34323a, BRONZE = 0xb8923e, LACQUER = 0x3a2226, LEATHER = 0x6e5136;
-const RED = 0xc0392b, GOLD = 0xd9b44a, CREAM = 0xe8dcc0;
-
-export const LOOKS: Record<string, Look> = {
-  // 中国：札甲、红缨盔、长戟强弩
-  ji: { kind: 'foot', human: { weapon: 'halberd', armor: 'lamellar', armorColor: 0x5c554c, helm: 'tassel', helmColor: 0x6e675e, plume: RED, skirt: 0.3 } },
-  dao: { kind: 'foot', human: { weapon: 'sword', shield: 'round', shieldColor: 0x7a2a22, armor: 'lamellar', armorColor: 0x8a7650, helm: 'tassel', helmColor: 0x8a7650, plume: RED, skirt: 0.3 } },
-  nu: { kind: 'foot', human: { weapon: 'crossbow', helm: 'futou', skirt: 0.5, quiver: true, legs: 0x3c3a36 } },
-  liannu: { kind: 'foot', human: { weapon: 'crossbow', armor: 'lamellar', armorColor: 0x3c3a40, helm: 'futou', skirt: 0.35, quiver: true } },
-  tieqi: { kind: 'horse', coat: 0x3d2a1e, barding: 0x7a2a24,
-    human: { weapon: 'lance', armor: 'lamellar', armorColor: 0x57514e, helm: 'tassel', helmColor: 0x57514e, plume: RED, pauldron: 0x57514e } },
-  huojian: { kind: 'rocket' },
-  pili: { kind: 'trebuchet' },
-  // 日本：阵笠、背旗、太刀铁炮
-  yari: { kind: 'foot', human: { weapon: 'spear', armor: 'do', armorColor: DARK, helm: 'jingasa', helmColor: 0x2a2a30, banner: true, skirt: 0.25, legs: 0x2e2c34 } },
-  samurai: { kind: 'foot', human: { weapon: 'katana', armor: 'do', armorColor: LACQUER, helm: 'kabuto', helmColor: 0x2a2226, plume: GOLD, pauldron: LACQUER, banner: true, skirt: 0.32, skirtColor: LACQUER, size: 1.05 } },
-  yumi: { kind: 'foot', human: { weapon: 'longbow', helm: 'jingasa', helmColor: 0x2a2a30, quiver: true, skirt: 0.25, legs: 0x2e2c34 } },
-  teppo: { kind: 'foot', human: { weapon: 'gun', armor: 'do', armorColor: DARK, helm: 'jingasa', helmColor: 0x2a2a30, skirt: 0.25, legs: 0x2e2c34 } },
-  kiba: { kind: 'horse', coat: 0x6a4428,
-    human: { weapon: 'katana', armor: 'do', armorColor: LACQUER, helm: 'kabuto', helmColor: 0x2a2226, plume: GOLD, pauldron: LACQUER, banner: true } },
-  sohei: { kind: 'foot', human: { weapon: 'naginata', helm: 'cowl', tunic: 0xe6e0d0, skirt: 0.6, skirtColor: 0x2e2c34, cape: false } },
-  ozutsu: { kind: 'cannon' },
-  // 罗马：环片甲、大方盾、短剑
-  legion: { kind: 'foot', human: { weapon: 'sword', shield: 'scutum', armor: 'bands', helm: 'crest', helmColor: STEEL, plume: RED, legs: 'skin', skirt: 0.3, size: 1.03 } },
-  auxilia: { kind: 'foot', human: { weapon: 'spear', shield: 'oval', armor: 'mail', armorColor: 0x8c8f94, helm: 'galea', helmColor: BRONZE, legs: 'skin', skirt: 0.3 } },
-  velites: { kind: 'foot', human: { weapon: 'javelin', shield: 'small', shieldColor: LEATHER, helm: 'none', legs: 'skin', skirt: 0.32 } },
-  sagitt: { kind: 'foot', human: { weapon: 'bow', armor: 'mail', armorColor: 0x8c8f94, helm: 'cone', helmColor: STEEL, quiver: true, legs: 'skin', skirt: 0.3 } },
-  equites: { kind: 'horse', coat: 0x7a4a2a,
-    human: { weapon: 'lance', shield: 'oval', armor: 'mail', armorColor: 0x8c8f94, helm: 'crest', helmColor: BRONZE, plume: RED, cape: true, legs: 'skin' } },
-  scorpio: { kind: 'ballista' },
-  onager: { kind: 'onager' },
-  // 波斯：软帽长袍、藤牌、鳞甲重骑
-  spara: { kind: 'foot', human: { weapon: 'spear', shield: 'wicker', helm: 'tiara', plume: GOLD, skirt: 0.5, legs: 0xb07a3c } },
-  immortal: { kind: 'foot', human: { weapon: 'spear', shield: 'oval', shieldColor: 0x8a5a2a, armor: 'scale', armorColor: BRONZE, helm: 'tiara', plume: CREAM, quiver: true, skirt: 0.55, legs: 0x6e3460, size: 1.03 } },
-  kamandar: { kind: 'foot', human: { weapon: 'bow', helm: 'tiara', plume: GOLD, quiver: true, skirt: 0.45, legs: 0xb07a3c } },
-  asvaran: { kind: 'horse', coat: 0xc9b08a, human: { weapon: 'bow', helm: 'tiara', plume: GOLD, quiver: true, legs: 0xb07a3c } },
-  cataphract: { kind: 'horse', coat: 0x3a3030, barding: 0x9aa0a8, size: 1.05,
-    human: { weapon: 'lance', armor: 'scale', armorColor: STEEL, helm: 'scalecap', helmColor: STEEL, plume: GOLD, pauldron: STEEL } },
-  elephant: { kind: 'elephant' },
-  mangonel: { kind: 'onager' },
-};
+export const M = 10;
 
 const WOOD = 0x8a6a42, WOOD_D = 0x5a4028, IRON = 0x55585e, ROPE = 0xc8b48a;
 
-function foot(L: Look, team: THREE.Color): UnitModel {
+export function foot(L: FootSpec, team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
   rb.root.scale.setScalar(M);
-  const h = new Human(rb, rb.root, L.human!, team);
+  const h = new Human(rb, rb.root, L.human, team);
   rb.clip('idle', 2.4, (_t, k) => h.pose('idle', k), 10);
-  rb.clip('move', 1.0, (_t, k) => h.pose('move', k));
+  rb.clip('walk', 1.0, (_t, k) => h.pose('walk', k));
+  rb.clip('run', 1.0, (_t, k) => h.pose('run', k));
   rb.clip('attack', 0.5, (_t, k) => h.pose('attack', k));
   rb.clip('die', 0.5, (_t, k) => h.pose('die', k));
-  return rb.build();
+  if (h.canBrace) rb.clip('brace', 0.1, () => h.pose('brace', 0));
+  if (L.human.shield) {
+    rb.clip('guard', 0.1, () => h.pose('guard', 0));
+    rb.clip('guardWalk', 1.0, (_t, k) => h.pose('guardWalk', k));
+  }
+  return rb.build({ walk: 15, run: 28.4, guardWalk: 15 });
 }
 
 const SEAT_T = 0.6, SEAT_X = 0, SEAT_Y = -2.5;
 
-function horse(L: Look, team: THREE.Color): UnitModel {
+export function horse(L: HorseSpec, team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
-  const hp = new Puppet(asset('quaternius/horse.glb'));
+  const hp = new Puppet(asset(L.mount ?? DEFAULT_MOUNT));
   rb.root.add(hp.scene);
   const sz = L.size ?? 1;
   hp.scene.rotation.y = Math.PI / 2;
@@ -99,7 +55,7 @@ function horse(L: Look, team: THREE.Color): UnitModel {
   const seat = new THREE.Group();
   rb.root.add(seat);
   seat.scale.setScalar(M * sz);
-  const r = new Human(rb, seat, L.human!, team, true);
+  const r = new Human(rb, seat, L.human, team, true);
   // 骑手坐在马背中段、肩胛稍后的位置，随马背起伏
   const rear = hp.node('Torso'), front = hp.node('Torso3');
   const wp = new THREE.Vector3(), wf = new THREE.Vector3();
@@ -115,9 +71,20 @@ function horse(L: Look, team: THREE.Color): UnitModel {
     r.pose('idle', k);
     sit();
   }, 8);
-  rb.clip('move', 0.58, (t, k) => {
+  const walkLen = hp.durations.get('Walk') ?? 1;
+  rb.clip('walk', walkLen, (t, k) => {
+    hp.pose([{ clip: 'Walk', t }]);
+    r.pose('walk', k);
+    sit();
+  });
+  rb.clip('run', 0.58, (t, k) => {
     hp.pose([{ clip: 'Gallop', t }]);
-    r.pose('move', k);
+    r.pose('run', k);
+    sit();
+  });
+  rb.clip('charge', 0.58, (t, k) => {
+    hp.pose([{ clip: 'Gallop', t }]);
+    r.pose('charge', k);
     sit();
   });
   rb.clip('attack', 0.5, (t, k) => {
@@ -136,7 +103,7 @@ function horse(L: Look, team: THREE.Color): UnitModel {
     sit();
     r.body.position.y -= k * 0.5;
   });
-  return rb.build();
+  return rb.build({ walk: 21, run: 35, charge: 35 });
 }
 
 function wheel(r: number, x: number, z: number, color = WOOD_D): THREE.BufferGeometry {
@@ -151,7 +118,7 @@ function engineClips(rb: RigBuilder, body: THREE.Group, fire: (k: number) => voi
     body.rotation.set(0, 0, 0);
     rest();
   });
-  rb.clip('move', 0.5, (_t, k) => {
+  rb.clip('walk', 0.5, (_t, k) => {
     rest();
     body.position.set(0, Math.abs(Math.sin(k * Math.PI * 2)) * 0.4, 0);
     body.rotation.z = Math.sin(k * Math.PI * 2) * 0.015;
@@ -169,7 +136,7 @@ function engineClips(rb: RigBuilder, body: THREE.Group, fire: (k: number) => voi
 }
 
 /** 扭力投石机（野驴）：低矮车架 + 一根甩臂 */
-function onager(team: THREE.Color): UnitModel {
+export function onager(team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group(), armG = new THREE.Group();
   rb.root.add(body);
@@ -189,11 +156,11 @@ function onager(team: THREE.Color): UnitModel {
   engineClips(rb, body, k => {
     armG.rotation.z = k < 0.25 ? 1.25 - (k / 0.25) * 1.55 : -0.3 + ((k - 0.25) / 0.75) * 1.55;
   }, rest);
-  return rb.build();
+  return rb.build({ walk: 35 });
 }
 
 /** 人力抛石机（霹雳车）：高架 + 长杠杆 */
-function trebuchet(team: THREE.Color): UnitModel {
+export function trebuchet(team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group(), armG = new THREE.Group();
   rb.root.add(body);
@@ -213,11 +180,11 @@ function trebuchet(team: THREE.Color): UnitModel {
   engineClips(rb, body, k => {
     armG.rotation.z = k < 0.3 ? 1.9 - (k / 0.3) * 2.2 : -0.3 + ((k - 0.3) / 0.7) * 2.2;
   }, rest);
-  return rb.build();
+  return rb.build({ walk: 35 });
 }
 
 /** 蝎弩：支架上的大型弩 */
-function ballista(team: THREE.Color): UnitModel {
+export function ballista(team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group(), slide = new THREE.Group();
   rb.root.add(body);
@@ -232,10 +199,10 @@ function ballista(team: THREE.Color): UnitModel {
     slide.scale.setScalar(k < 0.5 ? 0.001 : 1);
     body.position.x = -Math.sin(Math.min(1, k * 2) * Math.PI) * 1.5;
   }, () => slide.scale.setScalar(1));
-  return rb.build();
+  return rb.build({ walk: 35 });
 }
 
-function rocketCart(team: THREE.Color): UnitModel {
+export function rocketCart(team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group();
   rb.root.add(body);
@@ -250,10 +217,10 @@ function rocketCart(team: THREE.Color): UnitModel {
   engineClips(rb, body, k => {
     body.position.x = -Math.sin(k * Math.PI) * 2;
   }, () => undefined);
-  return rb.build();
+  return rb.build({ walk: 35 });
 }
 
-function cannon(team: THREE.Color): UnitModel {
+export function cannon(team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group();
   rb.root.add(body);
@@ -265,10 +232,10 @@ function cannon(team: THREE.Color): UnitModel {
   engineClips(rb, body, k => {
     body.position.x = -Math.sin(Math.min(1, k * 1.6) * Math.PI) * 5;
   }, () => undefined);
-  return rb.build();
+  return rb.build({ walk: 35 });
 }
 
-function elephant(team: THREE.Color): UnitModel {
+export function elephant(team: THREE.Color): UnitModel {
   const rb = new RigBuilder();
   const SKIN = 0x7d7873, SKIN_D = 0x66625e, IVORY = 0xf0e8d2;
   const T = team as unknown as number;
@@ -331,7 +298,7 @@ function elephant(team: THREE.Color): UnitModel {
     trunk.rotation.z = 0.12 + Math.sin(k * Math.PI * 2) * 0.12;
     trunk2.rotation.z = 0.25 + Math.sin(k * Math.PI * 2 + 1) * 0.2;
   }, 10);
-  rb.clip('move', 1.0, (_t, k) => {
+  rb.clip('walk', 1.0, (_t, k) => {
     rest();
     walk(k, 0.38);
     trunk2.rotation.z = 0.25 + Math.sin(k * Math.PI * 4) * 0.12;
@@ -349,20 +316,5 @@ function elephant(team: THREE.Color): UnitModel {
     body.position.y = 27 - k * 13;
     legs.forEach(l => (l.rotation.z = k * 0.5));
   });
-  return rb.build();
-}
-
-export function buildUnitModel(key: string, teamRgb: [number, number, number]): UnitModel {
-  const L = LOOKS[key];
-  const team = new THREE.Color().setRGB(teamRgb[0] / 255, teamRgb[1] / 255, teamRgb[2] / 255, THREE.SRGBColorSpace);
-  switch (L.kind) {
-    case 'foot': return foot(L, team);
-    case 'horse': return horse(L, team);
-    case 'elephant': return elephant(team);
-    case 'onager': return onager(team);
-    case 'trebuchet': return trebuchet(team);
-    case 'ballista': return ballista(team);
-    case 'rocket': return rocketCart(team);
-    case 'cannon': return cannon(team);
-  }
+  return rb.build({ walk: 35 });
 }

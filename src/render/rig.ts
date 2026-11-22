@@ -21,6 +21,16 @@ export interface UnitModel {
   influences: number;
   /** 模型高度（世界单位），用于血条与选取 */
   height: number;
+  /** 移动类动作一个循环前进多少世界像素（动作名 → 步幅），用来让脚步与位移对上 */
+  strides: Record<string, number>;
+}
+
+/** 按标准动作名取动作，缺了就按 fallback 表退到相近的 */
+export function clipOf(m: { clips: Record<string, Clip> }, name: string, fallback: Record<string, string[]>): Clip {
+  const c = m.clips[name];
+  if (c) return c;
+  for (const f of fallback[name] ?? []) if (m.clips[f]) return m.clips[f];
+  return m.clips.idle ?? Object.values(m.clips)[0];
 }
 
 export interface Layer {
@@ -199,7 +209,7 @@ export class RigBuilder {
     }
   }
 
-  build(): UnitModel {
+  build(strides: Record<string, number> = {}): UnitModel {
     const w = this.cols.length * 4, h = this.frames.length;
     const data = new Float32Array(w * h * 4);
     this.frames.forEach((row, f) => data.set(row.subarray(0, w * 4), f * w * 4));
@@ -217,7 +227,7 @@ export class RigBuilder {
       v.fromBufferAttribute(pos, i).applyMatrix4(m);
       if (v.y > height) height = v.y;
     }
-    return { geometry, bones, clips: this.clips, influences: this.influences, height };
+    return { geometry, bones, clips: this.clips, influences: this.influences, height, strides };
   }
 }
 

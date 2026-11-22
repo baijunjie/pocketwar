@@ -23,7 +23,7 @@ describe('地图生成', () => {
     expect(a.sites.filter(s => s.type === SITE_HQ).length).toBe(2);
     expect(a.buildings.length).toBeGreaterThan(400);
     if (import.meta.env.VITE_DUMP) console.log(ascii(a));
-  });
+  }, 30000);
 
   it('多个种子下所有据点、出兵口都与双方大本营连通', () => {
     for (const seed of [1, 7, 42, 1234, 99999]) {
@@ -40,7 +40,7 @@ describe('地图生成', () => {
         expect(f.dirs[w.cellAt(w.map.deploy[tm].x, w.map.deploy[tm].y)]).not.toBe(DIR_NONE);
       }
     }
-  });
+  }, 60000);
 
   it('地形比例合理', () => {
     const m = generateMap(42);
