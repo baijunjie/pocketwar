@@ -158,12 +158,22 @@ export const RULES = {
     climbCost: 60,
     /** 垛口位到墙根（城内空地）最多隔几格墙顶 */
     slotReach: 5,
+    /** 每格墙顶站几个人，以及各站位相对格子中心的位置（[往城外, 沿墙]，像素） */
+    slotCap: 3,
+    slotSubs: [[7, -9], [7, 9], [-7, 0]] as [number, number][],
+    /** 墙上的守军：敌人在射程（含城墙加成）的这个比例以内就不挪；挪过去至少要近这么多像素才挪 */
+    shiftInRange: 0.95,
+    shiftGain: 48,
+    /** 换到隔着门楼的另一段墙要下墙绕路，至少要近这么多像素才换 */
+    shiftFar: 200,
   },
   site: {
     /** 己方据点内、不在战斗中的单位每秒恢复的生命比例 */
     unitRegen: 0.012,
     /** 大本营没有占领圈：离中心这么近就算在据点里 */
     hqRadius: 400,
+    /** 援军在据点中心往南多远处出现 */
+    spawnOff: 70,
     /** 在自家据点里待命的守军的警戒距离（与塔楼的视野相当）：远程的会上前迎击这么远的敌人 */
     alarm: 560,
     /** 据点里待命的近战守军挨了敌方远程的打，这么多秒内会出击追打那个射手（否则不出据点） */
@@ -244,7 +254,9 @@ export const RULES = {
     towerDmg: 1.5,
     towerRange: 1.1,
     /** 升级后的据点，主建筑若原本不会放箭，就添一队弓手 */
-    mainTower: { range: 240, dmg: 16, cd: 1.2 } as TowerDef,
+    mainTower: { range: 240, dmg: 16, cd: 1.2, arrows: 1 } as TowerDef,
+    /** 升级后每轮放箭数量的倍数 */
+    towerArrows: 2,
     /** 有石料 / 木材时建筑自修加快到几倍，以及每修复 100 点生命消耗多少 */
     repairBoost: 4,
     repairCost: 1,

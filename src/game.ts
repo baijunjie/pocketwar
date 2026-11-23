@@ -1,7 +1,7 @@
 /** 一局游戏：主循环、镜头、选择与指令输入 */
 import { DT, FactionDef, RES_NAMES, RULES, SITE_INFO } from './sim/defs';
 import { Game, GameOptions, createGame } from './sim/setup';
-import { canUpgradeSite, unitUpgradeCost, upgradeAllCost, upgradeQueue } from './sim/systems/economy';
+import { canUpgradeSite, unitUpgradeCost, upgradeQueue } from './sim/systems/economy';
 import { MAX_UNITS, S_ROUT, Site, World } from './sim/world';
 import { Minimap } from './render/minimap';
 import { Renderer } from './render/renderer';
@@ -284,7 +284,7 @@ export class GameApp {
       } else if (k === 'f') this.command('amove');
       else if (k === 'x') this.command('stop');
       else if (k === 'h') this.command('hold');
-      else if (k === 'r') this.command('rally');
+      else if (k === 'r' || k === 'R') this.command(e.shiftKey ? 'unrally' : 'rally');
       else if (k === 't') this.command('torch');
       else if (k === 'b') this.command('outpost');
       else if (k === 'Home' || k === 'Backspace') {
@@ -352,7 +352,7 @@ export class GameApp {
   private setMode(m: Mode): void {
     this.mode = m;
     this.canvas.style.cursor = m ? 'crosshair' : 'default';
-    this.hud.setMode(m === 'amove' ? '攻击移动：左键指定目的地（右键取消）' : m === 'rally' ? '集结点：左键指定位置（右键取消）'
+    this.hud.setMode(m === 'amove' ? '攻击移动：左键指定目的地（右键取消）' : m === 'rally' ? '集结点：左键指定位置（右键退出；Shift+R 取消集结点）'
       : m === 'outpost' ? `扎营：左键指定临时据点的位置，所选部队会赶去搭建（木材 ${RULES.economy.outpostCost}，右键取消）` : '');
   }
 
@@ -396,57 +396,56 @@ export class GameApp {
     return -1;
   }
 
-  /** 屏幕内的己方单位 */
-  private unitsOnScreen(): number[] {
-    const w = this.world, rd = this.renderer, human = w.humanTeam;
-    rd.updateCamera();
+  /** 全图的己方单位（可操控的） */
+  private myUnits(): number[] {
+    const w = this.world, human = w.humanTeam;
     const out: number[] = [];
-    for (let i = 0; i < w.n; i++) {
-      if (!w.controllable(i) || w.team[i] !== human) continue;
-      const p = rd.worldToScreen(w.x[i], w.y[i], 8);
-      if (p && p.x > 0 && p.y > 0 && p.x < rd.viewW && p.y < rd.viewH) out.push(i);
-    }
+    for (let i = 0; i < w.n; i++) if (w.controllable(i) && w.team[i] === human) out.push(i);
     return out;
   }
 
-  /** 屏幕内还能升级的己方据点（城邦或营寨） */
-  private sitesOnScreen(category: 'fort' | 'camp'): Site[] {
-    const w = this.world, rd = this.renderer;
-    return w.sites.filter(s => {
-      if (s.owner !== w.humanTeam || SITE_INFO[s.type].category !== category || !canUpgradeSite(s)) return false;
-      const p = rd.worldToScreen(s.x, s.y);
-      return !!p && p.x > 0 && p.y > 0 && p.x < rd.viewW && p.y < rd.viewH;
-    });
+  /** 全图还能升级的己方据点（城邦或营寨），近的（离镜头中心）排前面 */
+  private mySites(category: 'fort' | 'camp'): Site[] {
+    const w = this.world, c = this.renderer.cam;
+    return w.sites.filter(s => s.owner === w.humanTeam && SITE_INFO[s.type].category === category && canUpgradeSite(s))
+      .sort((a, b) => (a.x - c.x) ** 2 + (a.y - c.y) ** 2 - ((b.x - c.x) ** 2 + (b.y - c.y) ** 2));
   }
 
-  /** 此刻该出现哪些升级按钮 */
+  /** 按升级的先后次序往下数，看黄金够升几个 */
+  private affordUnits(units: number[]): { count: number; cost: number; total: number } | null {
+    const w = this.world;
+    let left = w.stock.gold[w.humanTeam], count = 0, cost = 0;
+    const q = upgradeQueue(w, units);
+    for (const s of q) {
+      const c = unitUpgradeCost(w.defs[w.type[s]]);
+      if (c > left + 1e-6) continue;
+      left -= c;
+      cost += c;
+      count++;
+    }
+    return count ? { count, cost, total: q.length } : null;
+  }
+
+  /** 此刻该出现哪些升级按钮：「全部升级」针对全图，资源不够全升时能升几个就升几个 */
   private offers(): UpgradeOffers {
     const w = this.world, human = w.humanTeam;
     const o: UpgradeOffers = { sel: null, all: null, forts: null, camps: null };
     if (!human) return o;
-    const gold = w.stock.gold[human];
-    if (gold >= RULES.economy.unitGold) {
-      if (this.selList.length) {
-        // 按升级的先后次序往下数，看黄金够升几个
-        let left = gold, count = 0, cost = 0;
-        const q = upgradeQueue(w, this.selList);
-        for (const s of q) {
-          const c = unitUpgradeCost(w.defs[w.type[s]]);
-          if (c > left + 1e-6) continue;
-          left -= c;
-          cost += c;
-          count++;
-        }
-        if (count) o.sel = { count, cost, total: q.length };
-      }
-      const all = upgradeAllCost(w, this.unitsOnScreen());
-      if (all.count && all.cost <= gold + 1e-6) o.all = all;
+    if (w.stock.gold[human] >= RULES.economy.unitGold) {
+      if (this.selList.length) o.sel = this.affordUnits(this.selList);
+      o.all = this.affordUnits(this.myUnits());
     }
     for (const cat of ['fort', 'camp'] as const) {
-      const list = this.sitesOnScreen(cat);
-      if (!list.length) continue;
-      const cost = list.reduce((a, s) => a + SITE_INFO[s.type].upgradeCost, 0);
-      if (cost <= w.stock[cat === 'fort' ? 'stone' : 'wood'][human]) o[cat === 'fort' ? 'forts' : 'camps'] = { count: list.length, cost };
+      const list = this.mySites(cat);
+      let left = w.stock[cat === 'fort' ? 'stone' : 'wood'][human], count = 0, cost = 0;
+      for (const s of list) {
+        const c = SITE_INFO[s.type].upgradeCost;
+        if (c > left) continue;
+        left -= c;
+        cost += c;
+        count++;
+      }
+      if (count) o[cat === 'fort' ? 'forts' : 'camps'] = { count, cost, total: list.length };
     }
     return o;
   }
@@ -455,13 +454,13 @@ export class GameApp {
     const w = this.world;
     if (!w.humanTeam) return;
     if (act === 'sel' || act === 'all') {
-      const r = w.upgradeUnits(act === 'sel' ? this.selList : this.unitsOnScreen());
+      const r = w.upgradeUnits(act === 'sel' ? this.selList : this.myUnits());
       if (r.count) {
         this.hud.message(`${r.count} 人升为高级形态，花费黄金 ${Math.round(r.cost)}`, 'good');
         this.sound.ui('order');
       } else this.sound.ui('deny');
     } else {
-      const list = this.sitesOnScreen(act === 'forts' ? 'fort' : 'camp').filter(s => w.upgradeSite(s));
+      const list = this.mySites(act === 'forts' ? 'fort' : 'camp').filter(s => w.upgradeSite(s));
       if (list.length) {
         this.hud.message(`${list.map(s => s.name).join('、')} 已升级`, 'good');
         this.sound.ui('order');
@@ -590,7 +589,7 @@ export class GameApp {
   }
 
   // ------------------------------------------------------------------ 指令
-  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch' | 'outpost'): void {
+  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost'): void {
     const w = this.world;
     if (!w.humanTeam) return;
     if (c === 'all') {
@@ -598,6 +597,14 @@ export class GameApp {
       for (let i = 0; i < w.n; i++) if (w.controllable(i) && w.team[i] === w.humanTeam) list.push(i);
       this.setSelection(list);
     } else if (c === 'rally') this.setMode(this.mode === 'rally' ? '' : 'rally');
+    else if (c === 'unrally') {
+      if (this.mode === 'rally') this.setMode('');
+      if (w.rally[w.humanTeam]) {
+        w.rally[w.humanTeam] = null;
+        this.hud.message('已取消集结点：新出的援军留在各自的据点', 'info');
+        this.sound.ui('order');
+      } else this.hud.message('还没有设集结点：援军留在各自的据点', 'info');
+    }
     else if (!this.selList.length) return;
     else if (c === 'amove') this.setMode(this.mode === 'amove' ? '' : 'amove');
     else if (c === 'outpost') {
@@ -644,6 +651,7 @@ export class GameApp {
       const w = this.world;
       w.rally[w.humanTeam] = { x, y };
       this.renderer.addMarker(x, y, 1, 0.9, 0.3, false);
+      this.hud.message('集结点已设：之后新出的援军开赴这里（Shift+R 取消）', 'info', x, y);
     }
     this.setMode('');
   }
@@ -818,9 +826,8 @@ export class GameApp {
         else this.hud.message(`敌军占领了 ${s.name}`, 'info', s.x, s.y);
       } else if (e.kind === 'reinforce') {
         if (e.team === human) {
-          const sp = w.map.spawn[human];
-          this.hud.message(`援军抵达：${e.count} 人（${s.name}）`, 'good', sp.x, sp.y);
-          this.minimap.pings.push({ x: sp.x, y: sp.y, t: 0, color: '#fff' });
+          this.hud.message(`援军抵达：${e.count} 人（${s.name}）${w.rally[human] ? '，开赴集结点' : ''}`, 'good', s.x, s.y);
+          this.minimap.pings.push({ x: s.x, y: s.y, t: 0, color: '#fff' });
         }
       } else if (e.kind === 'razed') {
         if (s.gone) this.hud.message(e.team === human ? '敌方的临时据点已被摧毁' : '我方一座临时据点被摧毁', e.team === human ? 'good' : 'bad', s.x, s.y);

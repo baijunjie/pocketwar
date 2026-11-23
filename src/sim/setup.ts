@@ -77,7 +77,8 @@ export function createGame(opts: GameOptions): Game {
     world.unitCap[tm] = Math.min(3600, Math.max(320, Math.round(size * 1.5)));
     world.reinfMult[tm] = tm === 2 && !opts.spectate ? [0.8, 1, 1.25][opts.difficulty] : 1;
     const dp = map.deploy[tm];
-    world.rally[tm] = { x: dp.x, y: dp.y };
+    // 玩家开局不设集结点（援军留在各自的据点）；电脑把援军集结到出发阵地，凑够一队再派出去
+    world.rally[tm] = isAI ? { x: dp.x, y: dp.y } : null;
     // 洗牌后切分，保证各队兵种构成相近
     const list = armyList(fac, size);
     for (let i = list.length - 1; i > 0; i--) {

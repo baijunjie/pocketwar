@@ -4,7 +4,7 @@ import type { Field } from '../nav';
 import { NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT } from '../state';
 import type { Building, World } from '../world';
 import { formation } from './formation';
-import { P_POSTED, leavePost } from './garrison';
+import { P_POSTED, P_SHIFT, leavePost } from './garrison';
 import { createMarch } from './march';
 
 function obey(w: World, units: number[]): number[] {
@@ -179,7 +179,7 @@ export function orderAttackBuilding(w: World, all: number[], b: Building): void 
 export function orderStop(w: World, all: number[], hold: boolean): void {
   for (const s of obey(w, all)) {
     // 已经在垛口上的：坚守就是留在原位
-    if (hold && w.pmode[s] === P_POSTED) continue;
+    if (hold && (w.pmode[s] === P_POSTED || w.pmode[s] === P_SHIFT)) continue;
     leavePost(w, s);
     w.order[s] = hold ? O_HOLD : O_IDLE;
     w.target[s] = w.otarget[s] = NONE;

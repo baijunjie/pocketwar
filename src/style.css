@@ -41,7 +41,7 @@ button.primary:hover { filter: brightness(1.1); }
 .site i { font-style: normal; color: var(--dim); }
 .site u { position: absolute; left: 0; bottom: 0; height: 2px; }
 .mini { left: 16px; bottom: 16px; padding: 4px; line-height: 0; border-radius: 50%; }
-.mini canvas { width: 220px; height: 220px; cursor: crosshair; border-radius: 50%; }
+.mini canvas { width: 220px; height: 220px; cursor: crosshair; } /* 圆形由画布自己裁，右上角留给风向标 */
 .bottom { left: 256px; right: 262px; bottom: 16px; display: flex; justify-content: center; align-items: flex-end; gap: 6px; pointer-events: none !important; }
 .bottom > * { pointer-events: auto; }
 .selection { flex: 0 1 auto; min-width: 0; min-height: 76px; max-height: 150px; overflow-y: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; }

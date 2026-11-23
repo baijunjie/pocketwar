@@ -963,7 +963,7 @@ export class Renderer {
     // 集结点
     if (human) {
       const r = w.rally[human];
-      if (this.inView(r.x, r.y)) {
+      if (r && this.inView(r.x, r.y)) {
         const y = gy(r.x, r.y);
         G.add(Q_GROUND, ring, r.x, y, r.y, 30, 30, 1, 0.9, 0.3, 0.8);
         m.makeRotationY(wave).scale(this.v.set(1.3, 1.3, 1.3)).setPosition(r.x, y, r.y);

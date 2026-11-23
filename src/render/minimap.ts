@@ -147,6 +147,40 @@ export class Minimap {
     c.stroke();
     c.restore();
     c.restore();
+    this.drawWind();
+  }
+
+  /** 右上角（圆外的空角）画风向：箭头指向风吹去的方向，随小地图一起转；无风不画 */
+  private drawWind(): void {
+    const env = this.world.env, k = env.wind;
+    if (k <= 0.02) return;
+    const c = this.ctx, S = this.size;
+    const cx = S - 15, cy = 15, a = env.windDir + this.yaw;
+    c.save();
+    c.fillStyle = 'rgba(12, 10, 8, 0.78)';
+    c.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    c.lineWidth = 1;
+    c.beginPath();
+    c.arc(cx, cy, 13, 0, Math.PI * 2);
+    c.fill();
+    c.stroke();
+    c.translate(cx, cy);
+    c.rotate(a);
+    // 风越大箭头越长、越亮
+    const len = 5 + k * 4;
+    c.strokeStyle = c.fillStyle = k < 0.45 ? '#cfe6ff' : k < 0.75 ? '#ffe08a' : '#ff9a6a';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(-len, 0);
+    c.lineTo(len - 3, 0);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(len + 2, 0);
+    c.lineTo(len - 4, -4);
+    c.lineTo(len - 4, 4);
+    c.closePath();
+    c.fill();
+    c.restore();
   }
 
   /** 编队按领队画一条；不在编队里的按目的地归堆，从这一堆人的重心画起 */

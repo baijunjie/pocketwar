@@ -361,6 +361,8 @@ export interface TowerDef {
   range: number;
   dmg: number;
   cd: number;
+  /** 一轮同时放几支箭（各射一个目标，由近及远；目标不够时余下的都射最近那个） */
+  arrows: number;
 }
 export interface BuildingDef {
   key: string;

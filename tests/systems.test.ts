@@ -498,6 +498,86 @@ describe('据点与建筑', () => {
     expect(w.pmode[u]).toBe(3);
   }, 30000);
 
+  it('墙上的守军沿墙顶挪向射程外的敌人，一格站几人，始终不离开墙顶', () => {
+    const w = game();
+    clear(w, 1);
+    clear(w, 2);
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const mine = w.slots.filter(sl => sl.site === hq.id);
+    // 北墙正中的一个站位，以及同一段墙顶上隔得最远（但不超过警戒距离）的另一个站位
+    const s0 = mine.filter(sl => sl.y < hq.y).sort((a, b) => Math.abs(a.x - hq.x) - Math.abs(b.x - hq.x) || a.y - b.y)[0];
+    const far = mine.filter(sl => sl.group === s0.group && Math.hypot(sl.x - s0.x, sl.y - s0.y) < 420)
+      .sort((a, b) => Math.hypot(b.x - s0.x, b.y - s0.y) - Math.hypot(a.x - s0.x, a.y - s0.y))[0];
+    expect(Math.hypot(far.x - s0.x, far.y - s0.y)).toBeGreaterThan(300);
+    const men = w.spawnGroup(1, Array(6).fill(idx('nu')), s0.ex, s0.ey + 20, 0, -1);
+    w.orderGarrison(men);
+    for (let t = 0; t < 30 * 40 && men.some(u => w.pmode[u] !== P_POSTED); t++) w.tick();
+    expect(men.every(u => w.pmode[u] === P_POSTED)).toBe(true);
+    // 同一格里站了不止一个人
+    const cells = new Set(men.map(u => w.slots[w.post[u]].cell));
+    expect(cells.size).toBeLessThan(men.length);
+    const reach = UNIT_BY_KEY.nu.range * RULES.siege.wallRange;
+    const fx = far.x + Math.cos(far.face) * 90, fy = far.y + Math.sin(far.face) * 90;
+    const foe = w.spawnUnit(idx('samurai'), 2, fx, fy);
+    w.hp[foe] = w.maxHp[foe] = 1e6;
+    w.order[foe] = 4;
+    const d0 = Math.min(...men.map(u => Math.hypot(w.x[u] - fx, w.y[u] - fy)));
+    expect(d0).toBeGreaterThan(reach);
+    let offWall = 0;
+    for (let t = 0; t < 30 * 30; t++) {
+      w.tick();
+      w.x[foe] = fx;
+      w.y[foe] = fy;
+      for (const u of men) {
+        const b = w.nav.bld[w.cellAt(w.x[u], w.y[u])];
+        if (!(w.state[u] & S_WALL) || b < 0 || w.buildings[b].def.top <= 0) offWall++;
+      }
+    }
+    expect(offWall).toBe(0);
+    expect(men.every(u => w.pmode[u] === P_POSTED)).toBe(true);
+    // 都挪到了够得着的地方，并且射中了
+    expect(Math.max(...men.map(u => Math.hypot(w.x[u] - fx, w.y[u] - fy)))).toBeLessThan(reach);
+    expect(1e6 - w.hp[foe]).toBeGreaterThan(0);
+  }, 30000);
+
+  it('墙上的守军所在那段墙够不着敌人时，下墙绕到隔着门楼的另一段墙上', () => {
+    const w = game();
+    clear(w, 1);
+    clear(w, 2);
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const mine = w.slots.filter(sl => sl.site === hq.id);
+    const men = w.spawnGroup(1, Array(2).fill(idx('nu')), hq.x - 200, hq.y - 120, 0, -1);
+    w.orderGarrison(men);
+    for (let t = 0; t < 30 * 40 && men.some(u => w.pmode[u] !== P_POSTED); t++) w.tick();
+    expect(men.every(u => w.pmode[u] === P_POSTED)).toBe(true);
+    const g0 = w.slots[w.post[men[0]]].group, ux = w.x[men[0]], uy = w.y[men[0]];
+    // 找一处敌人位置：在警戒距离内，本段墙上最近的站位也够不着，另一段墙上近得多
+    const reach = UNIT_BY_KEY.nu.range * RULES.siege.wallRange;
+    let fx = 0, fy = 0;
+    for (const sl of mine) {
+      if (sl.group === g0) continue;
+      const x = sl.x + Math.cos(sl.face) * 100, y = sl.y + Math.sin(sl.face) * 100;
+      if (Math.hypot(x - ux, y - uy) > 520) continue;
+      const own = Math.min(...mine.filter(o => o.group === g0).map(o => Math.hypot(o.x - x, o.y - y)));
+      if (own > reach + 40 && own > Math.hypot(sl.x - x, sl.y - y) + RULES.siege.shiftFar + 20) {
+        fx = x;
+        fy = y;
+        break;
+      }
+    }
+    expect(fx).toBeGreaterThan(0);
+    const foe = w.spawnUnit(idx('samurai'), 2, fx, fy);
+    w.hp[foe] = w.maxHp[foe] = 1e6;
+    w.order[foe] = 4;
+    for (let t = 0; t < 30 * 90; t++) {
+      w.tick();
+      w.x[foe] = fx;
+      w.y[foe] = fy;
+    }
+    expect(men.every(u => w.pmode[u] === P_POSTED && w.slots[w.post[u]].group !== g0)).toBe(true);
+    expect(1e6 - w.hp[foe]).toBeGreaterThan(0);
+  }, 30000);
+
   it('占领：肃清守军后在旗下读秒；敌人回来暂停，旗下没人清零；占领后修复废墟', () => {
     const w = game();
     clear(w, 1);
@@ -595,13 +675,14 @@ describe('城墙与守御', () => {
     expect(w.nav.canStep(1, cIn + mw, cIn)).toBe(false);
     expect(w.nav.canStep(1, cIn, cIn + mw)).toBe(true);
     expect(w.nav.canStep(1, cOut, cOut - mw)).toBe(false);
-    // 垛口：外圈那一格有、里圈那一格没有；角楼顶上也有；墙根都是城内的空地
+    // 站位：外圈那一格有（每格 slotCap 个）、里圈那一格没有；角楼顶上也有；墙根都是城内的空地
+    const cap = RULES.siege.slotCap;
     const at = (b: { x0: number; y0: number; x1: number; y1: number }): number =>
       w.slots.filter(sl => sl.x > b.x0 && sl.x < b.x1 && sl.y > b.y0 && sl.y < b.y1).length;
-    expect(at(outerW)).toBe(1);
+    expect(at(outerW)).toBe(cap);
     expect(at(innerW)).toBe(0);
     const tower = blds.filter(b => b.def.key === 'tower')[0];
-    expect(at(tower)).toBe(3);
+    expect(at(tower)).toBe(3 * cap);
     for (const sl of w.slots) {
       const c = w.cellAt(sl.ex, sl.ey);
       expect(w.nav.inner[c] && !w.nav.block[1][c] && !w.nav.deck[1][c]).toBe(true);

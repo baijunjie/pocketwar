@@ -3,7 +3,7 @@ import { RULES, SITE_INFO, TILE, UNIT_BY_KEY } from '../content';
 import { NONE, S_ROUT } from '../state';
 import type { Building, Site, World } from '../world';
 import { setSiteLevel } from './economy';
-import { autoGarrison } from './garrison';
+import { autoGarrison, shiftPosts } from './garrison';
 import { SITE_EVERY } from './index';
 
 export function updateSites(w: World): void {
@@ -18,14 +18,17 @@ export function updateSites(w: World): void {
     w.sheltered[i] = 0;
     if (w.state[i] & S_ROUT) continue;
     const ux = w.x[i], uy = w.y[i];
+    const encl = w.enclosure.length ? w.enclosure[w.cellAt(ux, uy)] : -1;
     for (const s of sites) {
       if (s.gone) continue;
       const dx = ux - s.x, dy = uy - s.y;
       const d2 = dx * dx + dy * dy;
       // 圈内人数（大本营按休整半径）：用于占领和「据点是否在交战」
       if (d2 < (s.radius > 0 ? s.radius * s.radius : rest2)) s.count[w.team[i]]++;
-      // 在自家据点里（大本营没有占领圈，另按休整半径算；资源点不算据点）：雪天有遮蔽，不在战斗中就慢慢养伤
-      if (s.owner === w.team[i] && !s.disabled && SITE_INFO[s.type].haven && d2 < (s.radius > 0 ? s.radius * s.radius : rest2)) {
+      // 在自家据点里（有城墙、木栅的按围墙之内算；没有围墙的按占领圈，大本营按休整半径；资源点不算据点）：
+      // 雪天有遮蔽，不在战斗中就慢慢养伤
+      const inside = s.walled ? encl === s.id : d2 < (s.radius > 0 ? s.radius * s.radius : rest2);
+      if (s.owner === w.team[i] && !s.disabled && SITE_INFO[s.type].haven && inside) {
         w.sheltered[i] = 1;
         w.shelterSite[i] = s.id;
         if (w.combatT[i] <= 0 && w.target[i] === NONE && w.hp[i] < w.maxHp[i]) w.hp[i] = Math.min(w.maxHp[i], w.hp[i] + w.maxHp[i] * heal);
@@ -34,6 +37,7 @@ export function updateSites(w: World): void {
     }
   }
   autoGarrison(w);
+  shiftPosts(w);
   const calm = RULES.site.bldCalm * 30, mend = RULES.site.bldRegen * step;
   const E = RULES.economy;
   for (const s of sites) {
@@ -99,9 +103,20 @@ export function updateSites(w: World): void {
 
 /** 据点在交战：有建筑最近挨过打，或圈内有敌方单位（溃兵不算） */
 function siteFighting(w: World, s: Site, calm: number): boolean {
-  if (s.count[3 - s.owner] > 0) return true;
-  for (const id of s.buildings) if (w.tickCount - w.buildings[id].hitTick <= calm) return true;
-  return false;
+  return fightState(w, s, calm).fighting;
+}
+
+/**
+ * 据点的交战状态与原因（界面显示用）：圈内敌兵数；建筑最近一次挨打距今几秒（没挨过为 -1）；
+ * 还要几秒才转为平静（圈内有敌兵时为 -1：要等敌兵离开或被消灭）。
+ */
+export function fightState(w: World, s: Site, calm = RULES.site.bldCalm * 30): { fighting: boolean; foes: number; hitAgo: number; calmIn: number } {
+  const foes = s.owner ? s.count[3 - s.owner] : 0;
+  let last = -1;
+  for (const id of s.buildings) last = Math.max(last, w.buildings[id].hitTick);
+  const ago = w.tickCount - last;
+  const hit = last >= 0 && ago <= calm;
+  return { fighting: foes > 0 || hit, foes, hitAgo: last >= 0 ? ago / 30 : -1, calmIn: foes > 0 ? -1 : hit ? (calm - ago) / 30 : 0 };
 }
 
 /** 废墟上站着敌兵（溃兵也算）：先不重建，免得把敌人关在墙里 */
@@ -177,7 +192,7 @@ function captureSite(w: World, s: Site, tm: number): void {
   w.events.push({ kind: 'captured', site: s.id, team: tm, from, repaired });
 }
 
-/** 援军从己方后方入场，开赴集结点 */
+/** 援军在出兵的据点里出现；设了集结点就开赴集结点，没设就留在据点里驻守（远程的会自动登城） */
 function reinforce(w: World, s: Site): void {
   const tm = s.owner;
   const fac = w.factions[tm];
@@ -191,12 +206,14 @@ function reinforce(w: World, s: Site): void {
     const n = Math.max(1, Math.round(cnt * mult));
     for (let k = 0; k < n; k++) idxs.push(UNIT_BY_KEY[key].idx);
   }
-  const sp = w.map.spawn[tm];
   const r = w.rally[tm];
-  const slots = w.spawnGroup(tm, idxs, sp.x, sp.y, r.x - sp.x, r.y - sp.y);
+  // 据点中心多半是主建筑，往南挪一点免得全挤进建筑里（spawnGroup 会把落在建筑上的人挪到最近的空地）
+  const sx = s.x, sy = s.y + RULES.site.spawnOff;
+  const fx = r ? r.x - sx : 0, fy = r ? r.y - sy : 1;
+  const slots = w.spawnGroup(tm, idxs, sx, sy, fx, fy);
   if (!slots.length) return;
   w.arrived[tm] += slots.length;
-  w.orderMove(slots, r.x + (w.rng.next() - 0.5) * 160, r.y + (w.rng.next() - 0.5) * 160, true);
+  if (r) w.orderMove(slots, r.x + (w.rng.next() - 0.5) * 160, r.y + (w.rng.next() - 0.5) * 160, true);
   w.events.push({ kind: 'reinforce', site: s.id, team: tm, count: slots.length });
   w.onReinforce?.(tm, slots);
 }

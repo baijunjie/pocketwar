@@ -143,7 +143,7 @@ export function setSiteLevel(w: World, s: Site, lv: number): void {
     b.lv = lv;
     b.armor = lv ? E.siteArmor : 0;
     const t = b.def.tower;
-    b.tower = !lv ? t : t ? { range: t.range * E.towerRange, dmg: t.dmg * E.towerDmg, cd: t.cd } : id === s.main ? E.mainTower : null;
+    b.tower = !lv ? t : t ? { range: t.range * E.towerRange, dmg: t.dmg * E.towerDmg, cd: t.cd, arrows: t.arrows * E.towerArrows } : id === s.main ? { ...E.mainTower, arrows: E.mainTower.arrows * E.towerArrows } : null;
     if (b.tower && !w.armed.includes(b)) w.armed.push(b);
   }
 }

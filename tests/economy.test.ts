@@ -5,9 +5,9 @@ import {
 } from '../src/sim/defs';
 import { generateMap } from '../src/sim/map';
 import { createGame } from '../src/sim/setup';
-import { damageUnit, spawnProj, windRangeMul } from '../src/sim/systems/combat';
+import { damageUnit, spawnProj, updateTowers, windRangeMul } from '../src/sim/systems/combat';
 import { outpostCount, towerCount, unitUpgradeCost, upgradeAllCost, upgradeQueue } from '../src/sim/systems/economy';
-import { S_TORCH, Site, World } from '../src/sim/world';
+import { O_AMOVE, O_IDLE, S_TORCH, Site, World } from '../src/sim/world';
 import { flatWorld, run } from './helpers';
 
 const C = (120 * TILE) / 2;
@@ -269,7 +269,7 @@ describe('据点升级', () => {
     expect(hall.lv).toBe(1);
     expect(tower.tower!.dmg).toBeCloseTo(tower.def.tower!.dmg * RULES.economy.towerDmg, 5);
     expect(tower.tower!.range).toBeGreaterThan(tower.def.tower!.range);
-    expect(hall.tower).toBe(RULES.economy.mainTower);
+    expect(hall.tower).toEqual({ ...RULES.economy.mainTower, arrows: RULES.economy.mainTower.arrows * RULES.economy.towerArrows });
     // 护甲加成：同样一击，升级后的建筑掉血更少
     const wallA = town.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'wall')!;
     const wallB = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'wall')!;
@@ -694,3 +694,109 @@ describe('倒塌重建与站在废墟上的人', () => {
     expect(w.nav.bld[w.cellAt(w.x[onWall], w.y[onWall])]).not.toBe(wall.id);
   }, 30000);
 });
+
+describe('第十二轮：箭数、集结点', () => {
+  /** 让建筑立刻放一轮箭，返回这一轮射出的箭各自的目标 */
+  const volley = (w: World, id: number): number[] => {
+    const b = w.buildings[id];
+    // 先走一帧：新生成的单位要进了空间网格才找得到
+    w.tick();
+    w.pn = 0;
+    b.cd = 0;
+    updateTowers(w);
+    const out: number[] = [];
+    for (let p = 0; p < w.pn; p++) if (w.pSrc[p] === -b.id - 2) out.push(w.pTgt[p]);
+    return out;
+  };
+
+  it('角楼、门楼一轮两支箭，望楼一支；据点升级后翻倍；多支箭分射不同的敌人', () => {
+    const w = game();
+    clear(w);
+    w.env.wind = 0;
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const tower = hq.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
+    const foes = w.spawnGroup(2, Array(6).fill(idx('dao')), tower.cx + 120, tower.cy + 120, 0, -1);
+    for (const f of foes) w.hp[f] = w.maxHp[f] = 1e5;
+    w.refreshVision();
+    const t0 = volley(w, tower.id);
+    expect(t0.length).toBe(2);
+    expect(new Set(t0).size).toBe(2);
+    expect(BUILDINGS.gate_h.tower!.arrows).toBe(2);
+    expect(BUILDINGS.watchtower.tower!.arrows).toBe(1);
+    expect(BUILDINGS.arrowtower.tower!.arrows).toBe(1);
+    w.stock.stone[1] = 1e4;
+    expect(w.upgradeSite(hq)).toBe(true);
+    const t1 = volley(w, tower.id);
+    expect(t1.length).toBe(4);
+    expect(new Set(t1).size).toBe(4);
+    // 射程里只有一个敌人：几支箭都射它
+    for (const f of foes.slice(1)) w.removeUnit(f);
+    expect(volley(w, tower.id)).toEqual([foes[0], foes[0], foes[0], foes[0]]);
+  }, 30000);
+
+  it('援军在出兵的据点里出现；没设集结点就留在据点，设了就开赴集结点；集结点只管之后新出的援军', () => {
+    const w = game();
+    clear(w);
+    expect(w.rally[1]).toBe(null);
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 1)!;
+    const fire = (): number[] => {
+      for (const s of w.sites) s.timer = 999;
+      camp.timer = 0.01;
+      const n0 = w.n;
+      const before = new Set<number>();
+      for (let i = 0; i < n0; i++) if (w.alive[i]) before.add(i);
+      for (let t = 0; t < 30; t++) w.tick();
+      const out: number[] = [];
+      for (let i = 0; i < w.n; i++) if (w.alive[i] && !before.has(i) && w.team[i] === 1) out.push(i);
+      return out;
+    };
+    const a = fire();
+    expect(a.length).toBeGreaterThan(0);
+    for (const u of a) {
+      expect(Math.hypot(w.x[u] - camp.x, w.y[u] - camp.y)).toBeLessThan(camp.radius + 60);
+      expect(w.order[u] === O_IDLE || w.pmode[u] !== 0).toBe(true);
+    }
+    const rx = camp.x + 900, ry = camp.y;
+    w.rally[1] = { x: rx, y: ry };
+    const b = fire();
+    expect(b.length).toBeGreaterThan(0);
+    for (const u of b) {
+      expect(Math.hypot(w.x[u] - camp.x, w.y[u] - camp.y)).toBeLessThan(camp.radius + 60);
+      expect(w.order[u]).toBe(O_AMOVE);
+      expect(Math.hypot(w.destX[u] - rx, w.destY[u] - ry)).toBeLessThan(200);
+    }
+    // 先前出来的那批不受影响
+    for (const u of a) expect(w.order[u] === O_AMOVE && Math.hypot(w.destX[u] - rx, w.destY[u] - ry) < 200).toBe(false);
+    // 取消后新出的又留在据点
+    w.rally[1] = null;
+    for (const u of fire()) expect(w.order[u]).not.toBe(O_AMOVE);
+  }, 30000);
+
+  it('有城墙、木栅的据点：围墙之内（含墙顶）都能休整回血，墙外不行；没有围墙的仍按占领圈', () => {
+    const w = game();
+    clear(w);
+    const town = w.sites.find(s => s.type === SITE_TOWN)!;
+    give(w, town, 1);
+    expect(town.walled).toBe(true);
+    const mw = w.map.w;
+    let x1 = 0, y1 = 0;
+    for (let c = 0; c < w.enclosure.length; c++) if (w.enclosure[c] === town.id) {
+      x1 = Math.max(x1, c % mw);
+      y1 = Math.max(y1, (c / mw) | 0);
+    }
+    // 墙内东南角（占领圈之外）；以及墙外
+    const inX = (x1 - 2.5) * TILE, inY = (y1 - 2.5) * TILE;
+    expect(Math.hypot(inX - town.x, inY - town.y)).toBeGreaterThan(town.radius);
+    const a = w.spawnUnit(idx('dao'), 1, inX, inY);
+    const b = w.spawnUnit(idx('dao'), 1, (x1 + 3.5) * TILE, inY);
+    w.hp[a] = w.hp[b] = 40;
+    run(w, 4);
+    expect(w.sheltered[a]).toBe(1);
+    expect(w.hp[a]).toBeGreaterThan(40);
+    expect(w.sheltered[b]).toBe(0);
+    expect(w.hp[b]).toBe(40);
+    const village = w.sites.find(s => s.type === SITE_VILLAGE)!;
+    expect(village.walled).toBe(false);
+  }, 30000);
+});
+

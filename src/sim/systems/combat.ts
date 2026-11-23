@@ -373,7 +373,19 @@ export function updateTowers(w: World): void {
       continue;
     }
     b.cd = tw.cd;
-    spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, e, w.x[e], w.y[e], 0, tw.dmg, A_PIERCE, 0, 0, -1, b.owner, -b.id - 2);
+    // 多支箭各射一个目标：由近及远往外找（minRange 取上一个目标的距离），射程内找不到更多的就都射最近那个
+    let tgt = e, near = 0;
+    for (let k = 0; k < tw.arrows; k++) {
+      spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, tgt, w.x[tgt], w.y[tgt], 0, tw.dmg, A_PIERCE, 0, 0, -1, b.owner, -b.id - 2);
+      if (k + 1 >= tw.arrows) break;
+      near = Math.hypot(w.x[tgt] - b.cx, w.y[tgt] - b.cy) + 0.01;
+      let nx = near < maxR ? w.findEnemy(b.cx, b.cy, b.owner, maxR, near) : NONE;
+      if (nx !== NONE) {
+        const dx = w.x[nx] - b.cx, dy = w.y[nx] - b.cy;
+        if (dx * dx + dy * dy > (tw.range * windRangeMul(w, dx, dy)) ** 2) nx = NONE;
+      }
+      tgt = nx !== NONE ? nx : e;
+    }
     w.addFx(FX_SHOT, b.cx, b.cy, 0);
   }
 }

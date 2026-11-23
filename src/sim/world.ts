@@ -2,7 +2,7 @@
  * 世界状态：单位（SoA）、建筑、据点、投射物、环境、补给。不依赖 DOM，可在 Node 中无头运行。
  * 这里只放数据和最基础的增删查；所有玩法算法在 systems/ 下，由 tick() 按管线依次调用。
  */
-import { BK_GATE, BuildingDef, DT, FactionDef, LEVELS, RULES, ResKind, SITE_INFO, TILE, TowerDef, UNITS } from './content';
+import { BK_GATE, BK_WALL, BuildingDef, DT, FactionDef, LEVELS, RULES, ResKind, SITE_INFO, TILE, TowerDef, UNITS } from './content';
 import type { March } from './systems/march';
 import { GameMap } from './map';
 import { Field, Nav } from './nav';
@@ -86,6 +86,8 @@ export interface Site {
   slots: { tx: number; ty: number; bld: number }[];
   /** 临时据点被毁后不再存在 */
   gone: boolean;
+  /** 有城墙或木栅围着：在围墙之内（含墙顶）才算在据点里；没有围墙的按占领圈（大本营按 hqRadius）算 */
+  walled: boolean;
 }
 
 export type SimEvent =
@@ -140,7 +142,8 @@ export class World {
   factions: (FactionDef | null)[] = [null, null, null];
   reinfMult = [1, 1, 1];
   unitCap = [0, 900, 900];
-  rally = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
+  /** 各队的援军集结点；null = 没设，援军留在各自出兵的据点 */
+  rally: ({ x: number; y: number } | null)[] = [null, null, null];
   onReinforce: ((team: number, slots: number[]) => void) | null = null;
   /** 系统管线：可增删、替换其中任意一环 */
   systems: System[] = defaultSystems();
@@ -202,7 +205,12 @@ export class World {
   /** 城墙驻守：分到的垛口位（slots 下标，-1 = 没有）与进度（garrison.ts 的 P_*） */
   readonly post = new Int16Array(MAX_UNITS).fill(-1);
   readonly pmode = new Uint8Array(MAX_UNITS);
+  /** 下墙之后要去的另一段墙上的站位（已预留；-1 = 没有） */
+  readonly postNext = new Int16Array(MAX_UNITS).fill(-1);
   readonly slots: WallSlot[] = [];
+  /** 墙顶格子 → 所在的那段连通墙顶的编号（buildSlots 排出来）；沿墙走动的单位接下来要经过的格子 */
+  readonly wallGroup = new Map<number, number>();
+  readonly wallRoute = new Map<number, number[]>();
   readonly marches: March[] = [];
   readonly level = new Uint8Array(MAX_UNITS);
   readonly xp = new Float32Array(MAX_UNITS);
@@ -333,6 +341,8 @@ export class World {
   readonly builds: PendingBuild[] = [];
   /** 单位此刻是否在己方据点里（雪天有遮蔽；sites 系统填写） */
   readonly sheltered = new Uint8Array(MAX_UNITS);
+  /** 每一格在哪个据点的围墙之内（含墙、门本身；-1 = 不在任何围墙里），开局由 sealWalls 圈出 */
+  enclosure = new Int16Array(0);
   /** 出击的守军（被远程射中后追出据点）与它原来的位置：打完回去 */
   readonly sortie = new Uint8Array(MAX_UNITS);
   readonly sortieX = new Float32Array(MAX_UNITS);
@@ -410,7 +420,7 @@ export class World {
     const s: Site = {
       id: this.sites.length, type, name, x: sx, y: sy, radius: info.radius, owner, capTeam: 0, cap: 0,
       timer: info.interval, interval: info.interval, buildings: [], main: -1, disabled: false,
-      count: [0, 0, 0], flag: [0, 0, 0], level: 0, slots: [], gone: false,
+      count: [0, 0, 0], flag: [0, 0, 0], level: 0, slots: [], gone: false, walled: false,
     };
     this.sites.push(s);
     return s;
@@ -454,6 +464,7 @@ export class World {
     this.planted[i] = 0;
     this.post[i] = -1;
     this.pmode[i] = 0;
+    this.postNext[i] = -1;
     this.morale[i] = RULES.morale.base + d.discipline + level * RULES.morale.perLevel;
     this.steadyT[i] = 0;
     this.routSite[i] = -1;
@@ -486,6 +497,12 @@ export class World {
       if (sl.unit === j) sl.unit = -1;
       this.post[j] = -1;
       this.pmode[j] = 0;
+      this.wallRoute.delete(j);
+    }
+    if (this.postNext[j] >= 0) {
+      const sl = this.slots[this.postNext[j]];
+      if (sl.unit === j) sl.unit = -1;
+      this.postNext[j] = -1;
     }
     this.field[j] = null;
     this.free[this.freeN++] = j;
@@ -586,6 +603,21 @@ export class World {
    */
   sealWalls(): void {
     const nav = this.nav, mw = this.map.w;
+    // 围墙之内：各据点的城墙、木栅、城门、营门围出的包围盒（休整回血、雪天遮蔽、守军警戒按这个算）
+    this.enclosure = new Int16Array(mw * this.map.h).fill(-1);
+    for (const s of this.sites) {
+      let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+      for (const id of s.buildings) {
+        const b = this.buildings[id];
+        if (b.def.kind !== BK_WALL && b.def.kind !== BK_GATE) continue;
+        x0 = Math.min(x0, b.tx);
+        y0 = Math.min(y0, b.ty);
+        x1 = Math.max(x1, b.tx + b.w - 1);
+        y1 = Math.max(y1, b.ty + b.h - 1);
+      }
+      s.walled = x1 >= 0;
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) this.enclosure[y * mw + x] = s.id;
+    }
     for (const s of this.sites) {
       let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
       for (const id of s.buildings) {
