@@ -197,6 +197,17 @@ export const RULES = {
     snowSpeed: 0.75,
     snowVision: 0.7,
     snowArmor: 0.5,
+    /**
+     * 风：不是一直有。每隔 windCheck 秒掷一次，晴天 windDry、雨雪天 windWet 的概率起风（降水开始时立刻再掷一次）；
+     * 一阵风刮 windLength 秒，风力在 windForce 之间随机，风向会慢慢偏转。
+     * 顺风行军最多快 windSpeed（正顶风慢同样多，侧风不影响）。
+     */
+    windCheck: [60, 150],
+    windDry: 0.25,
+    windWet: 0.8,
+    windLength: [60, 160],
+    windForce: [0.4, 1],
+    windSpeed: 0.15,
   },
   supply: {
     /** 开局存粮够全军吃几分钟 */

@@ -68,6 +68,10 @@ export class Hud {
   readonly minimap: HTMLCanvasElement;
   private readonly counts: HTMLDivElement;
   private readonly clock: HTMLSpanElement;
+  /** 风向标：箭头指向风吹去的方向（随镜头旋转），无风时隐藏 */
+  private readonly windBox: HTMLSpanElement;
+  private readonly windArrow: HTMLElement;
+  private windDeg = NaN;
   private readonly sitesBox: HTMLDivElement;
   private readonly selBox: HTMLDivElement;
   private readonly feed: HTMLDivElement;
@@ -99,10 +103,12 @@ export class Hud {
     this.clock = el('span', 'clock', '00:00');
     this.dbg = el('span', 'dbg');
     this.envBox = el('span', 'env');
+    this.windBox = el('span', 'wind', '<i>➤</i><b></b>');
+    this.windArrow = this.windBox.firstElementChild as HTMLElement;
     this.foodBox = el('span', 'food');
     this.moraleBox = el('span', 'morale');
     this.resBox = el('span', 'res');
-    top.append(this.counts, this.clock, this.envBox, this.foodBox, this.resBox, this.moraleBox, this.dbg);
+    top.append(this.counts, this.clock, this.envBox, this.windBox, this.foodBox, this.resBox, this.moraleBox, this.dbg);
     root.appendChild(top);
 
     const ctl = el('div', 'panel ctl');
@@ -269,6 +275,14 @@ export class Hud {
   }
 
   /** 低频刷新（约 4 次/秒） */
+  /** 每帧：把风向换算到屏幕上（镜头转了 yaw，世界方位角 a 在屏幕上是 a + yaw） */
+  setWindView(yaw: number): void {
+    const deg = Math.round(((this.world.env.windDir + yaw) * 180) / Math.PI);
+    if (deg === this.windDeg) return;
+    this.windDeg = deg;
+    this.windArrow.style.transform = `rotate(${deg}deg)`;
+  }
+
   update(): void {
     const w = this.world;
     const f = w.factions as FactionDef[];
@@ -289,6 +303,14 @@ export class Hud {
     this.envBox.className = `env${env.night ? ' night' : ''}${env.raining ? ' rain' : ''}${env.snowing ? ' snow' : ''}`;
     this.envBox.title = `夜间视野 ×${E.nightVision}，火把 ×${E.torchVision}；雨天行军 ×${E.rainSpeed}，火把点不着\n`
       + `雪天行军 ×${E.snowSpeed}、视野 ×${E.snowVision}（与夜晚叠乘）、火把点不着，据点之外的部队护甲 ×${E.snowArmor}`;
+    // 风
+    const wk = env.wind;
+    this.windBox.style.display = wk > 0.02 ? '' : 'none';
+    if (wk > 0.02) {
+      const pct = Math.round(wk * E.windSpeed * 100);
+      (this.windBox.lastElementChild as HTMLElement).textContent = wk < 0.45 ? '微风' : wk < 0.75 ? '大风' : '狂风';
+      this.windBox.title = `风向：箭头指向风吹去的方向（随镜头转动）\n顺风行军快 ${pct}%，顶风慢 ${pct}%，侧风不受影响`;
+    }
     // 木材、石料、黄金
     const use: Record<ResKind, string> = {
       wood: `升级营寨、给资源点和村庄建箭塔（${RULES.economy.towerCost}）、扎营（${RULES.economy.outpostCost}）；有木材时营寨的建筑修得更快`,

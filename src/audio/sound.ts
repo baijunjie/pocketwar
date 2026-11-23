@@ -2,7 +2,7 @@
  * 音效：全部用 Web Audio 现场合成（噪声 + 振荡器 + 滤波），不依赖任何音频文件。
  * 战斗声来自模拟层每帧抛出的特效事件（world.fx），按离镜头的远近定音量、按屏幕左右定声像；
  * 同一种声音在很短的时间内只响一次（把这段时间里的事件合并成一声，事件越多越响），千人混战也不会爆音。
- * 环境声（风、雨）是常驻的噪声链路，音量跟着天气和镜头高度走；雨声是粉红噪声打底加一层稀疏的雨点。
+ * 环境声（风、雨）是常驻的噪声链路，音量跟着天气和镜头高度走（无风、无雨时为 0）；雨声是粉红噪声打底加一层稀疏的雨点。
  */
 import {
   FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_FIRE, FX_HIT, FX_IMPACT, FX_LEVEL, FX_SHOT, FX_SMOKE, World,
@@ -254,12 +254,12 @@ export class Sound {
     const env = w.env;
     // 雨声是垫在底下的：音量压得很低，镜头拉高了更轻
     this.rainGain!.gain.setTargetAtTime(env.rain * (0.09 + 0.05 * zk), now, 0.8);
-    // 风：平时若有若无，镜头越高越明显，夜里和雨天更大；强弱缓慢起伏
+    // 风：只在刮风时有（env.wind 为 0 就静音），风越大越响，镜头越高越明显；强弱缓慢起伏
     this.wind += 0.016;
     const gust = 0.6 + 0.4 * Math.sin(this.wind * 0.37) * Math.sin(this.wind * 0.11 + 1.3);
     const high = Math.max(0, Math.min(1, (1.2 - zoom) / 0.9));
-    this.windGain!.gain.setTargetAtTime((0.035 + high * 0.07 + env.rain * 0.05 + (env.night ? 0.02 : 0)) * gust, now, 0.5);
-    this.windFilter!.frequency.setTargetAtTime(300 + gust * 260 + env.rain * 150, now, 0.6);
+    this.windGain!.gain.setTargetAtTime(env.wind * (0.06 + high * 0.07 + env.rain * 0.03) * gust, now, 0.5);
+    this.windFilter!.frequency.setTargetAtTime(280 + gust * 200 + env.wind * 220, now, 0.6);
   }
 
   /** 界面与号令的提示音 */

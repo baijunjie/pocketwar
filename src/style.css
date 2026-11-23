@@ -116,6 +116,9 @@ button.primary:hover { filter: brightness(1.1); }
 
 .topbar .env, .topbar .food, .topbar .morale { font-size: 12px; padding: 2px 8px; border-radius: 3px; background: rgba(255, 255, 255, 0.06); white-space: nowrap; cursor: help; }
 .topbar .env.night { background: rgba(70, 90, 160, 0.4); }
+.topbar .wind { font-size: 12px; padding: 2px 8px; border-radius: 3px; background: rgba(255, 255, 255, 0.06); white-space: nowrap; cursor: help; display: inline-flex; align-items: center; gap: 5px; }
+.topbar .wind i { font-style: normal; display: inline-block; color: #bfe0f0; transition: transform 0.3s; }
+.topbar .wind b { font-weight: 500; }
 .topbar .env.rain { color: #a9c8ea; }
 .topbar .warn, .selection .warn { color: #e8c46a; }
 .topbar .bad, .selection .bad { color: #ff8a70; }

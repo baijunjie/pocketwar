@@ -302,6 +302,8 @@ export function updateMarches(w: World): void {
   }
   const mw = w.map.w, terr = w.map.terrain;
   const rain = w.env.raining ? RULES.env.rainSpeed : 1;
+  // 领队也吃顺风 / 顶风，否则成员和队列位置对不上
+  const windK = w.env.wind * RULES.env.windSpeed, windX = Math.cos(w.env.windDir), windY = Math.sin(w.env.windDir);
   const turn = M.turn * DT;
   for (const g of ms) {
     if (!g.alive || g.arrived) continue;
@@ -338,7 +340,9 @@ export function updateMarches(w: World): void {
         continue;
       }
     }
-    let nx = g.x + mx * step, ny = g.y + my * step;
+    const ml = Math.sqrt(mx * mx + my * my);
+    const wf = windK > 0 && ml > 0 ? 1 + windK * (mx * windX + my * windY) / ml : 1;
+    let nx = g.x + mx * step * wf, ny = g.y + my * step * wf;
     const nc = ((ny / TILE) | 0) * mw + ((nx / TILE) | 0);
     g.blocked = false;
     if (nc !== cell && (w.nav.block[g.team][nc] || !w.nav.canStep(g.team, cell, nc))) {

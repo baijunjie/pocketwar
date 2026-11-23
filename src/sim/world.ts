@@ -118,6 +118,12 @@ export interface Env {
   nextWeather: number;
   /** 当前的单位视野倍率 */
   visionMul: number;
+  /** 正在刮风；风力 0..1（渐起渐停）；风往哪个方向吹（模拟坐标的方位角）；下一次起风 / 停风判定的时间 */
+  windy: boolean;
+  wind: number;
+  windDir: number;
+  windTarget: number;
+  nextWind: number;
 }
 
 export class World {
@@ -301,7 +307,7 @@ export class World {
   // ---- 昼夜天气 ----
   readonly env: Env = {
     enabled: true, clock: RULES.env.startClock, light: 1, night: false, raining: false, rain: 0, snowing: false, snow: 0,
-    nextWeather: 0, visionMul: 1,
+    nextWeather: 0, visionMul: 1, windy: false, wind: 0, windDir: 0, windTarget: 0, nextWind: 0,
   };
 
   // ---- 粮草（按队伍） ----
@@ -376,6 +382,7 @@ export class World {
     this.otarget.fill(NONE);
     const e = RULES.env;
     this.env.nextWeather = e.firstRain[0] + this.rng.next() * (e.firstRain[1] - e.firstRain[0]);
+    this.env.nextWind = e.windCheck[0] * 0.5 + this.rng.next() * (e.windCheck[1] - e.windCheck[0]);
   }
 
   // =====================================================================

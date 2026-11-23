@@ -563,3 +563,48 @@ describe('第八轮：城防与占领', () => {
     expect(w.hp[foe2]).toBeLessThan(1e6);
   }, 60000);
 });
+
+describe('风', () => {
+  const setWind = (w: World, dir: number, force: number): void => {
+    w.env.enabled = true;
+    w.env.nextWeather = w.env.nextWind = 1e9;
+    w.env.windy = force > 0;
+    w.env.wind = w.env.windTarget = force;
+    w.env.windDir = dir;
+  };
+  const travel = (dir: number, force: number, toward: number): number => {
+    const w = flatWorld();
+    setWind(w, dir, force);
+    const u = w.spawnUnit(idx('dao'), 1, C, C);
+    w.orderMove([u], C + Math.cos(toward) * 2000, C + Math.sin(toward) * 2000, false);
+    run(w, 6);
+    return Math.hypot(w.x[u] - C, w.y[u] - C);
+  };
+
+  it('顺风走得快、顶风走得慢，侧风不影响', () => {
+    const calm = travel(0, 0, 0);
+    const tail = travel(0, 1, 0), head = travel(0, 1, Math.PI), side = travel(0, 1, Math.PI / 2);
+    expect(tail / calm).toBeGreaterThan(1 + RULES.env.windSpeed * 0.8);
+    expect(head / calm).toBeLessThan(1 - RULES.env.windSpeed * 0.8);
+    expect(Math.abs(side / calm - 1)).toBeLessThan(0.03);
+  }, 30000);
+
+  it('风不是一直有：雨雪天起风的机会远多于晴天；无风时风力为 0', () => {
+    const w = game();
+    w.env.enabled = true;
+    let windyWet = 0, wet = 0, windyDry = 0, dry = 0, calmZero = true;
+    for (let t = 0; t < 30 * 60 * 40; t++) {
+      w.tick();
+      w.events.length = 0;
+      w.fxN = 0;
+      if (t % 30) continue;
+      const isWet = w.env.raining || w.env.snowing;
+      if (isWet) { wet++; if (w.env.windy) windyWet++; } else { dry++; if (w.env.windy) windyDry++; }
+      if (!w.env.windy && w.env.wind > 0 && w.env.windTarget === 0) calmZero = false;
+    }
+    expect(wet).toBeGreaterThan(0);
+    expect(windyWet / wet).toBeGreaterThan(windyDry / dry);
+    expect(windyDry / dry).toBeLessThan(0.6);
+    expect(calmZero).toBe(true);
+  }, 120000);
+});

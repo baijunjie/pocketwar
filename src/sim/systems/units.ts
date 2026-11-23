@@ -34,6 +34,8 @@ export function updateUnits(w: World): void {
   const C = RULES.combat, SG = RULES.siege, SITE = RULES.site;
   const LEASH2 = C.leash * C.leash;
   const rainMul = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
+  // 风：顺风快、顶风慢，按行进方向在风向上的投影算
+  const windK = w.env.wind * RULES.env.windSpeed, windX = Math.cos(w.env.windDir), windY = Math.sin(w.env.windDir);
   const canTorch = w.env.night && !w.env.raining && !w.env.snowing;
   const mc = RULES.morale.cell, mcw = w.mw, mch = w.mh;
   const inner = w.nav.inner, marches = w.marches, planted = w.planted;
@@ -514,6 +516,11 @@ export function updateUnits(w: World): void {
     }
 
     // ---- 积分与地形碰撞 ----
+    if (windK > 0 && (wx !== 0 || wy !== 0)) {
+      const f = 1 + windK * (wx * windX + wy * windY) / Math.sqrt(wx * wx + wy * wy);
+      wx *= f;
+      wy *= f;
+    }
     const nvx = vx[i] + (wx - vx[i]) * 0.3, nvy = vy[i] + (wy - vy[i]) * 0.3;
     vx[i] = nvx;
     vy[i] = nvy;

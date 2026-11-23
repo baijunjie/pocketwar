@@ -737,6 +737,7 @@ export class GameApp {
       this.minimap.yaw = this.renderer.cam.yaw;
       this.minimap.draw(this.renderer.viewQuad(), 0.1);
     }
+    this.hud.setWindView(this.renderer.cam.yaw);
     this.uiTimer -= real;
     if (this.uiTimer <= 0) {
       this.uiTimer = 0.25;
