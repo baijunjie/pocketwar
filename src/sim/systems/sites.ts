@@ -1,5 +1,5 @@
 /** 据点：占领进度、休整与修缮、定时援军。溃兵不参与占领 */
-import { RULES, SITE_INFO, UNIT_BY_KEY } from '../content';
+import { RULES, SITE_INFO, TILE, UNIT_BY_KEY } from '../content';
 import { NONE, S_ROUT } from '../state';
 import type { Building, Site, World } from '../world';
 import { setSiteLevel } from './economy';
@@ -45,13 +45,14 @@ export function updateSites(w: World): void {
       const stock = w.stock[info.material];
       for (const id of s.buildings) {
         const b = w.buildings[id];
-        if (b.hp >= b.maxHp || (!b.alive && (b.extra || !footprintClear(w, b)))) continue;
+        if (b.hp >= b.maxHp || (!b.alive && (b.extra || foeOnFootprint(w, b, s.owner)))) continue;
         if (!b.alive) {
           b.alive = true;
           b.down = true;
           b.owner = s.owner;
           b.hp = 0;
           w.nav.refresh(b);
+          evict(w, b);
         }
         const fast = stock[s.owner] > 0;
         const gain = Math.min(b.maxHp - b.hp, b.maxHp * mend * (fast ? E.repairBoost : 1));
@@ -103,15 +104,34 @@ function siteFighting(w: World, s: Site, calm: number): boolean {
   return false;
 }
 
-/** 建筑脚下没有任何单位（重建时立起来不能把人压在里面） */
-function footprintClear(w: World, b: Building): boolean {
-  const x0 = b.x0 - 8, x1 = b.x1 + 8, y0 = b.y0 - 8, y1 = b.y1 + 8;
+/** 废墟上站着敌兵（溃兵也算）：先不重建，免得把敌人关在墙里 */
+function foeOnFootprint(w: World, b: Building, owner: number): boolean {
+  for (let i = 0; i < w.n; i++) {
+    if (!w.alive[i] || w.team[i] === owner) continue;
+    const x = w.x[i], y = w.y[i];
+    if (x > b.x0 - 8 && x < b.x1 + 8 && y > b.y0 - 8 && y < b.y1 + 8) return true;
+  }
+  return false;
+}
+
+/**
+ * 建筑立起来时，把压在脚下、走不出来的单位挪到最近的空地上。
+ * 城门对自家人是通的，站在门洞里的自家人不用挪。敌兵站在废墟上时根本不会重建（foeOnFootprint）。
+ */
+function evict(w: World, b: Building): void {
   for (let i = 0; i < w.n; i++) {
     if (!w.alive[i]) continue;
     const x = w.x[i], y = w.y[i];
-    if (x > x0 && x < x1 && y > y0 && y < y1) return false;
+    if (x <= b.x0 || x >= b.x1 || y <= b.y0 || y >= b.y1) continue;
+    const tm = w.team[i], c = w.cellAt(x, y);
+    // 自家的墙顶对自家人不算「挡路」，但地面上的人上不了墙顶，同样要挪
+    if (!w.nav.block[tm][c] && !w.nav.deck[tm][c]) continue;
+    const nc = w.nav.nearestFree(tm, c, 6);
+    if (nc === c) continue;
+    const mw = w.map.w;
+    w.x[i] = w.px[i] = (nc % mw + 0.5) * TILE;
+    w.y[i] = w.py[i] = (((nc / mw) | 0) + 0.5) * TILE;
   }
-  return true;
 }
 
 /**
@@ -143,6 +163,7 @@ function captureSite(w: World, s: Site, tm: number): void {
     const b = w.buildings[id];
     if (b.extra && !b.alive) continue;
     b.owner = tm;
+    const wasDown = !b.alive;
     if (!b.alive || b.down) {
       repaired ||= !b.alive;
       b.alive = true;
@@ -150,6 +171,7 @@ function captureSite(w: World, s: Site, tm: number): void {
       b.hp = b.maxHp;
     }
     w.nav.refresh(b);
+    if (wasDown) evict(w, b);
   }
   s.disabled = false;
   w.events.push({ kind: 'captured', site: s.id, team: tm, from, repaired });

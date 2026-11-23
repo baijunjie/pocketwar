@@ -673,3 +673,24 @@ describe('风与远程', () => {
     expect(sum / 50).toBeGreaterThan(400 * RULES.env.windDrift * 0.7);
   }, 30000);
 });
+
+describe('倒塌重建与站在废墟上的人', () => {
+  it('自家人站在城门废墟上不耽误重建；站在城墙废墟上的被挪到空地', () => {
+    const w = game();
+    clear(w);
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const blds = hq.buildings.map(id => w.buildings[id]);
+    const gate = blds.find(b => b.gate)!, wall = blds.find(b => b.def.key === 'wall')!;
+    w.stock.stone[1] = 1e6;
+    for (const b of [gate, wall]) w.damageBuilding(b, 1e9, 0, 1, 2);
+    const g = w.spawnGroup(1, Array(4).fill(idx('yari')), gate.cx, gate.cy, 0, 1);
+    w.orderStop(g, true);
+    const onWall = w.spawnUnit(idx('yari'), 1, wall.cx, wall.cy);
+    w.orderStop([onWall], true);
+    run(w, RULES.site.bldCalm + 3);
+    expect(gate.alive).toBe(true);
+    expect(wall.alive).toBe(true);
+    // 墙上那个人被挪出来了，不在墙格里
+    expect(w.nav.bld[w.cellAt(w.x[onWall], w.y[onWall])]).not.toBe(wall.id);
+  }, 30000);
+});
