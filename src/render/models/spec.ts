@@ -25,12 +25,16 @@ export interface HorseSpec {
   coat?: number;
   /** 马甲颜色 */
   barding?: number;
+  /** 全身马甲：连马头、四腿上半截一起披甲 */
+  bardingFull?: boolean;
   size?: number;
   /** 坐骑模型的素材路径，缺省用仓库里的那匹马 */
   mount?: string;
 }
 export interface EngineSpec {
   kind: 'elephant' | 'onager' | 'trebuchet' | 'ballista' | 'rocket' | 'cannon';
+  /** 高级形态：包铁、加挡板（战象披甲） */
+  armored?: boolean;
 }
 /** 直接使用一个带骨骼动画的 glTF / GLB 模型 */
 export interface GltfSpec {
@@ -120,12 +124,12 @@ export function buildUnitModel(id: string, teamRgb: [number, number, number]): U
   switch (L.kind) {
     case 'foot': return foot(L, team);
     case 'horse': return horse(L, team);
-    case 'elephant': return elephant(team);
-    case 'onager': return onager(team);
-    case 'trebuchet': return trebuchet(team);
-    case 'ballista': return ballista(team);
-    case 'rocket': return rocketCart(team);
-    case 'cannon': return cannon(team);
+    case 'elephant': return elephant(team, L.armored);
+    case 'onager': return onager(team, L.armored);
+    case 'trebuchet': return trebuchet(team, L.armored);
+    case 'ballista': return ballista(team, L.armored);
+    case 'rocket': return rocketCart(team, L.armored);
+    case 'cannon': return cannon(team, L.armored);
     case 'gltf': return gltfModel(L, team);
   }
 }
@@ -133,8 +137,8 @@ export function buildUnitModel(id: string, teamRgb: [number, number, number]): U
 /** 头像取景高度（世界像素） */
 export function portraitHeight(id: string, modelHeight: number): number {
   const L = modelSpec(id);
-  if (L.kind === 'foot') return 19;
-  if (L.kind === 'horse') return 28;
+  if (L.kind === 'foot') return 19 * (L.human.size ?? 1);
+  if (L.kind === 'horse') return 28 * (L.size ?? 1);
   if (L.kind === 'gltf') return (L.portrait ?? L.height) * M;
   return Math.min(modelHeight, 46);
 }

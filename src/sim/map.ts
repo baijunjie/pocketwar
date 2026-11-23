@@ -1,6 +1,7 @@
 /** 程序化地图生成：地形、河流、据点（城池/营地/村庄等）、道路与植被 */
 import {
-  BUILDINGS, SITE_CAMP, SITE_CITY, SITE_HQ, SITE_RANCH, SITE_TOWN, SITE_VILLAGE, SITE_WORKSHOP, TILE,
+  BUILDINGS, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_HQ, SITE_LUMBER, SITE_MINE, SITE_QUARRY, SITE_RANCH, SITE_TOWN, SITE_VILLAGE,
+  SITE_WORKSHOP, TILE,
   T_BRIDGE, T_DEEP, T_FARM, T_FOREST, T_GRASS, T_HILL, T_MOUNTAIN, T_ROAD, T_SHALLOW,
 } from './defs';
 import { RNG, fbm, hash2, vnoise } from './rng';
@@ -20,6 +21,8 @@ export interface SiteSpec {
   tx: number;
   ty: number;
   owner: number;
+  /** 箭塔位（格坐标），只有资源点有 */
+  slots?: [number, number][];
 }
 export interface DeployPoint {
   x: number;
@@ -56,6 +59,15 @@ const CAMP_NAMES = ['前锋营', '北望营', '河湾营', '鹰嘴营', '松岗�
 const TOWN_NAMES = ['临河镇', '望山镇', '平川镇', '落雁镇'];
 const RANCH_NAMES = ['西风马场', '草甸马场', '云岭马场'];
 const SHOP_NAMES = ['黑石工坊', '铁炉工坊', '赤岩工坊'];
+/** 资源点：名称前缀、主建筑 */
+const RES_SITES: Record<number, { names: string[]; main: string }> = {
+  [SITE_FARM]: { names: ['丰谷农庄', '禾丰农庄'], main: 'farmstead' },
+  [SITE_LUMBER]: { names: ['青松伐木场', '北林伐木场'], main: 'lumbercamp' },
+  [SITE_QUARRY]: { names: ['白石采石场', '苍岩采石场'], main: 'quarry' },
+  [SITE_MINE]: { names: ['赤金矿', '沙金矿', '伏牛金矿', '落星金矿'], main: 'goldmine' },
+};
+/** 资源点的四个箭塔位相对中心的格偏移 */
+const TOWER_SLOTS: [number, number][] = [[-4, -4], [3, -4], [-4, 3], [3, 3]];
 
 /** 各类据点的半占地（格） */
 const HALF: Record<number, [number, number]> = {
@@ -66,6 +78,10 @@ const HALF: Record<number, [number, number]> = {
   [SITE_VILLAGE]: [8, 8],
   [SITE_RANCH]: [6, 6],
   [SITE_WORKSHOP]: [6, 6],
+  [SITE_FARM]: [5, 5],
+  [SITE_LUMBER]: [5, 5],
+  [SITE_QUARRY]: [5, 5],
+  [SITE_MINE]: [5, 5],
 };
 
 export function generateMap(seed: number, size = 320): GameMap {
@@ -160,6 +176,12 @@ export function generateMap(seed: number, size = 320): GameMap {
     { type: SITE_VILLAGE, fx: 0.4, fy: 0.9, owner: 0 },
     { type: SITE_RANCH, fx: 0.08, fy: 0.3, owner: 0 },
     { type: SITE_WORKSHOP, fx: 0.74, fy: 0.9, owner: 0 },
+    // 资源点：每方后方各有粮、木、石、金一处，另有一座金矿靠近中线
+    { type: SITE_FARM, fx: 0.3, fy: 0.94, owner: 0 },
+    { type: SITE_LUMBER, fx: 0.45, fy: 0.79, owner: 0 },
+    { type: SITE_QUARRY, fx: 0.15, fy: 0.5, owner: 0 },
+    { type: SITE_MINE, fx: 0.57, fy: 0.87, owner: 0 },
+    { type: SITE_MINE, fx: 0.38, fy: 0.58, owner: 0 },
   ];
   const plans: Plan[] = [];
   for (const p of side) {
@@ -180,6 +202,12 @@ export function generateMap(seed: number, size = 320): GameMap {
     return true;
   };
   const names = { v: 0, c: 0, t: 0, r: 0, s: 0 };
+  const resNames: Record<number, number> = {};
+  const resName = (type: number): string => {
+    const list = RES_SITES[type].names, k = resNames[type] ?? 0;
+    resNames[type] = k + 1;
+    return list[k % list.length];
+  };
   const sites: SiteSpec[] = [];
   const centers: { cx: number; cy: number }[] = [];
   for (const p of plans) {
@@ -205,6 +233,7 @@ export function generateMap(seed: number, size = 320): GameMap {
       : p.type === SITE_CAMP ? CAMP_NAMES[names.c++ % CAMP_NAMES.length]
       : p.type === SITE_VILLAGE ? VILLAGE_NAMES[names.v++ % VILLAGE_NAMES.length]
       : p.type === SITE_RANCH ? RANCH_NAMES[names.r++ % RANCH_NAMES.length]
+      : RES_SITES[p.type] ? resName(p.type)
       : SHOP_NAMES[names.s++ % SHOP_NAMES.length];
     sites.push({ type: p.type, name, tx: cx, ty: cy, owner: p.owner });
   }
@@ -329,6 +358,8 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
   };
 
+  /** 资源点旁的装饰物（山石），格式同 props */
+  const decor: number[] = [];
   for (let si = 0; si < sites.length; si++) {
     const s = sites[si];
     const { cx, cy } = centers[si];
@@ -369,11 +400,35 @@ export function generateMap(seed: number, size = 320): GameMap {
         scatter(si, cx, cy, 'farmhouse', 2, 3.5, 5.5);
         dirtDisc(cx, cy, 6, 200);
         break;
-      default:
+      case SITE_WORKSHOP:
         reserve(cx - 1, cy - 1, 3, 3);
         put('workshop', cx - 1, cy - 4, 0, si, true);
         scatter(si, cx, cy, 'house', 3, 3.5, 5.5);
         dirtDisc(cx, cy, 6, 220);
+        break;
+      default:
+        // 资源点：一座主建筑，四角留出箭塔位
+        reserve(cx - 1, cy - 1, 3, 3);
+        put(RES_SITES[s.type].main, cx - 1, cy - 4, 0, si, true);
+        s.slots = TOWER_SLOTS.map(([ox, oy]) => [cx + ox, cy + oy] as [number, number]);
+        for (const [sx, sy] of s.slots) reserve(sx, sy, 1, 1);
+        if (s.type === SITE_FARM) farms(cx, cy);
+        else if (s.type === SITE_LUMBER) {
+          // 伐木场四周是一圈林子
+          for (let y = cy - 10; y <= cy + 10; y++) for (let x = cx - 10; x <= cx + 10; x++) {
+            const r = Math.hypot(x - cx, y - cy);
+            if (r < 6.2 || r > 10 || x < 2 || y < 2 || x >= W - 2 || y >= H - 2) continue;
+            const i = y * W + x;
+            if (terrain[i] === T_GRASS && occ[i] === 0 && !river[i] && hash2(x, y, sD) < 0.8) terrain[i] = T_FOREST;
+          }
+        } else {
+          // 采石场、金矿旁边堆着山石
+          for (let k = 0; k < 7; k++) {
+            const a = (k / 7) * Math.PI * 2 + hash2(cx, cy + k, sB) * 0.6, r = 5.6 + hash2(cx + k, cy, sC) * 1.6;
+            decor.push((cx + Math.cos(a) * r) * TILE, (cy + Math.sin(a) * r) * TILE, 5 + (k % 3), 0.7 + hash2(cx + k, cy + k, sA) * 0.6);
+          }
+        }
+        dirtDisc(cx, cy, 5, s.type === SITE_FARM ? 150 : 210);
         break;
     }
   }
@@ -557,6 +612,11 @@ export function generateMap(seed: number, size = 320): GameMap {
         lists[ci].push((x + 0.5) * TILE, (y + 0.6) * TILE, rock ? 5 : (hash2(x, y, sE) * 3) | 0, rock ? 0.5 : 0.9);
       }
     }
+  }
+  for (let k = 0; k < decor.length; k += 4) {
+    const tx = (decor[k] / TILE) | 0, ty = (decor[k + 1] / TILE) | 0;
+    if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1 || occ[ty * W + tx] !== 0 || terrain[ty * W + tx] === T_ROAD) continue;
+    lists[((ty / CHUNK) | 0) * chunkW + ((tx / CHUNK) | 0)].push(decor[k], decor[k + 1], decor[k + 2], decor[k + 3]);
   }
   const propChunk = new Int32Array(chunkW * chunkH + 1);
   let total = 0;

@@ -39,15 +39,17 @@ export async function runViewer(root: HTMLElement, mode: string, q: URLSearchPar
   const batches: { b: UnitBatch; x: number; z: number }[] = [];
   scene.add(new THREE.AxesHelper(40));
   if (mode === 'units') {
-    const only = q.get('k');
+    // &k=dao 只看一个兵种（连同它的高级形态，排在后面一行）；&cmp=1 每个兵种的初级、高级形态并排站着对比
+    const only = q.get('k'), cmp = q.get('cmp');
     let col = 0, row = 0;
     for (const fid of Object.keys(FACTIONS) as (keyof typeof FACTIONS)[]) {
       col = 0;
       for (const d of UNITS) {
-        if (d.faction !== fid || (only && d.key !== only)) continue;
+        if (d.faction !== fid || (only && d.key !== only && d.key !== `${only}_e`)) continue;
         const b = new UnitBatch(buildUnitModel(d.model, FACTIONS[fid].color));
         scene.add(b.mesh);
-        batches.push(only ? { b, x: 0, z: 0 } : { b, x: col * 95, z: row * 100 });
+        batches.push(only ? { b, x: 0, z: d.tier * 90 } : cmp ? { b, x: ((col / 2) | 0) * 80 + d.tier * 30, z: row * 70 }
+          : { b, x: ((col / 2) | 0) * 95, z: row * 200 + d.tier * 100 });
         col++;
       }
       row++;
@@ -57,6 +59,9 @@ export async function runViewer(root: HTMLElement, mode: string, q: URLSearchPar
     if (only) {
       cam.position.set(Number(q.get('cx')) || 26, 46, 140);
       ctl.target.set(26, 9, 22);
+    } else if (cmp) {
+      cam.position.set(270, 190, 520);
+      ctl.target.set(270, 10, 100);
     }
   }
   ctl.update();
@@ -83,7 +88,7 @@ export async function runViewer(root: HTMLElement, mode: string, q: URLSearchPar
   }
   // 每个模型把它有的标准动作排成一排
   const order = ['idle', 'walk', 'run', 'attack', 'die', 'charge', 'brace', 'guard', 'guardWalk'];
-  const fixed = q.get('clip');
+  const fixed = q.get('clip') ?? (q.get('cmp') ? 'idle' : null);
   const tick = (now: number): void => {
     requestAnimationFrame(tick);
     const t = now / 1000;

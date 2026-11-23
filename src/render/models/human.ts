@@ -30,7 +30,22 @@ export interface HumanLook {
   banner?: boolean;
   quiver?: boolean;
   cape?: boolean;
+  /** 披风用队伍色（缺省是上衣的暗色） */
+  capeTeam?: boolean;
   size?: number;
+  // ---- 重甲部件（高级形态用）：给出颜色即加上 ----
+  /** 胸背甲片与腰间的甲裙片 */
+  plate?: number;
+  /** 甲片上的饰色（护心镜、甲缘） */
+  trim?: number;
+  /** 上臂与前臂的臂甲 */
+  vambrace?: number;
+  /** 大腿甲 */
+  cuisse?: number;
+  /** 护膝与胫甲 */
+  greaves?: number;
+  /** 护颈（顿项 / 锁子围脖） */
+  aventail?: number;
 }
 
 const SKIN = 0xd2a27c, WOOD = 0x7a5a36, WOOD_D = 0x4e3a26, IRON = 0xaab0b8, BOOT = 0x3a2c22;
@@ -219,7 +234,16 @@ export class Human {
       const trim = L.armor === 'do' ? tunic : new THREE.Color(armorC).multiplyScalar(0.7);
       for (let i = 0; i < 3; i++) torsoParts.push(xf(tube(0.2, 0.2, 0.012, trim as unknown as number, 0, 0, 0, 8), { s: [0.69, 1, 1], t: [0, 0.14 + i * 0.12, 0] }));
     }
-    if (L.cape) torsoParts.push(xf(box(0.03, 0.75, 0.42, tunicD as unknown as number), { rz: 0.08, t: [-0.15, 0.18, 0] }));
+    if (L.cape) torsoParts.push(xf(box(0.03, 0.75, 0.42, (L.capeTeam ? team : tunicD) as unknown as number), { rz: 0.08, t: [-0.17, 0.18, 0] }));
+    if (L.plate !== undefined) {
+      // 胸甲、背甲各一整片，胸前一面护心镜，腰上一圈束甲带
+      const trim = L.trim ?? 0xc9a227;
+      torsoParts.push(box(0.07, 0.36, 0.33, L.plate, 0.105, 0.36, 0), box(0.06, 0.36, 0.33, L.plate, -0.105, 0.36, 0),
+        box(0.075, 0.14, 0.27, L.plate, 0.1, 0.12, 0), box(0.065, 0.14, 0.27, L.plate, -0.1, 0.12, 0),
+        xf(cyl(0.075, 0.075, 0.022, trim, 0, 0, 0, 8), { rz: Math.PI / 2, t: [0.148, 0.4, 0] }),
+        xf(tube(0.185, 0.185, 0.035, trim, 0, 0, 0, 8), { s: [0.74, 1, 1], t: [0, 0.2, 0] }));
+    }
+    if (L.aventail !== undefined) torsoParts.push(xf(tube(0.125, 0.215, 0.13, L.aventail, 0, 0, 0, 8), { s: [0.8, 1, 1], t: [0, 0.55, 0] }));
     if (L.quiver) torsoParts.push(xf(join(cyl(0.05, 0.045, 0.5, 0x6a4a2c, 0, 0, 0, 6), cyl(0.04, 0.04, 0.08, 0xe8e2d0, 0, 0.28, 0, 5)), { rx: 0.45, t: [-0.15, 0.3, -0.03] }));
     if (L.banner) {
       torsoParts.push(tube(0.012, 0.012, 1.5, 0x2a2420, -0.16, 0.95, 0, 4), box(0.012, 0.75, 0.3, tunic as unknown as number, -0.16, 1.3, 0.16),
@@ -236,6 +260,12 @@ export class Human {
       hipParts.push(xf(tube(0.165, 0.2, 0.14, (L.skirtColor ?? tunicD) as number, 0, 0, 0, 8), { s: [0.8, 1, 1], t: [0, 0.0, 0] }));
     }
     hipParts.push(xf(cyl(0.165, 0.165, 0.045, 0x3a2c22, 0, 0, 0, 8), { s: [0.78, 1, 1], t: [0, 0.1, 0] }));
+    if (L.plate !== undefined) {
+      // 甲裙：前后左右四片垂在腰带下，片与片之间露出下摆
+      const len = mounted ? 0.2 : 0.3;
+      hipParts.push(xf(box(0.03, len, 0.2, L.plate), { rz: -0.14, t: [0.15, 0.04 - len / 2, 0] }), xf(box(0.03, len, 0.2, L.plate), { rz: 0.14, t: [-0.15, 0.04 - len / 2, 0] }),
+        xf(box(0.17, len, 0.03, L.plate), { rx: 0.14, t: [0, 0.04 - len / 2, 0.185] }), xf(box(0.17, len, 0.03, L.plate), { rx: -0.14, t: [0, 0.04 - len / 2, -0.185] }));
+    }
     rb.addRigid(join(...hipParts), hips);
 
     // 头
@@ -247,13 +277,27 @@ export class Human {
 
     // 四肢
     for (let s = 0; s < 2; s++) {
+      const zs = s === 0 ? -1 : 1;
       const up = [tube(0.055, 0.047, 0.3, sleeve as number, 0, -0.14, 0, 6)];
-      if (L.pauldron !== undefined) up.push(xf(box(0.16, 0.2, 0.13, L.pauldron), { t: [0, -0.07, (s === 0 ? -1 : 1) * 0.03] }));
+      if (L.pauldron !== undefined) up.push(xf(box(0.16, 0.2, 0.13, L.pauldron), { t: [0, -0.07, zs * 0.03] }));
       else up.push(ball(0.065, chestC as number, 0, 0, 0, 5));
+      const lower = [tube(0.044, 0.036, 0.26, armored && L.armor !== 'bands' ? 0x4a3a2c : SKIN, 0, -0.13, 0, 6), ball(0.042, SKIN, 0, -0.28, 0, 5)];
+      if (L.vambrace !== undefined) {
+        // 披膊下再压一层甲片，上臂、前臂各一截臂甲，肘上一个护肘
+        up.push(xf(box(0.14, 0.11, 0.15, L.vambrace), { t: [0, -0.2, zs * 0.035] }), tube(0.064, 0.056, 0.13, L.vambrace, 0, -0.23, 0, 6));
+        lower.push(tube(0.054, 0.045, 0.22, L.vambrace, 0, -0.12, 0, 6), ball(0.056, L.vambrace, 0, 0.0, 0, 5));
+      }
       rb.addRigid(join(...up), arm[s]);
-      rb.addRigid(join(tube(0.044, 0.036, 0.26, armored && L.armor !== 'bands' ? 0x4a3a2c : SKIN, 0, -0.13, 0, 6), ball(0.042, SKIN, 0, -0.28, 0, 5)), fore[s]);
-      rb.addRigid(join(tube(0.078, 0.06, 0.46, legC as number, 0, -0.23, 0, 6)), leg[s]);
-      rb.addRigid(join(tube(0.056, 0.042, 0.4, L.legs === 'skin' ? SKIN : BOOT, 0, -0.2, 0, 6), box(0.2, 0.07, 0.085, BOOT, 0.045, -0.445, 0)), shin[s]);
+      rb.addRigid(join(...lower), fore[s]);
+      const thigh = [tube(0.078, 0.06, 0.46, legC as number, 0, -0.23, 0, 6)];
+      if (L.cuisse !== undefined) thigh.push(tube(0.09, 0.072, 0.34, L.cuisse, 0, -0.2, 0, 6));
+      rb.addRigid(join(...thigh), leg[s]);
+      const calf = [tube(0.056, 0.042, 0.4, L.legs === 'skin' ? SKIN : BOOT, 0, -0.2, 0, 6), box(0.2, 0.07, 0.085, BOOT, 0.045, -0.445, 0)];
+      if (L.greaves !== undefined) {
+        calf.push(tube(0.066, 0.05, 0.34, L.greaves, 0, -0.19, 0, 6), xf(ball(0.066, L.greaves, 0, 0, 0, 5), { s: [1.1, 1, 1], t: [0.015, 0.0, 0] }),
+          box(0.13, 0.03, 0.09, L.greaves, 0.06, -0.4, 0));
+      }
+      rb.addRigid(join(...calf), shin[s]);
     }
     rb.addRigid(weaponGeo(L.weapon), grip[this.wHand]);
     if (L.shield) {

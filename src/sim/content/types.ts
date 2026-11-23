@@ -154,6 +154,9 @@ export interface UnitSpec {
   mobile?: boolean;
   /** 渲染层用哪个模型，缺省与兵种 key 相同 */
   model?: string;
+  /** 高级形态的名称；不填则在原名前加 elitePrefix */
+  eliteName?: string;
+  elitePrefix?: string;
 }
 
 export interface UnitDef {
@@ -207,6 +210,11 @@ export interface UnitDef {
   mobile: boolean;
   model: string;
   desc: string;
+  /** 0 初级形态，1 高级形态 */
+  tier: number;
+  /** 对应的高级 / 初级形态的兵种下标，没有则为 -1 */
+  elite: number;
+  basic: number;
   // ---- 按等级展开的数值，下标为等级 0..N-1 ----
   lvHp: number[];
   lvDmg: number[];
@@ -249,8 +257,17 @@ export interface LevelRules {
   rout: number[];
 }
 
-/** 把登记的兵种展开成 UnitDef。hpScale 为全局生命倍率 */
-export function finalizeUnits(lv: LevelRules, hpScale: number): void {
+/** 高级形态相对初级形态的加成 */
+export interface EliteRules {
+  hp: number;
+  dmg: number;
+  /** 近战与远程护甲各加多少 */
+  armor: number;
+  prefix: string;
+}
+
+/** 把登记的兵种展开成 UnitDef，每个兵种紧跟着生成它的高级形态。hpScale 为全局生命倍率 */
+export function finalizeUnits(lv: LevelRules, hpScale: number, elite: EliteRules): void {
   for (const p of pending.splice(0)) {
     const ci = CLASS_INDEX[p.cls];
     if (ci === undefined) throw new Error(`未知类别：${p.cls}`);
@@ -263,41 +280,57 @@ export function finalizeUnits(lv: LevelRules, hpScale: number): void {
     const range = m.range ?? 0;
     const pace = m.pace ?? 56;
     const speed = Math.round(pace * sz.speedMul);
-    const hp0 = m.hp ?? 60, dmg = m.dmg ?? 8, cd = m.cd ?? 1.2;
+    const cd = m.cd ?? 1.2;
     const splash = m.splash ?? 0;
     const siege = m.siege ?? false;
-    const power = Math.sqrt((hp0 / 60) * (dmg / cd / 6.5)) * (range > 0 ? 1.15 : 1) * (splash > 0 ? 1.6 : 1);
-    const hp = Math.round(hp0 * hpScale);
-    const armM = m.armM ?? 0, armP = m.armP ?? 0;
     const n = lv.thresholds.length;
-    const d: UnitDef = {
+    const base0: UnitDef = {
       idx: UNITS.length, key: p.key, name: p.name, faction: p.faction, cls: ci, size,
       radius: m.radius ?? sz.radius,
       // 近战在前、远程在后，同一档里快的在前；器械殿后
       row: m.row ?? (speed < 45 ? 4 : (range > 0 ? 2 : 0) + (speed >= 85 ? 0 : 1)),
-      hp, pace, speed, walk: Math.round(speed * (m.marchMul ?? 0.65)), forestMul: sz.forestMul,
-      dmg, atk: m.atk ?? (range > 0 ? A_PIERCE : A_MELEE), range, minRange: m.minRange ?? 0, cd,
-      armM, armP, pen: m.pen ?? 0, splash, proj: m.proj ?? P_ARROW,
+      hp: 0, pace, speed, walk: Math.round(speed * (m.marchMul ?? 0.65)), forestMul: sz.forestMul,
+      dmg: 0, atk: m.atk ?? (range > 0 ? A_PIERCE : A_MELEE), range, minRange: m.minRange ?? 0, cd,
+      armM: 0, armP: 0, pen: m.pen ?? 0, splash, proj: m.proj ?? P_ARROW,
       vs, vsBld: m.vsBld ?? 1, aux: m.aux ?? null,
       traits: (base.traits ?? 0) | (s.traits ?? 0),
       abilities: { ...base.abilities, ...s.abilities },
       vision: Math.max(m.vision ?? 320, siege ? range : 0),
       alert: 0, acq: 0, lookK: range > 60 ? Math.min(14, Math.floor(range / TILE)) : 1,
-      power, upkeep: sz.upkeep, xpValue: Math.round(power * 10),
+      power: 0, upkeep: sz.upkeep, xpValue: 0,
       discipline: m.discipline ?? 0, humanoid: m.humanoid ?? true, siege, mobile: m.mobile ?? false, model: m.model ?? p.key, desc: p.desc,
+      tier: 0, elite: -1, basic: -1,
       lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [], lvRout: lv.rout.slice(0, n),
     };
-    d.acq = range > 0 ? range + (siege ? 0 : 40) : m.acq ?? 170;
-    d.alert = Math.max(m.alert ?? 300, d.acq);
-    for (let l = 0; l < n; l++) {
-      d.lvHp.push(Math.round(hp * (1 + lv.hp * l)));
-      d.lvDmg.push(dmg * (1 + lv.dmg * l));
-      d.lvArmM.push(armM + lv.armor * l);
-      d.lvArmP.push(armP + lv.armor * l);
-      d.lvCd.push(cd * (1 - lv.cd * l));
+    base0.acq = range > 0 ? range + (siege ? 0 : 40) : m.acq ?? 170;
+    base0.alert = Math.max(m.alert ?? 300, base0.acq);
+    // 初级与高级两个形态：除了生命、攻击、护甲、名称与模型，其余完全一样
+    for (let tier = 0; tier < 2; tier++) {
+      const hp0 = (m.hp ?? 60) * (tier ? elite.hp : 1), dmg = (m.dmg ?? 8) * (tier ? elite.dmg : 1);
+      const armM = (m.armM ?? 0) + (tier ? elite.armor : 0), armP = (m.armP ?? 0) + (tier ? elite.armor : 0);
+      const power = Math.sqrt((hp0 / 60) * (dmg / cd / 6.5)) * (range > 0 ? 1.15 : 1) * (splash > 0 ? 1.6 : 1);
+      const hp = Math.round(hp0 * hpScale);
+      const d: UnitDef = {
+        ...base0, idx: UNITS.length, hp, dmg, armM, armP, power, xpValue: Math.round(power * 10), tier,
+        lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [],
+      };
+      if (tier) {
+        d.key = `${p.key}_e`;
+        d.name = m.eliteName ?? `${m.elitePrefix ?? elite.prefix}${p.name}`;
+        d.model = `${base0.model}_e`;
+        d.basic = d.idx - 1;
+        UNITS[d.basic].elite = d.idx;
+      }
+      for (let l = 0; l < n; l++) {
+        d.lvHp.push(Math.round(hp * (1 + lv.hp * l)));
+        d.lvDmg.push(dmg * (1 + lv.dmg * l));
+        d.lvArmM.push(armM + lv.armor * l);
+        d.lvArmP.push(armP + lv.armor * l);
+        d.lvCd.push(cd * (1 - lv.cd * l));
+      }
+      UNITS.push(d);
+      UNIT_BY_KEY[d.key] = d;
     }
-    UNITS.push(d);
-    UNIT_BY_KEY[p.key] = d;
   }
 }
 
@@ -350,21 +383,38 @@ export interface BuildingDef {
 
 // ---------- 据点 ----------
 export const SITE_HQ = 0, SITE_CITY = 1, SITE_TOWN = 2, SITE_CAMP = 3, SITE_VILLAGE = 4, SITE_RANCH = 5,
-  SITE_WORKSHOP = 6;
+  SITE_WORKSHOP = 6, SITE_FARM = 7, SITE_LUMBER = 8, SITE_QUARRY = 9, SITE_MINE = 10, SITE_OUTPOST = 11;
+/** 可以囤积的资源（粮食另算，见粮草） */
+export type ResKind = 'wood' | 'stone' | 'gold';
+export const RES_KINDS: ResKind[] = ['wood', 'stone', 'gold'];
+export const RES_NAMES: Record<ResKind, string> = { wood: '木材', stone: '石料', gold: '黄金' };
 export interface SiteInfo {
   label: string;
   /** 占领圈半径（像素） */
   radius: number;
   /** 援军间隔（秒） */
   interval: number;
-  reinf: ReinfKind;
+  /** 出哪一类援军；null 表示不出援军 */
+  reinf: ReinfKind | null;
   /** AI 评估的价值 */
   value: number;
   provides: string;
-  /** 据点大类：城邦有石墙，营寨是木栅或不设防 */
-  category: 'fort' | 'camp';
-  /** 清空守军后，在旗帜下站多少秒才算占领 */
+  /** 据点大类：城邦有石墙，营寨是木栅或不设防；资源点只产资源；临时据点是部队自己搭的 */
+  category: 'fort' | 'camp' | 'resource' | 'outpost';
+  /** 清空守军后，在旗帜下站多少秒才算占领；0 表示不能占领 */
   captureTime: number;
   /** 粮草产量：能养活「开局全军」的百分之几 */
   food: number;
+  /** 每分钟的产出：木材、石料是绝对数量，黄金是「开局全军口粮」的百分之几 */
+  yields?: Partial<Record<ResKind, number>>;
+  /** 升级与加速修缮用哪种资源 */
+  material: 'wood' | 'stone';
+  /** 升级花费（material 那种资源）；0 表示不能升级 */
+  upgradeCost: number;
+  /** 算作可以落脚的据点：部队在里面休整回血、溃兵往这里逃、雪天有遮蔽 */
+  haven: boolean;
+  /** 计入「占有据点数」（士气） */
+  counts: boolean;
+  /** 可以建几座箭塔；有敌方箭塔立着时不能占领 */
+  towerSlots: number;
 }

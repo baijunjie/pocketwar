@@ -10,6 +10,7 @@ export const WATER_Y = -3.2;
 
 const COLOR_FS = `
 uniform sampler2D uA, uB;
+uniform float uSnow;
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float noise(vec2 p){
   vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
@@ -38,6 +39,9 @@ vec3 groundColor(vec3 w3){
   col = mix(col, dirt, b.a * 0.9 * (0.75 + 0.25 * n3));
   col = mix(col, road, smoothstep(0.3, 0.6, b.r + (n3 - 0.5) * 0.25));
   col *= 0.92 + 0.16 * n2;
+  // 积雪：先从草地白起，路面和夯土踩得多，白得慢一些
+  float tracks = max(smoothstep(0.3, 0.6, b.r), b.a * 0.7);
+  col = mix(col, vec3(0.86, 0.89, 0.94) * (0.94 + 0.06 * n2), clamp(uSnow * (1.15 - 0.45 * tracks) - 0.25 * n3 * (1.0 - uSnow), 0.0, 0.9));
   // 岸边沙土与水下河床
   float shore = smoothstep(1.5, -1.5, w3.y);
   col = mix(col, vec3(0.74,0.68,0.50), shore * step(0.02, a.a));

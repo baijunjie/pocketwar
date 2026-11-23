@@ -30,8 +30,8 @@ export function updateUnits(w: World): void {
   const bldAt = w.nav.bld, buildings = w.buildings;
   const C = RULES.combat, SG = RULES.siege;
   const LEASH2 = C.leash * C.leash;
-  const rainMul = w.env.raining ? RULES.env.rainSpeed : 1;
-  const canTorch = w.env.night && !w.env.raining;
+  const rainMul = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
+  const canTorch = w.env.night && !w.env.raining && !w.env.snowing;
   const mc = RULES.morale.cell, mcw = w.mw, mch = w.mh;
   const inner = w.nav.inner, marches = w.marches, planted = w.planted;
   const give = 1 - C.plantGive;

@@ -11,6 +11,7 @@ export function updateVision(w: World): void {
   const E = RULES.env;
   const vm = w.env.visionMul;
   const lit = vm > E.torchVision ? vm : E.torchVision;
+  const rBld = Math.round(RULES.vision.building / VIS_CELL), rTower = Math.round(RULES.vision.tower / VIS_CELL);
   const n = w.n, alive = w.alive, team = w.team, state = w.state, defs = w.defs, type = w.type;
   for (let tm = 1; tm <= 2; tm++) {
     const vis = w.teamVis[tm];
@@ -36,10 +37,10 @@ export function updateVision(w: World): void {
       const r = Math.round((defs[type[i]].vision * (state[i] & S_TORCH ? lit : vm)) / VIS_CELL);
       stamp((w.x[i] / VIS_CELL) | 0, (w.y[i] / VIS_CELL) | 0, r < 1 ? 1 : r);
     }
-    // 建筑有常明的灯火，视野不受昼夜影响
+    // 建筑有常明的灯火，视野不受昼夜与天气影响；会放箭的箭塔、塔楼站得高，看得远得多
     for (const b of w.buildings) {
       if (!b.alive || b.owner !== tm) continue;
-      stamp((b.cx / VIS_CELL) | 0, (b.cy / VIS_CELL) | 0, b.def.tower ? 6 : 3);
+      stamp((b.cx / VIS_CELL) | 0, (b.cy / VIS_CELL) | 0, b.tower ? rTower : rBld);
     }
   }
   for (let i = 0; i < n; i++) {

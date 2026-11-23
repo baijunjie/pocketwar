@@ -7,7 +7,8 @@
  *   gltf              任意带骨骼动画的 glTF 模型（见 GltfSpec）
  * 键是 UnitDef.model（缺省等于兵种 key），所以多个兵种可以共用一个模型，也可以随时改指向。
  */
-import type { HumanLook } from './human';
+import { FactionId, UNITS } from '../../sim/defs';
+import type { Armor, Helm, HumanLook } from './human';
 import type { ModelSpec } from './spec';
 
 const STEEL = 0xaab0b8, DARK = 0x34323a, BRONZE = 0xb8923e, LACQUER = 0x3a2226, LEATHER = 0x6e5136;
@@ -51,5 +52,41 @@ export const MODELS: Record<string, ModelSpec> = {
   elephant: { kind: 'elephant' },
   mangonel: { kind: 'onager' },
 };
+
+/**
+ * 高级形态的模型（id 是原模型加 _e）：不用逐个登记，按阵营的重甲样式从初级形态推出来——
+ * 人换上全身甲（胸背甲、甲裙、臂甲、腿甲、护颈、重盔），马披全身马甲，器械包铁加挡板，战象披甲。
+ * 想给某个兵种单独设计，直接在上面的表里登记「key_e」即可，这里不会覆盖。
+ */
+const HEAVY: Record<FactionId, { armor: Armor; metal: number; dark: number; trim: number; helm: Helm }> = {
+  china: { armor: 'lamellar', metal: 0x4c5058, dark: 0x34373d, trim: GOLD, helm: 'tassel' },
+  japan: { armor: 'do', metal: 0x26242c, dark: 0x19181d, trim: GOLD, helm: 'kabuto' },
+  rome: { armor: 'bands', metal: 0xc6ccd4, dark: 0x9299a2, trim: GOLD, helm: 'crest' },
+  persia: { armor: 'scale', metal: 0xcfa94e, dark: 0x9a7a34, trim: CREAM, helm: 'scalecap' },
+};
+const LIGHT_HELMS = new Set<Helm>(['none', 'futou', 'straw', 'tiara', 'cowl', 'jingasa', 'cone', 'galea']);
+
+function heavyLook(L: HumanLook, f: FactionId): HumanLook {
+  const H = HEAVY[f];
+  return {
+    ...L,
+    armor: L.armor && L.armor !== 'none' && L.armor !== 'mail' ? L.armor : H.armor,
+    armorColor: H.metal, pauldron: H.metal, plate: H.metal, trim: H.trim, vambrace: H.metal, cuisse: H.dark, greaves: H.metal, aventail: H.dark,
+    helm: LIGHT_HELMS.has(L.helm ?? 'none') ? H.helm : L.helm, helmColor: H.metal, plume: L.plume ?? RED,
+    skirt: Math.max(L.skirt ?? 0.22, 0.36),
+    legs: L.legs === 'skin' || L.legs === undefined ? 0x3a3630 : L.legs,
+    cape: true, capeTeam: true, size: (L.size ?? 1) * 1.05,
+  };
+}
+
+for (const d of UNITS) {
+  if (d.tier !== 1) continue;
+  const base = MODELS[UNITS[d.basic].model];
+  if (!base || MODELS[d.model]) continue;
+  const H = HEAVY[d.faction];
+  MODELS[d.model] = base.kind === 'foot' ? { ...base, human: heavyLook(base.human, d.faction) }
+    : base.kind === 'horse' ? { ...base, human: heavyLook(base.human, d.faction), barding: H.metal, bardingFull: true, size: (base.size ?? 1) * 1.04 }
+    : base.kind === 'gltf' ? base : { ...base, armored: true };
+}
 
 export type { HumanLook };

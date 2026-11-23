@@ -4,6 +4,7 @@
  */
 import type { World } from '../world';
 import { updateProjectiles, updateTowers } from './combat';
+import { ECON_EVERY, updateEconomy } from './economy';
 import { updateEnvironment } from './environment';
 import { buildGrid } from './grid';
 import { updateMarches } from './march';
@@ -33,6 +34,7 @@ export function defaultSystems(): System[] {
     { name: 'towers', every: 1, phase: 0, run: updateTowers },
     { name: 'sites', every: SITE_EVERY, phase: 0, run: updateSites },
     { name: 'supply', every: SUPPLY_EVERY, phase: 7, run: updateSupply },
+    { name: 'economy', every: ECON_EVERY, phase: 5, run: updateEconomy },
     { name: 'morale', every: MORALE_EVERY, phase: 3, run: updateMorale },
     { name: 'vision', every: VISION_EVERY, phase: 1, run: updateVision },
     { name: 'nav', every: 1, phase: 0, run: w => w.nav.maintain(w.tickCount) },

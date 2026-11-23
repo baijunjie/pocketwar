@@ -1,6 +1,7 @@
 /**
  * 兵种表。加一个兵种 = 在这里加一行 U(...)：
  *   阵营、key、名称、类别、属性（没写的取类别缺省值）、说明。
+ * 每个兵种自动带一个高级形态（key 加 _e，数值加成见 rules.ts 的 ELITE），名称缺省是「重甲 + 原名」。
  * 新类别用 defineClass，新体型在 rules.ts 里 defineSize。模型在 src/render/models/catalog.ts 里按 key 登记。
  */
 import {
@@ -23,7 +24,7 @@ defineClass('cav', '骑兵', {
 });
 defineClass('cavr', '骑射', { size: 'medium', marchMul: 0.55, mobile: true, vsBld: 0.3, vision: 400, alert: 380 });
 defineClass('ele', '战象', { size: 'huge', marchMul: 0.8, vsBld: 3, humanoid: false, siege: true, vs: { cav: 1.5, cavr: 1.5, inf: 1.2 } });
-defineClass('siege', '器械', { size: 'large', marchMul: 1, atk: A_SIEGE, humanoid: false, siege: true });
+defineClass('siege', '器械', { size: 'large', marchMul: 1, atk: A_SIEGE, humanoid: false, siege: true, elitePrefix: '包铁' });
 
 // 中国：弩与火器之国，人多势众
 U('china', 'ji', '长戟兵', 'spear', { hp: 65, pace: 56, dmg: 8, cd: 1.3, armM: 1, armP: 1, vs: { cav: 2.5 } }, '结阵拒马，克制骑兵');
@@ -48,7 +49,7 @@ U('rome', 'legion', '军团步兵', 'inf', { hp: 108, pace: 54, dmg: 12, cd: 1.1
 U('rome', 'auxilia', '辅助矛兵', 'spear', { abilities: { shield: shield(0.35) }, hp: 68, pace: 58, dmg: 8, cd: 1.25, armM: 2, armP: 2 }, '辅助军团，掩护侧翼');
 U('rome', 'velites', '投矛散兵', 'ranged', { hp: 46, pace: 66, dmg: 13, cd: 2.0, range: 135, proj: P_JAVELIN, vs: { ele: 2.5, cav: 1.3 } }, '轻装标枪手，克制战象');
 U('rome', 'sagitt', '弓箭手', 'ranged', { hp: 42, pace: 58, dmg: 8, cd: 1.9, range: 240 }, '辅助弓兵');
-U('rome', 'equites', '骑兵', 'cav', { hp: 125, pace: 118, dmg: 12, cd: 1.25, armM: 2, armP: 2, abilities: { charge: charge(22) } }, '中型骑兵，追击包抄');
+U('rome', 'equites', '骑兵', 'cav', { eliteName: '重装骑兵', hp: 125, pace: 118, dmg: 12, cd: 1.25, armM: 2, armP: 2, abilities: { charge: charge(22) } }, '中型骑兵，追击包抄');
 U('rome', 'scorpio', '蝎弩', 'siege', { hp: 100, pace: 42, dmg: 90, cd: 4.5, range: 400, minRange: 60, proj: P_BIGBOLT, atk: A_PIERCE, pen: 0.8, vsBld: 0.5, radius: 10, vs: { ele: 2 } }, '重型弩炮，远程狙杀');
 U('rome', 'onager', '投石机', 'siege', { hp: 170, pace: 35, dmg: 52, cd: 7.5, range: 440, minRange: 110, splash: 32, proj: P_STONE, vsBld: 4 }, '野驴投石机，攻城利器');
 
@@ -57,6 +58,6 @@ U('persia', 'spara', '持盾矛兵', 'spear', { abilities: { shield: shield(0.45
 U('persia', 'immortal', '不死军', 'inf', { hp: 90, pace: 60, dmg: 12, cd: 1.1, armM: 3, armP: 3, discipline: 8, abilities: { shield: shield(0.35) }, aux: { dmg: 7, range: 170, cd: 2.4, proj: P_ARROW } }, '王家卫队，弓矛兼备');
 U('persia', 'kamandar', '弓箭手', 'ranged', { hp: 40, pace: 58, dmg: 8, cd: 1.7, range: 245 }, '箭如飞蝗');
 U('persia', 'asvaran', '骑射手', 'cavr', { hp: 95, pace: 131, dmg: 9, cd: 1.8, range: 195, armM: 1, armP: 1, traits: TR_FIREMOVE }, '边走边射，来去如风');
-U('persia', 'cataphract', '铁甲骑兵', 'cav', { hp: 182, pace: 102, dmg: 16, cd: 1.35, armM: 5, armP: 4, discipline: 6, abilities: { charge: charge(36) } }, '人马俱甲的超重骑兵');
+U('persia', 'cataphract', '铁甲骑兵', 'cav', { eliteName: '具装铁骑', hp: 182, pace: 102, dmg: 16, cd: 1.35, armM: 5, armP: 4, discipline: 6, abilities: { charge: charge(36) } }, '人马俱甲的超重骑兵');
 U('persia', 'elephant', '战象', 'ele', { hp: 460, pace: 89, dmg: 28, cd: 2.0, armM: 3, armP: 4, traits: TR_TRAMPLE, vision: 360 }, '践踏敌阵，冲毁城门');
 U('persia', 'mangonel', '投石车', 'siege', { hp: 160, pace: 35, dmg: 48, cd: 7.5, range: 430, minRange: 110, splash: 34, proj: P_STONE, vsBld: 4 }, '抛石攻城');

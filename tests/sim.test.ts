@@ -19,7 +19,7 @@ describe('地图生成', () => {
   it('同一种子结果一致，且据点齐全', () => {
     const a = generateMap(42), b = generateMap(42);
     expect(a.terrain).toEqual(b.terrain);
-    expect(a.sites.length).toBe(17);
+    expect(a.sites.length).toBe(27);
     expect(a.sites.filter(s => s.type === SITE_HQ).length).toBe(2);
     expect(a.buildings.length).toBeGreaterThan(400);
     if (import.meta.env.VITE_DUMP) console.log(ascii(a));

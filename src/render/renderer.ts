@@ -1,15 +1,15 @@
 /** three.js 渲染器：立体地形、透视镜头、实例化的单位与建筑、贴地标记与粒子 */
 import * as THREE from 'three';
 import {
-  BK_KEEP, BK_WALL, BUILDINGS, DT, PROJ_ARC, P_BALL, P_BIGBOLT, P_BOLT, P_BULLET, P_JAVELIN, P_ROCKET, P_STONE, P_TORCH,
-  RULES, SITE_HQ, TILE, T_BRIDGE, UNITS,
+  BK_KEEP, BK_MAIN, BK_TOWER, BK_WALL, BUILDINGS, DT, PROJ_ARC, P_BALL, P_BIGBOLT, P_BOLT, P_BULLET, P_JAVELIN, P_ROCKET, P_STONE, P_TORCH,
+  RULES, SITE_HQ, SITE_INFO, TILE, T_BRIDGE, UNITS,
 } from '../sim/defs';
 import { CHUNK } from '../sim/map';
 import {
-  Building, FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_FIRE, FX_HIT, FX_IMPACT, FX_LEVEL, FX_SMOKE, MAX_CORPSE,
-  MAX_UNITS, S_BRACE, S_CHARGE, S_ROUT, S_SHIELD, S_TORCH, S_WALL, VIS_CELL, World,
+  Building, FX_ARROW_HIT, FX_BUILT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_FIRE, FX_HIT, FX_IMPACT, FX_LEVEL, FX_SMOKE, FX_UPGRADE,
+  MAX_CORPSE, MAX_UNITS, S_BRACE, S_CHARGE, S_ROUT, S_SHIELD, S_TORCH, S_WALL, VIS_CELL, World,
 } from '../sim/world';
-import { bridgeGeo, buildingGeo, flagHeight, propGeo, rubbleGeo, wallGeo } from './buildings';
+import { bridgeGeo, buildingGeo, flagHeight, hasUpgradeLook, propGeo, rubbleGeo, wallGeo } from './buildings';
 import { litMaterial, shared } from './materials';
 import { box, cone, cyl, join } from './prims';
 import { Atlas, Q_AXIS, Q_BILLBOARD, Q_GROUND, Q_SCREEN, Quads, Sprite } from './quads';
@@ -22,6 +22,7 @@ const MAXP = 3000;
 const FOV = 30;
 const TAN = Math.tan((FOV / 2) * (Math.PI / 180));
 const DULL = new THREE.Color(0.42, 0.45, 0.48);
+const PALE = new THREE.Color(0.78, 0.81, 0.86);
 
 export interface Marker {
   x: number;
@@ -46,9 +47,22 @@ function pennantGeo(): THREE.BufferGeometry {
   return join(cyl(0.45, 0.6, 25, 0x2e2620, 0, 12.5, 0, 4), cone(1, 2.4, 0xc9a227, 0, 26, 0, 4), tri);
 }
 
+/** 同一种模型的建筑合成一批绘制；对局中途会有新建筑、新模型（箭塔、升级后的样子），所以容量按需增长 */
 interface InstGroup {
   mesh: THREE.InstancedMesh;
-  list: Building[];
+  geo: THREE.BufferGeometry;
+  cap: number;
+  n: number;
+  /** 这一轮要画几个（先数一遍，容量不够就先扩） */
+  want: number;
+}
+
+/** 一栋建筑用哪个模型：分组键（不含等级）、按等级生成几何体、倒塌后用哪种废墟 */
+interface BldKind {
+  key: string;
+  geo: (lv: number) => THREE.BufferGeometry;
+  lvLook: boolean;
+  rubble: string;
 }
 
 export class Renderer {
@@ -64,6 +78,8 @@ export class Renderer {
   markers: Marker[] = [];
   /** 正在拖动指定的队列朝向：从落点指向鼠标（世界坐标），没有则为 null */
   arrow: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  /** 玩家选中的据点（-1 = 没有）：画一圈高亮，资源点另标出空着的箭塔位 */
+  selSite = -1;
   drawn = 0;
 
   private readonly scene = new THREE.Scene();
@@ -86,9 +102,15 @@ export class Renderer {
   private readonly ring: Sprite;
   private readonly circle: Sprite;
   private readonly labels: Sprite[] = [];
+  /** 对局中途搭起来的临时据点共用一张名牌 */
+  private readonly outpostLabel: Sprite;
+  private readonly star: Sprite;
   private readonly bldGroups = new Map<string, InstGroup>();
-  private readonly rubble = new Map<string, InstGroup>();
-  private readonly bldSig: Int32Array;
+  private readonly bldKinds: BldKind[] = [];
+  private readonly bldMat: THREE.Material;
+  private bldSig = new Int32Array(0);
+  /** 地面积雪 0..1：下雪时慢慢积起来，雪停后慢慢化掉 */
+  private snowCover = 0;
   private readonly flags: THREE.InstancedMesh;
   private readonly siteFlags: THREE.InstancedMesh;
   private readonly disposables: { dispose(): void }[] = [];
@@ -198,20 +220,37 @@ export class Renderer {
       c.lineTo(4, 2);
       c.stroke();
     });
-    for (const s of world.sites) {
-      const w = s.name.length * 14 + 14;
-      this.labels.push(at.add(w, 22, 2, c => {
+    const label = (name: string): Sprite => {
+      const w = name.length * 14 + 14;
+      return at.add(w, 22, 2, c => {
         c.font = '600 13px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
         c.textAlign = 'center';
         c.textBaseline = 'middle';
         c.lineJoin = 'round';
         c.strokeStyle = 'rgba(15,12,8,0.9)';
         c.lineWidth = 4;
-        c.strokeText(s.name, w / 2, 11);
+        c.strokeText(name, w / 2, 11);
         c.fillStyle = '#fff';
-        c.fillText(s.name, w / 2, 11);
-      }));
-    }
+        c.fillText(name, w / 2, 11);
+      });
+    };
+    for (const s of world.sites) this.labels.push(label(s.name));
+    this.outpostLabel = label(SITE_INFO[SITE_INFO.length - 1].label);
+    // 已升级的据点：名牌旁一颗星
+    this.star = at.add(18, 18, 2, c => {
+      c.beginPath();
+      for (let k = 0; k < 10; k++) {
+        const a = -Math.PI / 2 + (k * Math.PI) / 5, r = k & 1 ? 3.6 : 8;
+        c.lineTo(9 + Math.cos(a) * r, 9 + Math.sin(a) * r);
+      }
+      c.closePath();
+      c.lineJoin = 'round';
+      c.strokeStyle = 'rgba(15,12,8,0.9)';
+      c.lineWidth = 2.5;
+      c.stroke();
+      c.fillStyle = '#fff';
+      c.fill();
+    });
     const tex = at.finish();
     this.ground = new Quads(tex, { ground: true });
     this.sprites = new Quads(tex, {}, 4096);
@@ -238,60 +277,17 @@ export class Renderer {
     }
 
     // ---- 建筑 ----
-    const mat = litMaterial();
+    const mat = (this.bldMat = litMaterial());
     this.disposables.push(mat);
-    const nav = world.nav, mw = world.map.w, blds = world.buildings;
-    const wallLike = (c: number): number => {
-      const id = nav.bld[c];
-      return id >= 0 && blds[id].def.kind <= 2 ? 1 : 0;
-    };
-    const lists = new Map<string, { geo: () => THREE.BufferGeometry; list: Building[] }>();
-    const rub = new Map<string, { geo: () => THREE.BufferGeometry; list: Building[] }>();
-    for (const b of blds) {
-      const def = b.def;
-      let key: string, geo: () => THREE.BufferGeometry;
-      if (def.kind === BK_WALL) {
-        const c = b.ty * mw + b.tx;
-        const mask = wallLike(c - mw) | (wallLike(c + 1) << 1) | (wallLike(c + mw) << 2) | (wallLike(c - 1) << 3);
-        // 朝城外的边：隔壁既不是墙，也不是城内的地面
-        const outer = (c2: number): number => (!wallLike(c2) && !nav.inner[c2] ? 1 : 0);
-        const out = outer(c - mw) | (outer(c + 1) << 1) | (outer(c + mw) << 2) | (outer(c - 1) << 3);
-        key = `${def.key}:${mask}:${out}`;
-        geo = () => wallGeo(mask, def.wood, out);
-      } else {
-        const variants = def.key === 'house' || def.key === 'tent' ? 4 : def.key === 'farmhouse' ? 2 : 1;
-        const v = b.variant % variants, st = def.kind === BK_KEEP ? b.style : '';
-        key = `${def.key}:${st}:${v}`;
-        geo = () => buildingGeo(def.key, st, v);
-      }
-      if (!lists.has(key)) lists.set(key, { geo, list: [] });
-      lists.get(key)!.list.push(b);
-      const rk = `${def.w}x${def.h}:${def.wood ? 1 : 0}`;
-      if (!rub.has(rk)) rub.set(rk, { geo: () => rubbleGeo(def.w, def.h, def.wood), list: [] });
-      rub.get(rk)!.list.push(b);
-    }
-    const mk = (src: Map<string, { geo: () => THREE.BufferGeometry; list: Building[] }>, dst: Map<string, InstGroup>, shadow: boolean): void => {
-      for (const [key, e] of src) {
-        const g = e.geo();
-        const mesh = new THREE.InstancedMesh(g, mat, e.list.length);
-        mesh.castShadow = shadow;
-        mesh.receiveShadow = true;
-        mesh.frustumCulled = false;
-        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        scene.add(mesh);
-        dst.set(key, { mesh, list: e.list });
-        this.disposables.push(g, mesh);
-      }
-    };
-    mk(lists, this.bldGroups, true);
-    mk(rub, this.rubble, false);
-    this.bldSig = new Int32Array(blds.length).fill(-1);
+    const blds = world.buildings;
+    this.registerBuildings();
 
     // 旗帜：旗杆 + 旗面，颜色随归属变化
     const flagGeo = join(cyl(0.5, 0.6, 22, 0x3a3028, 0, 11, 0, 4), box(13, 8, 0.5, 0xffffff, 6.8, 17.5, 0));
     const flagMat = litMaterial({ side: THREE.DoubleSide });
-    this.flags = new THREE.InstancedMesh(flagGeo, flagMat, Math.max(1, blds.length));
-    this.siteFlags = new THREE.InstancedMesh(flagGeo, flagMat, world.sites.length + 2);
+    // 留出对局中途新建的箭塔、行营的余量
+    this.flags = new THREE.InstancedMesh(flagGeo, flagMat, blds.length + 128);
+    this.siteFlags = new THREE.InstancedMesh(flagGeo, flagMat, world.sites.length + 24);
     for (const f of [this.flags, this.siteFlags]) {
       f.frustumCulled = false;
       f.castShadow = true;
@@ -366,7 +362,65 @@ export class Renderer {
     }
   }
 
+  /** 给还没登记过的建筑（开局的全部，以及后来新建的）定下用哪个模型 */
+  private registerBuildings(): void {
+    const w = this.world, nav = w.nav, mw = w.map.w, blds = w.buildings;
+    const wallLike = (c: number): number => {
+      const id = nav.bld[c];
+      return id >= 0 && blds[id].def.kind <= 2 ? 1 : 0;
+    };
+    for (let i = this.bldKinds.length; i < blds.length; i++) {
+      const b = blds[i], def = b.def;
+      let key: string, geo: (lv: number) => THREE.BufferGeometry;
+      if (def.kind === BK_WALL) {
+        const c = b.ty * mw + b.tx;
+        const mask = wallLike(c - mw) | (wallLike(c + 1) << 1) | (wallLike(c + mw) << 2) | (wallLike(c - 1) << 3);
+        // 朝城外的边：隔壁既不是墙，也不是城内的地面
+        const outer = (c2: number): number => (!wallLike(c2) && !nav.inner[c2] ? 1 : 0);
+        const out = outer(c - mw) | (outer(c + 1) << 1) | (outer(c + mw) << 2) | (outer(c - 1) << 3);
+        key = `${def.key}:${mask}:${out}`;
+        geo = lv => wallGeo(mask, def.wood, out, lv);
+      } else {
+        const variants = def.key === 'house' || def.key === 'tent' ? 4 : def.key === 'farmhouse' ? 2 : 1;
+        const v = b.variant % variants, st = def.kind === BK_KEEP ? b.style : '';
+        key = `${def.key}:${st}:${v}`;
+        geo = lv => buildingGeo(def.key, st, v, lv);
+      }
+      this.bldKinds.push({ key, geo, lvLook: hasUpgradeLook(def.key), rubble: `${def.w}x${def.h}:${def.wood ? 1 : 0}` });
+    }
+    if (this.bldSig.length < blds.length) {
+      const sig = new Int32Array(blds.length + 64).fill(-1);
+      sig.set(this.bldSig);
+      this.bldSig = sig;
+    }
+  }
+
+  /** 取（没有就建）某个模型的绘制批次，容量不够时换一个更大的 */
+  private bldGroup(key: string, geo: () => THREE.BufferGeometry, shadow: boolean, need: number): InstGroup {
+    let g = this.bldGroups.get(key);
+    if (g && g.cap >= need) return g;
+    const cap = Math.max(need, g ? g.cap * 2 : 4);
+    const geom = g ? g.geo : geo();
+    if (g) {
+      this.scene.remove(g.mesh);
+      g.mesh.dispose();
+    }
+    const mesh = new THREE.InstancedMesh(geom, this.bldMat, cap);
+    mesh.castShadow = shadow;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(mesh);
+    g = { mesh, geo: geom, cap, n: 0, want: g ? g.want : 0 };
+    this.bldGroups.set(key, g);
+    return g;
+  }
+
   dispose(): void {
+    for (const g of this.bldGroups.values()) {
+      g.geo.dispose();
+      g.mesh.dispose();
+    }
     for (const d of this.disposables) d.dispose();
     this.three.dispose();
     this.three.forceContextLoss();
@@ -532,10 +586,12 @@ export class Renderer {
   private syncBuildings(fog: boolean): void {
     const w = this.world, blds = w.buildings, tick = w.tickCount;
     let dirty = false;
+    if (blds.length > this.bldKinds.length) this.registerBuildings();
     for (let i = 0; i < blds.length; i++) {
       const b = blds[i];
       const known = !fog || w.explored[((b.cy / VIS_CELL) | 0) * w.vw + ((b.cx / VIS_CELL) | 0)] === 1;
-      const sig = (b.alive ? 1 : 0) | (known ? 2 : 0) | (b.owner << 2) | (((b.hp / b.def.hp) * 6) | 0) << 4 | (tick - b.hitTick < 3 ? 128 : 0);
+      const sig = (b.alive ? 1 : 0) | (known ? 2 : 0) | (b.owner << 2) | (((b.hp / b.maxHp) * 6) | 0) << 4 | (tick - b.hitTick < 3 ? 128 : 0)
+        | (b.lv << 8);
       if (sig !== this.bldSig[i]) {
         this.bldSig[i] = sig;
         dirty = true;
@@ -543,30 +599,41 @@ export class Renderer {
     }
     if (!dirty) return;
     const m = this.m4, col = this.col;
-    const fill = (groups: Map<string, InstGroup>, alive: boolean): void => {
-      for (const g of groups.values()) {
-        let n = 0;
-        for (const b of g.list) {
-          if (b.alive !== alive || !(this.bldSig[b.id] & 2)) continue;
-          m.makeTranslation(b.cx, this.terrain.heightAt(b.cx, b.cy) - 0.4, b.cy);
-          g.mesh.setMatrixAt(n, m);
-          const k = alive ? 0.5 + 0.5 * (b.hp / b.def.hp) : 0.8;
-          const fl = alive && this.bldSig[b.id] & 128 ? 0.35 : 0;
-          g.mesh.setColorAt(n, col.setRGB(k + fl, k * 0.97 + fl, k * 0.94 + fl));
-          n++;
-        }
-        g.mesh.count = n;
-        g.mesh.visible = n > 0;
-        g.mesh.instanceMatrix.needsUpdate = true;
-        if (g.mesh.instanceColor) g.mesh.instanceColor.needsUpdate = true;
-      }
+    // 先数出每种模型要画几个（升级、倒塌、重建都会让建筑换到另一批里），再逐个写入
+    const keyOf = (b: Building): string => {
+      const kd = this.bldKinds[b.id];
+      return !b.alive ? `rubble:${kd.rubble}` : kd.lvLook ? `${kd.key}:${b.lv}` : kd.key;
     };
-    fill(this.bldGroups, true);
-    fill(this.rubble, false);
+    for (const g of this.bldGroups.values()) g.want = g.n = 0;
+    const keys: string[] = new Array(blds.length);
+    for (const b of blds) {
+      if (!(this.bldSig[b.id] & 2)) continue;
+      const key = (keys[b.id] = keyOf(b));
+      const g = this.bldGroups.get(key);
+      if (g) g.want++;
+      else this.bldGroup(key, () => (b.alive ? this.bldKinds[b.id].geo(b.lv) : rubbleGeo(b.def.w, b.def.h, b.def.wood)), b.alive, 1).want = 1;
+    }
+    for (const [key, g] of this.bldGroups) if (g.want > g.cap) this.bldGroup(key, () => g.geo, g.mesh.castShadow, g.want);
+    for (const b of blds) {
+      const key = keys[b.id];
+      if (!key) continue;
+      const g = this.bldGroups.get(key)!;
+      m.makeTranslation(b.cx, this.terrain.heightAt(b.cx, b.cy) - 0.4, b.cy);
+      g.mesh.setMatrixAt(g.n, m);
+      const k = b.alive ? 0.5 + 0.5 * (b.hp / b.maxHp) : 0.8;
+      const fl = b.alive && this.bldSig[b.id] & 128 ? 0.35 : 0;
+      g.mesh.setColorAt(g.n++, col.setRGB(k + fl, k * 0.97 + fl, k * 0.94 + fl));
+    }
+    for (const g of this.bldGroups.values()) {
+      g.mesh.count = g.n;
+      g.mesh.visible = g.n > 0;
+      g.mesh.instanceMatrix.needsUpdate = true;
+      if (g.mesh.instanceColor) g.mesh.instanceColor.needsUpdate = true;
+    }
     let n = 0;
     for (const b of blds) {
       if (!b.alive || !b.owner || !(this.bldSig[b.id] & 2)) continue;
-      const fh = flagHeight(b.def.key, b.style);
+      const fh = flagHeight(b.def.key, b.style, b.lv);
       if (!fh) continue;
       m.makeTranslation(b.cx, this.terrain.heightAt(b.cx, b.cy) + fh - 22, b.cy);
       if (b.def.kind === BK_KEEP) m.scale(this.v.set(1.6, 1.6, 1.6));
@@ -581,14 +648,16 @@ export class Renderer {
   /** 昼夜与天气的画面表现：天光强弱与颜色、天空与雾色 */
   private applyEnvironment(): void {
     const env = this.world.env;
-    const L = env.light, wet = env.rain;
+    // 雪天和雨天一样阴沉，只是天色发白
+    const L = env.light, wet = Math.max(env.rain, env.snow * 0.8);
     const c = this.col;
     // 夜里改成偏蓝的月光；下雨时整体压暗、发灰
     this.sun.intensity = (0.32 + 2.08 * L) * (1 - wet * 0.45);
     this.sun.color.setRGB(0.56 + 0.44 * L, 0.66 + 0.28 * L, 1 - 0.16 * L);
     this.sky.intensity = (0.42 + 0.93 * L) * (1 - wet * 0.2);
     this.sky.color.setRGB(0.5 + 0.31 * L, 0.6 + 0.28 * L, 1);
-    c.setRGB(0.05 + 0.57 * L, 0.07 + 0.64 * L, 0.13 + 0.64 * L).lerp(DULL, wet * 0.55 * (0.25 + 0.75 * L));
+    c.setRGB(0.05 + 0.57 * L, 0.07 + 0.64 * L, 0.13 + 0.64 * L).lerp(DULL, wet * 0.55 * (0.25 + 0.75 * L))
+      .lerp(PALE, env.snow * 0.45 * (0.2 + 0.8 * L));
     (this.scene.background as THREE.Color).copy(c);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(c);
@@ -610,12 +679,81 @@ export class Renderer {
     }
   }
 
+  /** 雪花：一片固定在世界里、随时间下落的雪花场（不能每帧随机撒，会闪） */
+  private drawSnow(S: Quads): void {
+    const snow = this.world.env.snow;
+    if (snow <= 0.01) return;
+    const n = Math.round(snow * 520);
+    const sx = this.vx1 - this.vx0, sz = this.vy1 - this.vy0;
+    const top = this.dist * 0.5, size = Math.max(1.3, this.dist * 0.0028);
+    const t = this.time;
+    for (let k = 0; k < n; k++) {
+      // 每片雪花有自己的落点、下落速度与飘摆相位；落点按视野范围取模，镜头移动时雪花留在原地
+      const hx = Math.abs(Math.sin(k * 12.9898) * 43758.5453) % 1, hz = Math.abs(Math.sin(k * 78.233) * 24634.6345) % 1;
+      const hp = Math.abs(Math.sin(k * 39.425) * 17231.137) % 1;
+      const x = this.vx0 + ((((hx * 4096 + Math.sin(t * 0.7 + k) * 14 - this.vx0) % sx) + sx) % sx);
+      const z = this.vy0 + ((((hz * 4096 + Math.cos(t * 0.5 + k * 1.7) * 14 - this.vy0) % sz) + sz) % sz);
+      const fall = 1 - ((t * (0.05 + hp * 0.04) + hp * 7) % 1);
+      S.add(Q_BILLBOARD, this.soft, x, this.terrain.heightAt(x, z) + fall * top, z, size, size, 1, 1, 1, 0.75 * Math.min(1, fall * 6));
+    }
+  }
+
+  /** 夜里据点自动升起火把：塔楼、门楼顶上和主建筑门前各一处火光（废墟不点） */
+  private drawSiteTorches(S: Quads, G: Quads, fog: boolean): void {
+    const w = this.world;
+    const dark = 1 - w.env.light;
+    if (dark < 0.35) return;
+    const k = Math.min(1, (dark - 0.35) / 0.3);
+    const near = this.dist < 3200;
+    for (const s of w.sites) {
+      if (s.gone || s.disabled || !this.inView(s.x, s.y, 600)) continue;
+      if (fog && w.explored[((s.y / VIS_CELL) | 0) * w.vw + ((s.x / VIS_CELL) | 0)] !== 1) continue;
+      let i = 0;
+      const flame = (x: number, y: number, z: number, size: number): void => {
+        const fl = size * (1 + Math.sin(this.time * 15 + (i++) * 2.3 + s.id) * 0.22);
+        S.add(Q_BILLBOARD, this.soft, x, y, z, fl * 2.1, fl * 2.6, 1, 0.5, 0.12, 0.85 * k);
+        S.add(Q_BILLBOARD, this.soft, x, y - 0.5, z, fl, fl * 1.4, 1, 0.9, 0.55, k);
+      };
+      for (const id of s.buildings) {
+        const b = w.buildings[id], kind = b.def.kind;
+        if (!b.alive || !(this.bldSig[id] & 2)) continue;
+        const main = id === s.main || kind === BK_KEEP || kind === BK_MAIN;
+        if (kind !== BK_TOWER && !b.gate && !main) continue;
+        const gy = this.terrain.heightAt(b.cx, b.cy);
+        if (main) {
+          // 主建筑：门前一左一右两个火盆
+          for (const sx of [-1, 1]) flame(b.cx + sx * 13, gy + 9, b.y1 + 6, 8);
+          if (near) G.add(Q_GROUND, this.soft, b.cx, gy, b.y1 + 18, 240, 200, 1, 0.62, 0.25, 0.3 * k);
+        } else if (b.def.wood) {
+          // 望楼、箭塔、营门：护栏边挑出一支火把
+          flame(b.cx + 11, gy + (b.gate ? 30 : 36), b.cy + 11, 7);
+          if (near) G.add(Q_GROUND, this.soft, b.cx + 11, gy, b.cy + 14, 190, 190, 1, 0.62, 0.25, 0.26 * k);
+        } else {
+          // 角楼、门楼：垛口四角各插一支
+          const hx = (b.w * TILE) / 2 - 3, hz = (b.h * TILE) / 2 - 3;
+          for (const sx of [-1, 1]) for (const sz of [-1, 1]) flame(b.cx + sx * hx, gy + 50, b.cy + sz * hz, 6.5);
+          if (near) G.add(Q_GROUND, this.soft, b.cx, gy, b.cy, 330, 330, 1, 0.62, 0.25, 0.22 * k);
+        }
+      }
+      // 旗下也点一堆篝火
+      if (s.radius > 0 && SITE_INFO[s.type].captureTime > 0) {
+        const gy = this.groundY(s.x, s.y);
+        flame(s.x + 16, gy + 6, s.y + 9, 9);
+        G.add(Q_GROUND, this.soft, s.x + 16, gy, s.y + 9, 260, 260, 1, 0.62, 0.25, 0.32 * k);
+      }
+    }
+  }
+
   /** @param fewSel 选中数量较少时，为每个选中单位都画血条；否则只画受伤的 */
   render(alpha: number, dt: number, sel: Uint8Array, fewSel = true): void {
     this.resize();
     const w = this.world, cam = this.cam;
     this.time += dt;
     shared.uTime.value = this.time;
+    // 积雪：下雪约半分钟铺满，雪停后化得慢一些
+    const real0 = dt || 0;
+    this.snowCover = Math.max(0, Math.min(1, this.snowCover + (w.env.snowing ? real0 / 28 : -real0 / 55)));
+    shared.uSnow.value = this.snowCover;
     this.updateCamera();
     const d = this.dist;
     // 视野包围盒
@@ -689,6 +827,19 @@ export class Renderer {
           this.spawn(fx, y + 10, fz, (R() - 0.5) * 8, 22, (R() - 0.5) * 8, 0.6, 5, -3, 1, 0.6, 0.15, 0.9);
           this.spawn(fx, y + 14, fz, 4, 16, 2, 1.2, 4, 10, 0.2, 0.19, 0.18, 0.4);
           break;
+        case FX_UPGRADE:
+          // 升为高级形态：脚下一圈金光，几点金星往上飘
+          this.spawn(fx, y + 3, fz, 0, 4, 0, 0.6, a * 1.2, 16, 1, 0.84, 0.3, 0.55);
+          if (near) for (let j = 0; j < 3; j++) this.spawn(fx + (R() - 0.5) * 8, y + 6 + R() * 8, fz + (R() - 0.5) * 8, 0, 22 + R() * 14, 0, 0.7 + R() * 0.3, 2.2, -1.5, 1, 0.92, 0.55, 0.95);
+          break;
+        case FX_BUILT:
+          // 建筑落成 / 据点升级：一圈扬尘加金光
+          for (let j = 0; j < 10 * a; j++) {
+            const an = R() * 6.28, sp = 18 + R() * 30;
+            this.spawn(fx + Math.cos(an) * a * 16, y + 2, fz + Math.sin(an) * a * 16, Math.cos(an) * sp, 10 + R() * 12, Math.sin(an) * sp, 0.9 + R() * 0.6, 7, 16, 0.72, 0.66, 0.54, 0.55);
+          }
+          for (let j = 0; j < 4 * a; j++) this.spawn(fx + (R() - 0.5) * a * 40, y + 10 + R() * 30, fz + (R() - 0.5) * a * 40, 0, 26, 0, 1.1, 4, 6, 1, 0.86, 0.35, 0.8);
+          break;
         case FX_COLLAPSE:
           for (let j = 0; j < 8 * a; j++) {
             this.spawn(fx + (R() - 0.5) * a * 30, y + R() * 20, fz + (R() - 0.5) * a * 26, (R() - 0.5) * 30, 8 + R() * 16, (R() - 0.5) * 30, 1 + R() * 1.2, 8, 22, 0.62, 0.58, 0.52, 0.7);
@@ -703,12 +854,26 @@ export class Renderer {
     const m = this.m4;
     const wave = Math.sin(this.time * 3) * 0.12;
     for (const s of w.sites) {
-      if (!this.inView(s.x, s.y, 400)) continue;
+      if (s.gone || !this.inView(s.x, s.y, 400)) continue;
       const known = !fog || expl[((s.y / VIS_CELL) | 0) * vw + ((s.x / VIS_CELL) | 0)] === 1;
       if (!known) continue;
       const c = tc[s.owner];
       const y = gy(s.x, s.y);
-      if (s.radius > 0) {
+      const info = SITE_INFO[s.type];
+      if (s.id === this.selSite) {
+        // 选中的据点：一圈亮环；资源点另标出还空着的箭塔位
+        const r = (s.radius > 0 ? s.radius : RULES.site.hqRadius) * 2 + 16 + Math.sin(this.time * 4) * 5;
+        G.add(Q_GROUND, this.circle, s.x, y, s.y, r, r, 0.45, 1, 0.5, 1);
+        for (const sl of s.slots) {
+          if (sl.bld >= 0 && w.buildings[sl.bld].alive) continue;
+          const px = (sl.tx + 0.5) * TILE, pz = (sl.ty + 0.5) * TILE;
+          G.add(Q_GROUND, ring, px, gy(px, pz), pz, 34, 34, 1, 0.85, 0.35, 0.9);
+        }
+      }
+      if (info.captureTime <= 0 && s.radius > 0) {
+        // 临时据点：只画休整范围，没有可争夺的旗帜
+        G.add(Q_GROUND, this.circle, s.x, y, s.y, s.radius * 2, s.radius * 2, c[0], c[1], c[2], 0.4);
+      } else if (s.radius > 0) {
         G.add(Q_GROUND, this.circle, s.x, y, s.y, s.radius * 2, s.radius * 2, c[0], c[1], c[2], 0.55);
         // 旗帜区：进攻方要站进这个小圈才开始读秒；读秒进度从小圈向外扩到整个占领圈
         const fr = RULES.capture.flagRadius * 2;
@@ -722,16 +887,24 @@ export class Renderer {
         this.siteFlags.setMatrixAt(nf, m);
         this.siteFlags.setColorAt(nf++, this.teamLin[s.owner]);
       }
-      const lb = this.labels[s.id];
+      const lb = this.labels[s.id] ?? this.outpostLabel;
       const dim = s.disabled ? 0.5 : 1;
       const ly = y + (s.type === SITE_HQ ? 150 : 62);
       O.add(Q_SCREEN, lb, s.x, ly, s.y, lb.w, lb.h, dim, dim, dim, 1, 0.5, 1);
+      if (s.level) O.add(Q_SCREEN, this.star, s.x, ly, s.y, 15, 15, 1, 0.82, 0.25, 1, -(lb.w / 2 + 2) / 15, 1.23);
       O.add(Q_SCREEN, white, s.x, ly, s.y, 36, 4, 0.05, 0.05, 0.05, 0.75, 0.5, -0.5);
       O.add(Q_SCREEN, white, s.x, ly, s.y, 34, 2.4, c[0], c[1], c[2], 1, 0.5, -1.2);
       if (s.cap > 0 && s.capTeam) {
         const cc = tc[s.capTeam];
         O.add(Q_SCREEN, white, s.x, ly, s.y, 34 * s.cap, 2.4, cc[0], cc[1], cc[2], 1, 0.5 / s.cap, -1.2);
       }
+    }
+    // 已下令、还没搭起来的临时据点：工地上一圈跳动的黄环
+    for (const p of w.builds) {
+      if (p.team !== human || !this.inView(p.x, p.y)) continue;
+      const y = gy(p.x, p.y), r = 70 + Math.sin(this.time * 5) * 6;
+      G.add(Q_GROUND, this.circle, p.x, y, p.y, r, r, 1, 0.85, 0.35, 0.9);
+      G.add(Q_GROUND, ring, p.x, y, p.y, 30, 30, 1, 0.85, 0.35, 0.8);
     }
     // 集结点
     if (human) {
@@ -858,7 +1031,7 @@ export class Renderer {
       if (!b.alive || !this.inView(b.cx, b.cy, 100)) continue;
       if (!(this.bldSig[b.id] & 2)) continue;
       const def = b.def;
-      const ratio = b.hp / def.hp;
+      const ratio = b.hp / b.maxHp;
       if (ratio >= 1) continue;
       const y = this.terrain.heightAt(b.cx, b.cy);
       const tall = def.tall * 1.3 + 14;
@@ -980,6 +1153,8 @@ export class Renderer {
       }
     }
     this.drawRain(S);
+    this.drawSnow(S);
+    this.drawSiteTorches(S, G, fog);
     this.raised.end(this.viewW, this.viewH);
     G.end(this.viewW, this.viewH);
     S.end(this.viewW, this.viewH);

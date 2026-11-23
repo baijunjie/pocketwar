@@ -1,9 +1,9 @@
 /** 战斗结算：出手、伤害、阵亡、经验与升级、投射物、箭楼 */
 import {
-  A_FIRE, A_MELEE, A_PIERCE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_HQ, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
+  A_FIRE, A_MELEE, A_PIERCE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_HQ, SITE_INFO, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
   T_FOREST, T_HILL, UnitDef,
 } from '../content';
-import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
+import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
 import type { Building, World } from '../world';
 
 /** 箭楼 / 主堡开火时使用的「攻击者」数据 */
@@ -57,7 +57,9 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
   aslot: number): void {
   const td = w.defs[w.type[j]];
   const lv = w.level[j];
-  const arm = atk === A_MELEE ? td.lvArmM[lv] : atk === A_PIERCE ? td.lvArmP[lv] : 0;
+  let arm = atk === A_MELEE ? td.lvArmM[lv] : atk === A_PIERCE ? td.lvArmP[lv] : 0;
+  // 雪天在据点之外：手脚冻僵，防御打折
+  if (w.env.snowing && !w.sheltered[j]) arm *= RULES.env.snowArmor;
   const routed = (w.state[j] & S_ROUT) !== 0;
   let dmg = routed ? raw * vs[td.cls] * RULES.morale.routDamage : raw * vs[td.cls] - arm * (1 - pen);
   if (atk === A_PIERCE) {
@@ -94,13 +96,19 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
     return;
   }
   // 挨打还击
-  if (live && w.target[j] === NONE && w.order[j] !== O_MOVE && w.order[j] !== O_ATTACK && w.ignoreT[j] <= 0
-    && !(w.state[j] & S_ROUT)) {
+  if (w.target[j] !== NONE || w.order[j] === O_MOVE || w.order[j] === O_ATTACK || w.ignoreT[j] > 0 || w.state[j] & S_ROUT) return;
+  if (live) {
     // 待命的近战单位不去追岗位之外的射手，免得被一路引走
     if (w.order[j] === O_IDLE && td.range === 0
       && (w.x[aslot] - w.homeX[j]) ** 2 + (w.y[aslot] - w.homeY[j]) ** 2 > RULES.combat.leash ** 2) return;
     w.target[j] = aslot;
     w.targetUid[j] = w.uid[aslot];
+  } else if (aslot < NONE && w.order[j] !== O_HOLD && (td.range === 0 || td.humanoid || td.vsBld >= 2)) {
+    // 被箭塔射中：打得动它、离岗位又不远，就上去拆
+    const b = w.buildings[-aslot - 2];
+    if (!b.alive || b.owner === w.team[j] || (b.def.fort && !td.siege)) return;
+    if (w.order[j] === O_IDLE && (b.cx - w.homeX[j]) ** 2 + (b.cy - w.homeY[j]) ** 2 > RULES.combat.leash ** 2) return;
+    w.target[j] = aslot;
   }
 }
 
@@ -182,7 +190,7 @@ export function damageBuilding(w: World, b: Building, raw: number, atk: number, 
   const def = b.def;
   if (def.fort && !canFort) return;
   const S = RULES.siege;
-  const arm = atk === A_MELEE ? def.armM : atk === A_PIERCE ? def.armP : 0;
+  const arm = atk === A_MELEE ? def.armM + b.armor : atk === A_PIERCE ? def.armP + b.armor : 0;
   // 火把：木头一点就着，石头房子烧得慢，门楼与角楼更慢
   let dmg = atk === A_FIRE ? raw * (def.wood ? S.wood : b.gate || def.kind === BK_TOWER ? S.gate : S.stone) : raw * vsBld - arm;
   const min = atk === A_PIERCE ? 0.5 : 1;
@@ -210,6 +218,8 @@ function destroyBuilding(w: World, b: Building, ateam: number): void {
     s.disabled = true;
     s.owner = s.capTeam = 0;
     s.cap = 0;
+    // 临时据点毁了就没了，不会重生
+    if (SITE_INFO[s.type].category === 'outpost') s.gone = true;
     for (const id of s.buildings) {
       const o = w.buildings[id];
       o.owner = 0;
@@ -308,17 +318,17 @@ export function updateProjectiles(w: World): void {
 // ---------------------------------------------------------------- 箭楼
 export function updateTowers(w: World): void {
   for (const b of w.armed) {
-    if (!b.alive || b.owner === 0) continue;
+    const tw = b.tower;
+    if (!tw || !b.alive || b.owner === 0) continue;
     b.cd -= DT;
     if (b.cd > 0) continue;
-    const tw = b.def.tower!;
     const e = w.findEnemy(b.cx, b.cy, b.owner, tw.range, 0);
     if (e === NONE) {
       b.cd = 0.4;
       continue;
     }
     b.cd = tw.cd;
-    spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, e, w.x[e], w.y[e], 0, tw.dmg, A_PIERCE, 0, 0, -1, b.owner, NONE);
+    spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, e, w.x[e], w.y[e], 0, tw.dmg, A_PIERCE, 0, 0, -1, b.owner, -b.id - 2);
     w.addFx(FX_SHOT, b.cx, b.cy, 0);
   }
 }

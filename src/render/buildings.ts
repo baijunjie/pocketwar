@@ -4,7 +4,7 @@ import { TILE } from '../sim/defs';
 import { Col, ball, box, cone, cyl, join, xf } from './prims';
 
 const STONE = 0x9c978c, STONE_D = 0x7d786e, STONE_L = 0xb4afa3, PLASTER = 0xd9cfb8, TIMBER = 0x5a4028, WOOD = 0x8a6a42;
-const THATCH = 0xb59a58, TILE_RED = 0xa9523a, TILE_GREY = 0x4c5356, CANVAS = 0xd8cfb4, MUD = 0xc7a877;
+const THATCH = 0xb59a58, TILE_RED = 0xa9523a, TILE_GREY = 0x4c5356, CANVAS = 0xd8cfb4, MUD = 0xc7a877, IRON = 0x4a4d54;
 
 type G = THREE.BufferGeometry;
 
@@ -54,8 +54,9 @@ function battlement(w: number, d: number, y: number, color: Col, n = 3, mh = 5):
 /**
  * 城墙 / 木栅：按四邻连接情况生成（位掩码：1 北，2 东，4 南，8 西）。
  * @param out 石墙朝城外的那几条边（同样的位掩码）：只有正面砌垛口，朝城内的一面敞开，士兵从那边上下
+ * @param lv 据点升级后：木栅加高并钉上横木、朝外架拒马；石墙垛口加高，外沿搭一道带顶的木战棚
  */
-export function wallGeo(mask: number, wood: boolean, out = 0): G {
+export function wallGeo(mask: number, wood: boolean, out = 0, lv = 0): G {
   const parts: G[] = [];
   const half = TILE / 2;
   const dirs: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
@@ -63,13 +64,24 @@ export function wallGeo(mask: number, wood: boolean, out = 0): G {
     const log = (x: number, z: number, h: number): void => {
       parts.push(cyl(2.6, 2.9, h, WOOD, x, h / 2, z, 5), cone(2.6, 4, 0xa98a5a, x, h + 2, z, 5));
     };
-    log(0, 0, 19);
+    const up = lv ? 7 : 0;
+    log(0, 0, 19 + up);
     dirs.forEach(([dx, dz], k) => {
       if (!(mask & (1 << k))) return;
-      log(dx * 6, dz * 6, 17);
-      log(dx * 11.5, dz * 11.5, 18.5);
+      log(dx * 6, dz * 6, 17 + up);
+      log(dx * 11.5, dz * 11.5, 18.5 + up);
       parts.push(box(dx ? half : 1.5, 2, dz ? half : 1.5, TIMBER, dx * half / 2, 11, dz * half / 2));
+      if (lv) parts.push(box(dx ? half : 2.2, 2.4, dz ? half : 2.2, IRON, dx * half / 2, 18, dz * half / 2), box(dx ? half : 2, 2, dz ? half : 2, TIMBER, dx * half / 2, 5, dz * half / 2));
     });
+    if (lv) {
+      // 没有接着木栅的那两侧就是栅外 / 栅内：各架一排斜插的尖木
+      dirs.forEach(([dx, dz], k) => {
+        if (mask & (1 << k)) return;
+        for (const s of [-1, 1]) {
+          parts.push(xf(cone(1.5, 15, 0xa98a5a, 0, 0, 0, 4), { rz: -dx * 1.05, rx: dz * 1.05, t: [dx * 8 + (dz ? s * 7 : 0), 5, dz * 8 + (dx ? s * 7 : 0)] }));
+        }
+      });
+    }
     return join(...parts);
   }
   // 石墙：每格一整块，两圈拼成两格厚的墙体；墙顶就是驻守单位站的高度（BuildingDef.top）
@@ -83,8 +95,42 @@ export function wallGeo(mask: number, wood: boolean, out = 0): G {
     for (const s of [-1, 1]) parts.push(box(dx ? 3.5 : 9, 4.5, dz ? 3.5 : 9, STONE_L, ex + (dz ? s * 8 : 0), H + 5.2, ez + (dx ? s * 8 : 0)));
     // 墙脚收分
     parts.push(box(dx ? 3 : TILE, 6, dz ? 3 : TILE, STONE_D, dx * (half + 0.6), 3, dz * (half + 0.6)));
+    if (lv) {
+      // 升级：墙脚再包一层条石，垛口上搭木战棚（立柱 + 斜顶），远看整道墙高出一截
+      parts.push(box(dx ? 5 : TILE, 11, dz ? 5 : TILE, STONE_L, dx * (half + 1.6), 5.5, dz * (half + 1.6)));
+      for (const s of [-1, 1]) parts.push(box(1.6, 9, 1.6, TIMBER, ex + (dz ? s * 14 : 0), H + 8, ez + (dx ? s * 14 : 0)));
+      parts.push(xf(box(dx ? 9 : TILE + 1, 1.4, dz ? 9 : TILE + 1, 0x6e4a36), { rz: -dx * 0.28, rx: dz * 0.28, t: [dx * (half - 1), H + 12.6, dz * (half - 1)] }));
+    }
   });
   return join(...parts);
+}
+
+/** 旌旗：一根高杆挂一幅竖长的幡，升级后的据点主建筑四角各立一面 */
+function banner(x: number, z: number, h: number, c1: Col = 0xb0483a, c2: Col = 0xd9b44a): G[] {
+  return [cyl(0.7, 0.9, h, TIMBER, x, h / 2, z, 5), box(7, h * 0.42, 0.6, c1, x + 4.2, h * 0.74, z), box(7, 2, 0.8, c2, x + 4.2, h * 0.95, z),
+    box(7, 2, 0.8, c2, x + 4.2, h * 0.54, z), cone(1.4, 4, c2, x, h + 2, z, 5)];
+}
+
+/** 升级后加在建筑上的东西：四角的旌旗；不会放箭的主建筑另搭一座弓手的望台 */
+function fortify(key: string, style: string): G[] {
+  const fp: Record<string, [number, number, number]> = {
+    keep: [118, 118, style === 'japan' ? 96 : 78], citadel: [96, 96, 70], hall: [84, 60, 50], cmdtent: [80, 48, 34], granary: [52, 52, 44],
+    stable: [92, 58, 30], workshop: [84, 52, 36], barracks: [88, 50, 34],
+  };
+  const f = fp[key];
+  if (!f) return [];
+  const [w, d, h] = f;
+  const p: G[] = [];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(...banner(sx * (w / 2 + 3), sz * (d / 2 + 3), h));
+  if (key !== 'keep' && key !== 'citadel' && key !== 'barracks') {
+    // 望台：四根立柱撑起一圈护栏和一个小顶，立在建筑的东南角外
+    const x = w / 2 - 6, z = d / 2 + 9, ph = h * 0.75 + 12;
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1.2, 1.5, ph, TIMBER, x + sx * 6.5, ph / 2, z + sz * 6.5, 5));
+    p.push(box(17, 1.6, 17, WOOD, x, ph - 8, z), box(17, 4.5, 1, WOOD, x, ph - 5, z + 8), box(17, 4.5, 1, WOOD, x, ph - 5, z - 8),
+      box(1, 4.5, 17, WOOD, x + 8, ph - 5, z), box(1, 4.5, 17, WOOD, x - 8, ph - 5, z), hip(17, 17, 7, 0x6e4a36, ph, 2.5));
+    p[p.length - 1].translate(x, 0, z);
+  }
+  return p;
 }
 
 function house(w: number, d: number, wallH: number, roofH: number, wall: Col, roof: Col, framed = true): G[] {
@@ -131,8 +177,17 @@ function keep(style: string): G {
   return join(...p);
 }
 
-/** @returns 建筑几何体；style 仅主堡使用，variant 用于民居等的外观变化 */
-export function buildingGeo(key: string, style: string, variant: number): G {
+/**
+ * @returns 建筑几何体；style 仅主堡使用，variant 用于民居等的外观变化
+ * @param lv 所在据点的等级：1 时在原样上加固（见各建筑的升级部分）
+ */
+export function buildingGeo(key: string, style: string, variant: number, lv = 0): G {
+  const g = baseGeo(key, style, variant, lv);
+  const extra = lv ? fortify(key, style) : [];
+  return extra.length ? join(g, ...extra) : g;
+}
+
+function baseGeo(key: string, style: string, variant: number, lv: number): G {
   const p: G[] = [];
   switch (key) {
     case 'gate_h': case 'gate_v': case 'wgate_h': case 'wgate_v': {
@@ -140,12 +195,18 @@ export function buildingGeo(key: string, style: string, variant: number): G {
       if (wood) {
         p.push(cyl(3.2, 3.6, 26, WOOD, -27, 13, 0, 6), cyl(3.2, 3.6, 26, WOOD, 27, 13, 0, 6), box(60, 3, 4, TIMBER, 0, 24, 0), box(50, 17, 2, 0x7a5a36, 0, 9, 0),
           box(50, 1.5, 2.6, TIMBER, 0, 14, 0), box(50, 1.5, 2.6, TIMBER, 0, 5, 0));
+        // 升级：门上架一座带顶的敌楼，门板包铁
+        if (lv) p.push(cyl(3.6, 4, 36, WOOD, -27, 18, 0, 6), cyl(3.6, 4, 36, WOOD, 27, 18, 0, 6), box(64, 2, 12, WOOD, 0, 27, 0), box(64, 5, 1.2, WOOD, 0, 30.5, 6), box(64, 5, 1.2, WOOD, 0, 30.5, -6),
+          hip(64, 12, 8, 0x6e4a36, 37, 3), box(50, 2.4, 2.8, IRON, 0, 10, 0), box(50, 2.4, 2.8, IRON, 0, 2.5, 0), box(2.4, 17, 2.8, IRON, 0, 9, 0));
       } else {
         // 门楼：占满两格见方，与两格厚的城墙齐平；门洞贯通，门扇在正中
         const D = TILE * 2;
         p.push(box(15, 40, D, STONE_D, -24.5, 20, 0), box(15, 40, D, STONE_D, 24.5, 20, 0), box(D, 14, D, STONE, 0, 33, 0), ...battlement(D, D, 40, STONE_L, 6, 4.5),
           box(30, 12, 22, 0xb0483a, 0, 46, 0), hip(30, 22, 9, TILE_GREY, 52, 4),
           box(34, 26, 3, 0x5a4028, 0, 13, 0), box(34, 2, 3.6, 0x3a3a40, 0, 18, 0), box(34, 2, 3.6, 0x3a3a40, 0, 7, 0), box(1.2, 26, 3.6, 0x3a3a40, 0, 13, 0));
+        // 升级：城楼加一层重檐，两侧立旌旗
+        if (lv) p.push(box(46, 10, 34, 0xb0483a, 0, 51, 0), hip(46, 34, 9, TILE_GREY, 56, 5), box(24, 9, 18, 0xb0483a, 0, 67, 0), hip(24, 18, 9, TILE_GREY, 71, 4),
+          ...banner(-26, 28, 62), ...banner(22, 28, 62));
       }
       const g = join(...p);
       return key.endsWith('_v') ? g.rotateY(Math.PI / 2) : g;
@@ -155,11 +216,76 @@ export function buildingGeo(key: string, style: string, variant: number): G {
       p.push(box(64, 37, 64, STONE, 0, 18.5, 0), box(67, 3, 67, STONE_D, 0, 38.5, 0), ...battlement(67, 67, 40, STONE_L, 5, 5),
         box(66, 5, 66, STONE_D, 0, 2.5, 0),
         box(3, 8, 1, 0x2a2a2e, 0, 24, 32.2), box(1, 8, 3, 0x2a2a2e, 32.2, 24, 0), box(3, 8, 1, 0x2a2a2e, 0, 24, -32.2), box(1, 8, 3, 0x2a2a2e, -32.2, 24, 0));
+      // 升级：平顶上起一座四面敞开的箭亭（人仍然站在亭下），墙脚包条石
+      if (lv) {
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1.8, 2, 24, 0x7a2a20, sx * 25, 52, sz * 25, 6));
+        p.push(hip(58, 58, 16, TILE_GREY, 64, 6), box(72, 1.6, 72, 0x3c4245, 0, 64.6, 0), cone(2.4, 7, 0xc9a227, 0, 83, 0, 6), box(70, 12, 70, STONE_L, 0, 6, 0));
+      }
       break;
     case 'watchtower':
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(xf(cyl(1.5, 1.8, 34, TIMBER, 0, 17, 0, 5), { t: [sx * 9, 0, sz * 9] }));
       p.push(box(24, 2, 24, WOOD, 0, 26, 0), box(24, 6, 1.2, WOOD, 0, 30, 12), box(24, 6, 1.2, WOOD, 0, 30, -12), box(1.2, 6, 24, WOOD, 12, 30, 0), box(1.2, 6, 24, WOOD, -12, 30, 0),
-        hip(24, 24, 9, THATCH, 38, 3), box(20, 1.2, 1.2, TIMBER, 0, 13, 9), box(20, 1.2, 1.2, TIMBER, 0, 13, -9));
+        hip(24, 24, 9, lv ? 0x6e4a36 : THATCH, 38, 3), box(20, 1.2, 1.2, TIMBER, 0, 13, 9), box(20, 1.2, 1.2, TIMBER, 0, 13, -9));
+      // 升级：护栏外挂一圈盾牌，塔脚加斜撑和一圈木板
+      if (lv) {
+        for (const s of [-1, 1]) p.push(box(7, 6, 1, 0x8a3a2c, s * 6, 30, 13), box(7, 6, 1, 0x8a3a2c, s * 6, 30, -13), box(1, 6, 7, 0x8a3a2c, 13, 30, s * 6), box(1, 6, 7, 0x8a3a2c, -13, 30, s * 6));
+        p.push(box(21, 12, 21, WOOD, 0, 6, 0), box(22, 1.6, 22, IRON, 0, 12, 0), cone(1.6, 5, 0xc9a227, 0, 49, 0, 5));
+      }
+      break;
+    case 'arrowtower':
+      // 资源点的箭塔：方木塔身上挑出一圈战棚，尖顶
+      p.push(box(15, 30, 15, WOOD, 0, 15, 0), box(16.5, 2, 16.5, TIMBER, 0, 10, 0), box(16.5, 2, 16.5, TIMBER, 0, 20, 0), box(24, 2, 24, TIMBER, 0, 30, 0),
+        box(24, 7, 1.4, 0x7a5a36, 0, 34.5, 11.6), box(24, 7, 1.4, 0x7a5a36, 0, 34.5, -11.6), box(1.4, 7, 24, 0x7a5a36, 11.6, 34.5, 0), box(1.4, 7, 24, 0x7a5a36, -11.6, 34.5, 0),
+        hip(22, 22, 13, 0x6e4a36, 44, 3), box(4, 6, 0.8, 0x2a2a2e, 0, 22, 7.7), box(0.8, 6, 4, 0x2a2a2e, 7.7, 22, 0));
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1, 1, 8, TIMBER, sx * 10.5, 41, sz * 10.5, 4), xf(box(1.4, 9, 1.4, TIMBER), { rz: -sx * 0.7, t: [sx * 9.5, 27, sz * 7] }));
+      break;
+    case 'farmstead':
+      // 谷仓：木板墙、草顶，旁边两垛草料
+      p.push(...house(50, 36, 17, 17, 0x9a6b42, THATCH), box(12, 13, 1, TIMBER, 0, 6.5, 18.6), box(52, 2, 38, STONE_D, 0, 1, 0),
+        xf(cyl(7, 8, 9, 0xcdb060, 0, 0, 0, 8), { t: [22, 4.5, -22] }), cone(8, 6, 0xcdb060, 22, 12, -22, 8),
+        xf(cyl(6, 7, 8, 0xc4a658, 0, 0, 0, 8), { t: [-24, 4, 22] }), cone(7, 5, 0xc4a658, -24, 10.5, 22, 8));
+      break;
+    case 'lumbercamp': {
+      // 伐木棚：敞开的料棚，棚下码着原木，棚外一架锯木架
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1.6, 1.8, sz > 0 ? 15 : 21, TIMBER, sx * 22, (sz > 0 ? 15 : 21) / 2, sz * 14, 5));
+      p.push(xf(box(52, 1.6, 36, 0x7a5a36), { rx: 0.2, t: [0, 19, 0] }));
+      for (let i = 0; i < 4; i++) p.push(xf(cyl(3, 3, 38, 0x9a7a4a, 0, 0, 0, 7), { rz: Math.PI / 2, t: [-2, 3, -9 + i * 6.2] }));
+      for (let i = 0; i < 3; i++) p.push(xf(cyl(3, 3, 38, 0xa9865a, 0, 0, 0, 7), { rz: Math.PI / 2, t: [-2, 8.4, -6 + i * 6.2] }));
+      p.push(cyl(4.5, 5, 5, 0x6e5136, 26, 2.5, 24, 7), xf(box(1, 12, 0.8, 0xaab0b8), { rz: 0.5, t: [27, 9, 24] }),
+        xf(cyl(2.6, 2.6, 22, 0x9a7a4a, 0, 0, 0, 7), { rz: Math.PI / 2, t: [-18, 8, 26] }), box(1.4, 8, 6, TIMBER, -26, 4, 26), box(1.4, 8, 6, TIMBER, -10, 4, 26));
+      break;
+    }
+    case 'quarry': {
+      // 采石棚：石砌工棚，旁边一架吊杆，地上码着切好的石料
+      p.push(box(34, 15, 28, STONE, -10, 7.5, -10), gable(34, 28, 9, 0x5f6468, 15, 2).translate(-10, 0, -10), box(8, 10, 1, TIMBER, -10, 5, 4.4));
+      const blocks: [number, number, number, number][] = [[18, 4, 14, 0], [18, 12, 14, 0.2], [10, 4, 24, 0.5], [24, 4, 24, 0.1], [17, 11.5, 24, -0.2], [-22, 4, 22, 0.3]];
+      for (const [x, y, z, r] of blocks) p.push(xf(box(12, 8, 9, STONE_L), { ry: r, t: [x, y, z] }));
+      p.push(xf(box(2, 34, 2, TIMBER), { rz: -0.5, t: [14, 16, -18] }), cyl(1.4, 1.8, 22, TIMBER, 4, 11, -18, 5), box(0.5, 16, 0.5, 0xc8b48a, 22, 22, -18), box(6, 5, 6, STONE_L, 22, 12, -18));
+      break;
+    }
+    case 'goldmine': {
+      // 矿洞：山石堆里开出的洞口，木架支护，洞前一辆装着矿石的小车
+      const rock = (r: number, x: number, y: number, z: number, c: number): G => {
+        const g = new THREE.DodecahedronGeometry(r, 0);
+        g.deleteAttribute('uv');
+        const arr = new Float32Array(g.getAttribute('position').count * 3);
+        const col = new THREE.Color(c);
+        for (let i = 0; i < arr.length; i += 3) col.clone().multiplyScalar(0.86 + ((i / 3) % 5) * 0.06).toArray(arr, i);
+        g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+        return g.scale(1, 0.8, 1).translate(x, y, z);
+      };
+      p.push(rock(24, -4, 13, -8, 0x8a8780), rock(16, 16, 9, -12, 0x7c7972), rock(14, -22, 8, 2, 0x9a968c),
+        box(15, 17, 6, 0x1c1a18, 0, 8.5, 11), box(2.4, 19, 3, TIMBER, -8.5, 9.5, 14), box(2.4, 19, 3, TIMBER, 8.5, 9.5, 14), box(22, 2.6, 3.4, TIMBER, 0, 19, 14),
+        box(13, 5, 9, WOOD, 20, 6, 24), box(11, 3, 7, 0xe2b93a, 20, 9.5, 24), cyl(2.6, 2.6, 1.4, TIMBER, 15, 2.6, 29, 8).rotateX(0), cyl(2.6, 2.6, 1.4, TIMBER, 25, 2.6, 29, 8),
+        xf(box(5, 4, 4, 0xe2b93a), { ry: 0.5, t: [-18, 2, 24] }), xf(box(4, 3, 4, 0xd4a82e), { ry: 0.2, t: [-12, 1.5, 27] }));
+      break;
+    }
+    case 'outpost':
+      // 行营：一顶大帐，帐前篝火与辎重，四角插着木桩
+      p.push(cone(24, 26, CANVAS, 0, 13, -4, 10), cyl(24.4, 24.4, 3, 0xb0483a, 0, 1.5, -4, 10), cyl(0.9, 0.9, 7, TIMBER, 0, 28, -4, 4), box(9, 13, 1, 0x4a4036, 0, 6.5, 17.6),
+        box(8, 6, 8, WOOD, 22, 3, 22), box(6, 5, 6, 0x7a5a36, 23, 8.5, 21), xf(cyl(4, 4, 8, 0x8a6a42, 0, 0, 0, 8), { rz: Math.PI / 2, t: [-22, 4, 23] }),
+        cone(3, 4, 0x3a2c22, 0, 2, 27, 6), cone(1.8, 5, 0xe8842a, 0, 4.5, 27, 5));
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1.6, 1.9, 13, WOOD, sx * 29, 6.5, sz * 29, 5), cone(1.6, 3.5, 0xa98a5a, sx * 29, 14.7, sz * 29, 5));
       break;
     case 'keep': return keep(style);
     case 'citadel':
@@ -232,8 +358,14 @@ export function rubbleGeo(w: number, h: number, wood: boolean): G {
   return join(...p);
 }
 
+/** 这种建筑升级后外观有没有变化（没有的话两个等级共用一份模型） */
+export function hasUpgradeLook(key: string): boolean {
+  return key !== 'house' && key !== 'tent' && key !== 'farmhouse';
+}
+
 /** 旗杆顶端相对占地中心地面的高度；0 表示不挂旗 */
-export function flagHeight(key: string, style: string): number {
+export function flagHeight(key: string, style: string, lv = 0): number {
+  if (lv && (key === 'tower' || key === 'gate_h' || key === 'gate_v')) return key === 'tower' ? 104 : 96;
   switch (key) {
     case 'keep': return style === 'japan' ? 112 : style === 'china' ? 88 : style === 'rome' ? 70 : 92;
     case 'citadel': return 84;
@@ -246,6 +378,12 @@ export function flagHeight(key: string, style: string): number {
     case 'stable': return 24;
     case 'workshop': return 38;
     case 'barracks': return 32;
+    case 'arrowtower': return 62;
+    case 'farmstead': return 44;
+    case 'lumbercamp': return 32;
+    case 'quarry': return 36;
+    case 'goldmine': return 40;
+    case 'outpost': return 44;
     default: return 0;
   }
 }

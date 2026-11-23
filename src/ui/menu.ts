@@ -70,7 +70,7 @@ export function showMenu(root: HTMLElement, onStart: (opts: GameOptions) => void
           </div></div>
         </div>
         <button class="primary start">开　战</button>
-        <footer>不建造、不采集：开局即拥有整支军队。占领据点获得援军，攻破敌方主堡取胜。</footer>
+        <footer>不造兵、不用派人采集：开局即拥有整支军队。占领据点获得援军，占领资源点自动采集，攻破敌方主堡取胜。</footer>
       </div>`;
     for (const id of FACTION_IDS) {
       const box = menu.querySelector<HTMLDivElement>(`[data-roster="${id}"]`)!;

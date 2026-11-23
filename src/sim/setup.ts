@@ -52,16 +52,11 @@ export function createGame(opts: GameOptions): Game {
   world.env.enabled = opts.environment !== false;
   world.factions = [null, FACTIONS[opts.factions[0]], FACTIONS[opts.factions[1]]];
 
-  for (let si = 0; si < map.sites.length; si++) {
-    const s = map.sites[si];
-    const info = SITE_INFO[s.type];
-    world.sites.push({
-      id: si, type: s.type,
-      name: s.type === SITE_HQ ? `${world.factions[s.owner]!.name}大本营` : s.name,
-      x: s.tx * TILE, y: s.ty * TILE, radius: info.radius, owner: s.owner, capTeam: 0, cap: 0,
-      timer: info.interval * rng.range(0.6, 1), interval: info.interval, buildings: [], main: -1, disabled: false,
-      count: [0, 0, 0], flag: [0, 0, 0],
-    });
+  for (const s of map.sites) {
+    const site = world.addSite(s.type, s.type === SITE_HQ ? `${world.factions[s.owner]!.name}大本营` : s.name,
+      s.tx * TILE, s.ty * TILE, s.owner);
+    site.timer = SITE_INFO[s.type].interval * rng.range(0.6, 1);
+    for (const [tx, ty] of s.slots ?? []) site.slots.push({ tx, ty, bld: -1 });
   }
   for (const spec of map.buildings) {
     const style = spec.def === 'keep' ? world.factions[spec.owner]!.id : '';
@@ -118,6 +113,7 @@ export function createGame(opts: GameOptions): Game {
       world.spawnGroup(tm, list.slice(cursor), dp.x, dp.y, dp.dx, dp.dy);
     }
   }
+  for (let tm = 1; tm <= 2; tm++) world.armyBase[tm] = world.upkeep[tm];
   if (opts.supply !== false) initSupply(world);
   world.systems.find(s => s.name === 'environment')!.run(world);
   world.refreshVision();

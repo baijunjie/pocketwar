@@ -2,7 +2,7 @@
  * 士气与溃逃。每个单位的士气朝一个「应有水平」靠拢，这个水平由局部兵力对比、伤亡、全局形势、
  * 据点、粮草、天气等因素加减得出；跌破该等级的阈值就溃逃。
  */
-import { DT, RULES, SITE_HQ, TILE } from '../content';
+import { DT, RULES, SITE_INFO, TILE } from '../content';
 import { NONE, O_IDLE, O_MOVE, S_CHARGE, S_ROUT } from '../state';
 import type { World } from '../world';
 
@@ -19,7 +19,8 @@ export function teamMoraleFactors(w: World, tm: number): { key: string; label: s
   }
   let own = 0, any = false;
   for (const s of w.sites) {
-    if (s.type === SITE_HQ) continue;
+    // 只数能占领的正经据点：大本营、资源点、临时据点都不算
+    if (!SITE_INFO[s.type].counts || SITE_INFO[s.type].captureTime <= 0) continue;
     any = true;
     if (s.owner === tm && !s.disabled) own++;
   }
@@ -103,7 +104,7 @@ export function updateMorale(w: World): void {
     target -= M.wounded * (1 - w.hp[i] / w.maxHp[i]);
     target -= Math.min(M.contagionMax, M.contagion * rout);
     for (const s of w.sites) {
-      if (s.owner !== tm || s.disabled) continue;
+      if (s.owner !== tm || s.disabled || !SITE_INFO[s.type].haven) continue;
       const dx = s.x - ux, dy = s.y - uy;
       if (dx * dx + dy * dy < near2) {
         target += M.nearSite;
@@ -140,7 +141,7 @@ function pickRefuge(w: World, i: number): void {
   const tm = w.team[i], ux = w.x[i], uy = w.y[i];
   let best = 1e18, id = -1;
   for (const s of w.sites) {
-    if (s.owner !== tm || s.disabled) continue;
+    if (s.owner !== tm || s.disabled || !SITE_INFO[s.type].haven) continue;
     const d = (s.x - ux) ** 2 + (s.y - uy) ** 2;
     if (d < best) {
       best = d;

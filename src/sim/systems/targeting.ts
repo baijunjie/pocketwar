@@ -87,7 +87,7 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
 export function findArmedBuilding(w: World, ux: number, uy: number, tm: number, range: number, siege: boolean): number {
   let best = range * range, id = -1;
   for (const b of w.armed) {
-    if (!b.alive || b.owner === tm || b.owner === 0 || (b.def.fort && !siege)) continue;
+    if (!b.alive || !b.tower || b.owner === tm || b.owner === 0 || (b.def.fort && !siege)) continue;
     const ox = b.cx - ux, oy = b.cy - uy;
     const d2 = ox * ox + oy * oy;
     if (d2 < best) {

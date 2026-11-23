@@ -46,7 +46,7 @@ export function horse(L: HorseSpec, team: THREE.Color): UnitModel {
     // 原模型是栗色马：按明度换成指定毛色；披甲的马把躯干换成甲色
     c.getHSL(hsl);
     const bone = boneOf();
-    const bodyPart = /Torso|Body|Back|Neck|Shoulder/.test(bone);
+    const bodyPart = L.bardingFull ? !/Lower|Tail|Ear/.test(bone) : /Torso|Body|Back|Neck|Shoulder/.test(bone);
     if (hsl.s > 0.2 && hsl.l > 0.08) {
       if (armor && bodyPart) c.copy(armor).multiplyScalar(0.7 + hsl.l);
       else c.copy(coat).multiplyScalar(0.6 + hsl.l * 1.4);
@@ -111,6 +111,15 @@ function wheel(r: number, x: number, z: number, color = WOOD_D): THREE.BufferGeo
     xf(cyl(r * 0.25, r * 0.25, 2.2, IRON, 0, 0, 0, 6), { rx: Math.PI / 2, t: [x, r, z] }));
 }
 
+/** 包铁器械的挡板：立在车前的一面铁皮木盾，中间一道队伍色 */
+function mantlet(team: THREE.Color, x: number, y: number, w: number, h: number): THREE.BufferGeometry[] {
+  return [
+    xf(box(1.6, h, w, 0x4a4d54), { rz: -0.12, t: [x, y + h / 2, 0] }), xf(box(1.9, 2.2, w + 0.6, team as unknown as number), { rz: -0.12, t: [x + 0.2, y + h * 0.62, 0] }),
+    xf(box(2, 1.2, w + 0.8, 0x2e3035), { rz: -0.12, t: [x, y + h - 0.3, 0] }), xf(box(2, 1.2, w + 0.8, 0x2e3035), { rz: -0.12, t: [x, y + 1, 0] }),
+    xf(box(1.4, h * 0.9, 1.4, WOOD_D), { rz: 0.5, t: [x - h * 0.24, y + h * 0.42, w * 0.3] }), xf(box(1.4, h * 0.9, 1.4, WOOD_D), { rz: 0.5, t: [x - h * 0.24, y + h * 0.42, -w * 0.3] }),
+  ];
+}
+
 /** 器械通用的走动 / 损毁动作 */
 function engineClips(rb: RigBuilder, body: THREE.Group, fire: (k: number) => void, rest: () => void): void {
   rb.clip('idle', 0.1, () => {
@@ -136,7 +145,7 @@ function engineClips(rb: RigBuilder, body: THREE.Group, fire: (k: number) => voi
 }
 
 /** 扭力投石机（野驴）：低矮车架 + 一根甩臂 */
-export function onager(team: THREE.Color): UnitModel {
+export function onager(team: THREE.Color, armored = false): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group(), armG = new THREE.Group();
   rb.root.add(body);
@@ -148,6 +157,7 @@ export function onager(team: THREE.Color): UnitModel {
     box(5, 2, 15, team as unknown as number, 4, 20, 0).translate(0.3, 0, 0),
     xf(cyl(2.2, 2.2, 15, ROPE, 0, 0, 0, 6), { rx: Math.PI / 2, t: [-2, 8, 0] }),
     wheel(5, 10, 9.5), wheel(5, 10, -9.5), wheel(5, -10, 9.5), wheel(5, -10, -9.5),
+    ...(armored ? [...mantlet(team, 19, 3, 24, 20), box(30.5, 3, 1, IRON, 0, 6, 8.7), box(30.5, 3, 1, IRON, 0, 6, -8.7), box(4.2, 15, 1, IRON, 4, 13, 8.5), box(4.2, 15, 1, IRON, 4, 13, -8.5)] : []),
   ), body);
   rb.addRigid(join(xf(cyl(1.1, 1.4, 24, WOOD, 0, 12, 0, 5), {}), xf(cyl(3, 2, 2.5, IRON, 0, 24, 0, 6), {})), armG);
   const rest = (): void => {
@@ -160,7 +170,7 @@ export function onager(team: THREE.Color): UnitModel {
 }
 
 /** 人力抛石机（霹雳车）：高架 + 长杠杆 */
-export function trebuchet(team: THREE.Color): UnitModel {
+export function trebuchet(team: THREE.Color, armored = false): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group(), armG = new THREE.Group();
   rb.root.add(body);
@@ -172,6 +182,8 @@ export function trebuchet(team: THREE.Color): UnitModel {
   }
   parts.push(xf(cyl(1.2, 1.2, 22, IRON, 0, 0, 0, 6), { rx: Math.PI / 2, t: [0, 30, 0] }), box(4, 5, 4, team as unknown as number, 0, 34, 9), box(4, 5, 4, team as unknown as number, 0, 34, -9),
     wheel(4, 11, 11.5), wheel(4, 11, -11.5), wheel(4, -11, 11.5), wheel(4, -11, -11.5));
+  if (armored) parts.push(...mantlet(team, 21, 2, 28, 24), box(34.5, 3, 1, IRON, 0, 4, 10.8), box(34.5, 3, 1, IRON, 0, 4, -10.8),
+    box(12, 14, 0.8, IRON, 0, 12, 10.6), box(12, 14, 0.8, IRON, 0, 12, -10.6));
   rb.addRigid(join(...parts), body);
   rb.addRigid(join(cyl(1, 1.5, 46, WOOD, 0, 9, 0, 5), box(6, 6, 6, 0x6a6660, 0, -14, 0), cyl(0.3, 0.3, 12, ROPE, 0, 38, 0, 4), ball(2.2, 0x8a8782, 0, 44, 0, 5)), armG);
   const rest = (): void => {
@@ -184,7 +196,7 @@ export function trebuchet(team: THREE.Color): UnitModel {
 }
 
 /** 蝎弩：支架上的大型弩 */
-export function ballista(team: THREE.Color): UnitModel {
+export function ballista(team: THREE.Color, armored = false): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group(), slide = new THREE.Group();
   rb.root.add(body);
@@ -193,7 +205,10 @@ export function ballista(team: THREE.Color): UnitModel {
     xf(box(1.2, 1.2, 13, WOOD), { ry: 0.5, t: [8, 0, 11] }), xf(box(1.2, 1.2, 13, WOOD), { ry: -0.5, t: [8, 0, -11] }));
   rb.addRigid(join(xf(top, { rz: 0.12, t: [0, 15, 0] }),
     xf(box(2, 15, 2, WOOD_D), { rz: 0.25, t: [-4, 7.5, 5] }), xf(box(2, 15, 2, WOOD_D), { rz: 0.25, t: [-4, 7.5, -5] }), xf(box(2, 15, 2, WOOD_D), { rz: -0.35, t: [7, 7.5, 0] }),
-    box(18, 1.5, 12, WOOD_D, 1, 1, 0)), body);
+    box(18, 1.5, 12, WOOD_D, 1, 1, 0),
+    // 包铁：弩臂两侧各一面护盾，中间留出射口
+    ...(armored ? [box(1.5, 15, 9, 0x4a4d54, 15, 12, 9), box(1.5, 15, 9, 0x4a4d54, 15, 12, -9), box(1.8, 2, 9.4, team as unknown as number, 15.1, 15, 9), box(1.8, 2, 9.4, team as unknown as number, 15.1, 15, -9),
+      box(1.5, 5, 27, 0x4a4d54, 15, 2.5, 0), box(19, 1, 13, IRON, 1, 2.2, 0)] : [])), body);
   rb.addRigid(xf(join(xf(cyl(0.5, 0.5, 20, 0xd8d2c0, 0, 0, 0, 4), { rz: -Math.PI / 2 }), xf(cone(1.1, 4, IRON, 0, 0, 0, 4), { rz: -Math.PI / 2, t: [11, 0, 0] })), { rz: 0.12, t: [2, 17, 0] }), slide);
   engineClips(rb, body, k => {
     slide.scale.setScalar(k < 0.5 ? 0.001 : 1);
@@ -202,7 +217,7 @@ export function ballista(team: THREE.Color): UnitModel {
   return rb.build({ walk: 35 });
 }
 
-export function rocketCart(team: THREE.Color): UnitModel {
+export function rocketCart(team: THREE.Color, armored = false): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group();
   rb.root.add(body);
@@ -212,7 +227,9 @@ export function rocketCart(team: THREE.Color): UnitModel {
   for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) {
     rack.push(xf(cone(0.9, 4, 0xe8e2d0, 0, 0, 0, 4), { rz: -Math.PI / 2, t: [10.5, -3 + j * 3, -4.5 + i * 3] }));
   }
+  if (armored) rack.push(box(19, 10.6, 0.8, 0x4a4d54, 0, 0, 6.5), box(19, 10.6, 0.8, 0x4a4d54, 0, 0, -6.5), box(1, 11, 13.4, IRON, -9, 0, 0), box(1, 11, 13.4, IRON, 3, 0, 0));
   parts.push(xf(join(...rack), { rz: 0.5, t: [3, 17, 0] }), xf(box(2, 12, 2, WOOD_D), { rz: -0.3, t: [8, 11, 0] }));
+  if (armored) parts.push(box(27, 4.5, 1, 0x4a4d54, 0, 8, 7), box(27, 4.5, 1, 0x4a4d54, 0, 8, -7), box(1.4, 9, 14, 0x4a4d54, 13.5, 8, 0));
   rb.addRigid(join(...parts), body);
   engineClips(rb, body, k => {
     body.position.x = -Math.sin(k * Math.PI) * 2;
@@ -220,7 +237,7 @@ export function rocketCart(team: THREE.Color): UnitModel {
   return rb.build({ walk: 35 });
 }
 
-export function cannon(team: THREE.Color): UnitModel {
+export function cannon(team: THREE.Color, armored = false): UnitModel {
   const rb = new RigBuilder();
   const body = new THREE.Group();
   rb.root.add(body);
@@ -228,6 +245,9 @@ export function cannon(team: THREE.Color): UnitModel {
   parts.push(xf(cyl(2.3, 3.2, 26, 0x3a3a40, 0, 0, 0, 8), { rz: -Math.PI / 2 + 0.18, t: [7, 13, 0] }));
   parts.push(xf(cyl(3, 3, 1.8, 0x55585e, 0, 0, 0, 8), { rz: -Math.PI / 2 + 0.18, t: [19, 15.2, 0] }));
   parts.push(xf(cyl(3.4, 3.4, 1.8, 0x55585e, 0, 0, 0, 8), { rz: -Math.PI / 2 + 0.18, t: [-4, 11, 0] }));
+  // 包铁：炮口两侧各一面防盾
+  if (armored) parts.push(box(1.6, 17, 8.5, 0x4a4d54, 13, 11, 8), box(1.6, 17, 8.5, 0x4a4d54, 13, 11, -8), box(1.9, 2, 9, team as unknown as number, 13.1, 15, 8), box(1.9, 2, 9, team as unknown as number, 13.1, 15, -8),
+    box(27, 4.5, 0.8, IRON, -4, 7, 4), box(27, 4.5, 0.8, IRON, -4, 7, -4));
   rb.addRigid(join(...parts), body);
   engineClips(rb, body, k => {
     body.position.x = -Math.sin(Math.min(1, k * 1.6) * Math.PI) * 5;
@@ -235,9 +255,9 @@ export function cannon(team: THREE.Color): UnitModel {
   return rb.build({ walk: 35 });
 }
 
-export function elephant(team: THREE.Color): UnitModel {
+export function elephant(team: THREE.Color, armored = false): UnitModel {
   const rb = new RigBuilder();
-  const SKIN = 0x7d7873, SKIN_D = 0x66625e, IVORY = 0xf0e8d2;
+  const SKIN = 0x7d7873, SKIN_D = 0x66625e, IVORY = 0xf0e8d2, PLATE = 0xb9984a, PLATE_D = 0x8a7034;
   const T = team as unknown as number;
   const body = new THREE.Group(), head = new THREE.Group(), trunk = new THREE.Group(), trunk2 = new THREE.Group();
   rb.root.add(body);
@@ -258,8 +278,9 @@ export function elephant(team: THREE.Color): UnitModel {
     s.position.set(0, -11, 0);
     legs.push(l);
     shins.push(s);
-    rb.addRigid(cyl(5, 4.4, 13, SKIN_D, 0, -5.5, 0, 7), l);
-    rb.addRigid(join(cyl(4.2, 4.6, 11, SKIN_D, 0, -5.5, 0, 7), cyl(4.9, 4.9, 1.5, 0x55524e, 0, -10.5, 0, 7)), s);
+    rb.addRigid(armored ? join(cyl(5, 4.4, 13, SKIN_D, 0, -5.5, 0, 7), cyl(5.6, 5.2, 9, PLATE, 0, -4, 0, 7)) : cyl(5, 4.4, 13, SKIN_D, 0, -5.5, 0, 7), l);
+    rb.addRigid(join(cyl(4.2, 4.6, 11, SKIN_D, 0, -5.5, 0, 7), cyl(4.9, 4.9, 1.5, 0x55524e, 0, -10.5, 0, 7),
+      ...(armored ? [cyl(4.9, 5.2, 6, PLATE, 0, -4, 0, 7)] : [])), s);
   }
   rb.addRigid(join(
     xf(ball(16, SKIN, 0, 0, 0, 9), { s: [1.3, 0.95, 0.82] }), xf(ball(12, SKIN, 0, 0, 0, 7), { s: [1, 1, 0.85], t: [-10, 1, 0] }),
@@ -268,12 +289,21 @@ export function elephant(team: THREE.Color): UnitModel {
     box(19, 2, 16, 0x7a5a36, -1, 15.5, 0), box(19, 6, 1.2, 0x8a6a3c, -1, 19, 8), box(19, 6, 1.2, 0x8a6a3c, -1, 19, -8), box(1.2, 6, 16, 0x8a6a3c, 8.5, 19, 0), box(1.2, 6, 16, 0x8a6a3c, -10.5, 19, 0),
     box(1, 12, 1, 0x5a4028, 8, 24, 7.5), box(1, 12, 1, 0x5a4028, 8, 24, -7.5), box(1, 12, 1, 0x5a4028, -10, 24, 7.5), box(1, 12, 1, 0x5a4028, -10, 24, -7.5), box(22, 1.5, 19, T, -1, 30.5, 0),
     xf(cyl(0.8, 0.5, 13, SKIN_D, 0, 0, 0, 4), { rz: 0.5, t: [-23, -3, 0] }),
+    // 披甲：身侧垂下两大片鳞甲，胸前、臀后各一片，象舆四面挂盾
+    ...(armored ? [box(34, 19, 1.2, PLATE, 0, 1, 13.9), box(34, 19, 1.2, PLATE, 0, 1, -13.9), box(34, 1.6, 1.6, PLATE_D, 0, -8, 14), box(34, 1.6, 1.6, PLATE_D, 0, -8, -14),
+      box(34, 1.6, 1.6, PLATE_D, 0, 3, 14), box(34, 1.6, 1.6, PLATE_D, 0, 3, -14),
+      box(1.4, 16, 24, PLATE, 19.5, 0, 0), box(1.4, 15, 24, PLATE, -21.5, 1, 0),
+      xf(cyl(4, 4, 1, T, 0, 0, 0, 8), { rx: Math.PI / 2, t: [-5, 19, 9] }), xf(cyl(4, 4, 1, T, 0, 0, 0, 8), { rx: Math.PI / 2, t: [4, 19, 9] }),
+      xf(cyl(4, 4, 1, T, 0, 0, 0, 8), { rx: Math.PI / 2, t: [-5, 19, -9] }), xf(cyl(4, 4, 1, T, 0, 0, 0, 8), { rx: Math.PI / 2, t: [4, 19, -9] })] : []),
   ), body);
   rb.addRigid(join(
     xf(ball(10, SKIN, 0, 0, 0, 8), { s: [1, 1.08, 0.92], t: [3, 0, 0] }),
     xf(box(1.2, 15, 12, SKIN_D), { ry: 0.55, rx: 0.1, t: [-1, 1, 11] }), xf(box(1.2, 15, 12, SKIN_D), { ry: -0.55, rx: -0.1, t: [-1, 1, -11] }),
     xf(cone(1.5, 15, IVORY, 0, 0, 0, 5), { rz: -2.0, t: [14, -7, 4.5] }), xf(cone(1.5, 15, IVORY, 0, 0, 0, 5), { rz: -2.0, t: [14, -7, -4.5] }),
     box(8, 1, 10, T, 5, 10.5, 0), box(1, 8, 9, T, 12.5, 5, 0),
+    // 披甲：额甲、面甲与牙套
+    ...(armored ? [xf(box(1.6, 15, 15, PLATE), { rz: -0.25, t: [13, 3, 0] }), box(13, 1.6, 17, PLATE, 5, 10.2, 0), box(1.8, 3, 16, PLATE_D, 14, 9, 0),
+      xf(cyl(2, 1.7, 7, PLATE_D, 0, 0, 0, 5), { rz: -2.0, t: [11.5, -5.8, 4.5] }), xf(cyl(2, 1.7, 7, PLATE_D, 0, 0, 0, 5), { rz: -2.0, t: [11.5, -5.8, -4.5] })] : []),
   ), head);
   rb.addRigid(cyl(3.6, 2.6, 12, SKIN, 0, -5.5, 0, 6), trunk);
   rb.addRigid(cyl(2.6, 1.6, 12, SKIN, 0, -6, 0, 6), trunk2);

@@ -2,7 +2,7 @@
  * 世界状态：单位（SoA）、建筑、据点、投射物、环境、补给。不依赖 DOM，可在 Node 中无头运行。
  * 这里只放数据和最基础的增删查；所有玩法算法在 systems/ 下，由 tick() 按管线依次调用。
  */
-import { BK_GATE, BuildingDef, DT, FactionDef, LEVELS, RULES, TILE, UNITS } from './content';
+import { BK_GATE, BuildingDef, DT, FactionDef, LEVELS, RULES, ResKind, SITE_INFO, TILE, TowerDef, UNITS } from './content';
 import type { March } from './systems/march';
 import { GameMap } from './map';
 import { Field, Nav } from './nav';
@@ -12,6 +12,8 @@ import { formation } from './systems/formation';
 import * as orders from './systems/orders';
 import { refreshVision } from './systems/vision';
 import { damageBuilding } from './systems/combat';
+import * as economy from './systems/economy';
+import type { PendingBuild } from './systems/economy';
 import { MAX_CORPSE, MAX_PROJ, MAX_UNITS, COARSE, GRID, NONE, O_IDLE, S_ROUT, VIS_CELL } from './state';
 
 export * from './state';
@@ -31,6 +33,16 @@ export interface Building {
   cx: number;
   cy: number;
   hp: number;
+  /** 生命上限（据点升级后高于 def.hp） */
+  maxHp: number;
+  /** 所在据点的等级 0 / 1，决定外观 */
+  lv: number;
+  /** 升级带来的护甲加成 */
+  armor: number;
+  /** 此刻的箭塔火力（升级后更强；升级后的主建筑也会有），null 表示不放箭 */
+  tower: TowerDef | null;
+  /** 后来用木材搭的（箭塔、行营）：据点易主时不会自动修复 */
+  extra: boolean;
   owner: number;
   alive: boolean;
   gate: boolean;
@@ -64,6 +76,12 @@ export interface Site {
   count: number[];
   /** 旗帜区内各队人数 */
   flag: number[];
+  /** 0 未升级，1 已升级（易主后降回） */
+  level: number;
+  /** 箭塔位（格坐标）与已建的建筑 id（-1 = 空着） */
+  slots: { tx: number; ty: number; bld: number }[];
+  /** 临时据点被毁后不再存在 */
+  gone: boolean;
 }
 
 export type SimEvent =
@@ -72,7 +90,8 @@ export type SimEvent =
   | { kind: 'razed'; site: number; team: number }
   | { kind: 'gameover'; winner: number }
   | { kind: 'rout'; team: number; count: number; x: number; y: number }
-  | { kind: 'weather'; rain: boolean }
+  | { kind: 'weather'; rain: boolean; snow: boolean }
+  | { kind: 'outpost'; site: number; team: number; x: number; y: number; built: boolean }
   | { kind: 'daynight'; night: boolean }
   | { kind: 'hunger'; team: number; on: boolean };
 
@@ -88,6 +107,9 @@ export interface Env {
   raining: boolean;
   /** 雨势 0..1（渲染用，渐入渐出） */
   rain: number;
+  snowing: boolean;
+  /** 雪势 0..1 */
+  snow: number;
   /** 下一次天气变化的时间（秒） */
   nextWeather: number;
   /** 当前的单位视野倍率 */
@@ -270,7 +292,8 @@ export class World {
 
   // ---- 昼夜天气 ----
   readonly env: Env = {
-    enabled: true, clock: RULES.env.startClock, light: 1, night: false, raining: false, rain: 0, nextWeather: 0, visionMul: 1,
+    enabled: true, clock: RULES.env.startClock, light: 1, night: false, raining: false, rain: 0, snowing: false, snow: 0,
+    nextWeather: 0, visionMul: 1,
   };
 
   // ---- 粮草（按队伍） ----
@@ -284,6 +307,16 @@ export class World {
   /** 开局全军每分钟的口粮：据点产量以它为基准；0 表示本局不启用粮草 */
   readonly upkeep0 = [0, 0, 0];
   readonly upkeep = [0, 0, 0];
+
+  // ---- 资源（按队伍）：木材、石料、黄金的存量与每分钟产量 ----
+  readonly stock: Record<ResKind, number[]> = { wood: [0, 0, 0], stone: [0, 0, 0], gold: [0, 0, 0] };
+  readonly income: Record<ResKind, number[]> = { wood: [0, 0, 0], stone: [0, 0, 0], gold: [0, 0, 0] };
+  /** 开局全军每分钟的口粮：黄金产量以它为基准（不受是否启用粮草影响） */
+  readonly armyBase = [0, 0, 0];
+  /** 已下令、还没搭起来的临时据点 */
+  readonly builds: PendingBuild[] = [];
+  /** 单位此刻是否在己方据点里（雪天有遮蔽；sites 系统填写） */
+  readonly sheltered = new Uint8Array(MAX_UNITS);
 
   // ---- 士气统计格（morale 系统填写） ----
   readonly mw: number;
@@ -339,13 +372,25 @@ export class World {
       id: this.buildings.length, def, tx, ty, w: def.w, h: def.h,
       x0: tx * TILE, y0: ty * TILE, x1: (tx + def.w) * TILE, y1: (ty + def.h) * TILE,
       cx: (tx + def.w / 2) * TILE, cy: (ty + def.h / 2) * TILE,
-      hp: def.hp, owner, alive: true, gate: def.kind === BK_GATE, breach: def.breach, climb: def.top > 0 ? RULES.siege.climbCost : 0, site,
+      hp: def.hp, maxHp: def.hp, lv: 0, armor: 0, tower: def.tower, extra: false, owner, alive: true, gate: def.kind === BK_GATE, breach: def.breach, climb: def.top > 0 ? RULES.siege.climbCost : 0, site,
       cd: this.rng.next(), style, variant: this.rng.int(0, 3), hitTick: -999,
     };
     this.buildings.push(b);
     if (def.tower) this.armed.push(b);
     this.nav.refresh(b);
     return b;
+  }
+
+  /** 登记一个据点（开局摆放，以及后来搭的临时据点） */
+  addSite(type: number, name: string, sx: number, sy: number, owner: number): Site {
+    const info = SITE_INFO[type];
+    const s: Site = {
+      id: this.sites.length, type, name, x: sx, y: sy, radius: info.radius, owner, capTeam: 0, cap: 0,
+      timer: info.interval, interval: info.interval, buildings: [], main: -1, disabled: false,
+      count: [0, 0, 0], flag: [0, 0, 0], level: 0, slots: [], gone: false,
+    };
+    this.sites.push(s);
+    return s;
   }
 
   spawnUnit(defIdx: number, tm: number, ux: number, uy: number, level = 0): number {
@@ -393,6 +438,7 @@ export class World {
     this.avoidT[i] = this.waitT[i] = 0;
     this.waits[i] = this.crowd[i] = 0;
     this.seen[i] = 0;
+    this.sheltered[i] = 0;
     this.hitBy[i * 2] = this.hitBy[i * 2 + 1] = NONE;
     this.teamCount[tm]++;
     this.upkeep[tm] += d.upkeep;
@@ -454,6 +500,26 @@ export class World {
   }
   orderTorch(units: number[], on: boolean): void {
     orders.orderTorch(this, units, on);
+  }
+
+  // =====================================================================
+  // 资源的用处（算法在 systems/economy.ts）
+  // =====================================================================
+  /** 用黄金把这些单位升为高级形态：等级高的优先，同级的在各兵种之间轮流。返回升了几人、花了多少 */
+  upgradeUnits(units: number[]): { count: number; cost: number } {
+    return economy.upgradeUnits(this, units);
+  }
+  /** 用石料（城邦）或木材（营寨）升级据点；资源不够或不能升级返回 false */
+  upgradeSite(s: Site): boolean {
+    return economy.upgradeSite(this, s);
+  }
+  /** 在资源点的下一个空位建一座箭塔 */
+  buildTower(s: Site): boolean {
+    return economy.buildTower(this, s);
+  }
+  /** 派这些单位去 (x, y) 搭一座临时据点；不行则返回原因 */
+  orderOutpost(units: number[], x: number, y: number): string | null {
+    return economy.orderOutpost(this, units, x, y);
   }
 
   /** 单位当前是否听从指令（溃兵不听） */

@@ -1,4 +1,5 @@
 /** 小地图（Canvas 2D） */
+import { SITE_INFO } from '../sim/defs';
 import { World } from '../sim/world';
 
 export class Minimap {
@@ -73,13 +74,17 @@ export class Minimap {
     }
     // 据点
     for (const s of w.sites) {
+      if (s.gone) continue;
       const x = s.x * k, y = s.y * k;
       const r = s.type <= 1 ? 5 : 4;
+      const cat = SITE_INFO[s.type].category;
       c.fillStyle = s.disabled ? '#444' : this.colors[s.owner];
-      c.strokeStyle = '#fff';
+      c.strokeStyle = cat === 'resource' ? '#ffe08a' : '#fff';
       c.lineWidth = 1.2;
       c.beginPath();
       if (s.type <= 2) c.rect(x - r, y - r, r * 2, r * 2);
+      // 资源点、临时据点：小圆点
+      else if (cat === 'resource' || cat === 'outpost') c.arc(x, y, 3, 0, Math.PI * 2);
       else {
         c.moveTo(x, y - r - 1);
         c.lineTo(x + r + 1, y);

@@ -1,0 +1,478 @@
+import { describe, expect, it } from 'vitest';
+import {
+  BUILDINGS, ELITE, RULES, SITE_CAMP, SITE_FARM, SITE_HQ, SITE_INFO, SITE_LUMBER, SITE_MINE, SITE_OUTPOST, SITE_QUARRY, SITE_TOWN,
+  TILE, UNITS, UNIT_BY_KEY,
+} from '../src/sim/defs';
+import { generateMap } from '../src/sim/map';
+import { createGame } from '../src/sim/setup';
+import { damageUnit } from '../src/sim/systems/combat';
+import { outpostCount, towerCount, unitUpgradeCost, upgradeAllCost, upgradeQueue } from '../src/sim/systems/economy';
+import { S_TORCH, Site, World } from '../src/sim/world';
+import { flatWorld, run } from './helpers';
+
+const C = (120 * TILE) / 2;
+const idx = (k: string): number => UNIT_BY_KEY[k].idx;
+const game = (): World => createGame({
+  seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false, supply: false,
+}).world;
+const clear = (w: World): void => {
+  for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
+};
+/** 把据点直接划给某一方（连同建筑） */
+const give = (w: World, s: Site, tm: number): void => {
+  s.owner = tm;
+  for (const id of s.buildings) {
+    w.buildings[id].owner = tm;
+    w.nav.refresh(w.buildings[id]);
+  }
+};
+/** 派几个人站到旗下并原地坚守 */
+const garrison = (w: World, s: Site, tm: number, n = 3, key = 'nu'): number[] => {
+  const g = w.spawnGroup(tm, Array(n).fill(idx(key)), s.x, s.y + 16, 0, -1);
+  w.orderStop(g, true);
+  return g;
+};
+
+describe('高级形态', () => {
+  it('每个兵种都有一个高级形态：生命、攻击、护甲更高，其余不变', () => {
+    expect(UNITS.length % 2).toBe(0);
+    for (const d of UNITS) {
+      if (d.tier) continue;
+      const e = UNITS[d.elite];
+      expect(e.tier).toBe(1);
+      expect(e.basic).toBe(d.idx);
+      expect(e.elite).toBe(-1);
+      expect(e.key).toBe(`${d.key}_e`);
+      expect(e.name).not.toBe(d.name);
+      expect(e.hp / d.hp).toBeCloseTo(ELITE.hp, 1);
+      expect(e.dmg).toBeCloseTo(d.dmg * ELITE.dmg, 5);
+      expect(e.armM).toBe(d.armM + ELITE.armor);
+      expect(e.armP).toBe(d.armP + ELITE.armor);
+      expect(e.speed).toBe(d.speed);
+      expect(e.upkeep).toBe(d.upkeep);
+      expect(e.faction).toBe(d.faction);
+    }
+    expect(UNIT_BY_KEY.dao_e.name).toBe('重甲刀盾兵');
+    expect(UNIT_BY_KEY.pili_e.name).toBe('包铁霹雳车');
+  });
+
+  it('黄金升级：等级高的优先，同级的在各兵种之间轮流，黄金耗尽即止', () => {
+    const w = flatWorld();
+    const dao = w.spawnGroup(1, Array(6).fill(idx('dao')), C, C, 1, 0);
+    const nu = w.spawnGroup(1, Array(2).fill(idx('nu')), C, C + 80, 1, 0);
+    const qi = w.spawnGroup(1, Array(2).fill(idx('tieqi')), C, C - 80, 1, 0);
+    const all = [...dao, ...nu, ...qi];
+    // 一个三级的弩兵排在最前
+    w.level[nu[1]] = 2;
+    const q = upgradeQueue(w, all);
+    expect(q[0]).toBe(nu[1]);
+    // 其余同级：三个兵种轮流（刀盾、弩、铁骑各一），不是先把人最多的刀盾升完
+    const types = q.slice(1, 4).map(s => w.defs[w.type[s]].key).sort();
+    expect(types).toEqual(['dao', 'nu', 'tieqi']);
+    expect(upgradeAllCost(w, all)).toEqual({ count: 10, cost: (6 + 2 + 2 * 2) * RULES.economy.unitGold });
+    // 没有黄金：一个也升不了
+    expect(w.upgradeUnits(all).count).toBe(0);
+    // 够升 3 个步兵加 1 个骑兵的钱
+    w.stock.gold[1] = RULES.economy.unitGold * 5;
+    w.hp[nu[1]] = w.maxHp[nu[1]] * 0.5;
+    const r = w.upgradeUnits(all);
+    expect(r.cost).toBe(RULES.economy.unitGold * 5);
+    expect(w.stock.gold[1]).toBeCloseTo(0, 5);
+    expect(w.defs[w.type[nu[1]]].key).toBe('nu_e');
+    // 升级保留等级与伤势比例
+    expect(w.level[nu[1]]).toBe(2);
+    expect(w.maxHp[nu[1]]).toBe(UNIT_BY_KEY.nu_e.lvHp[2]);
+    expect(w.hp[nu[1]] / w.maxHp[nu[1]]).toBeCloseTo(0.5, 5);
+    const elite = (list: number[]): number => list.filter(s => w.defs[w.type[s]].tier === 1).length;
+    expect(elite(dao) + elite(nu) + elite(qi)).toBe(r.count);
+    expect(elite(dao)).toBeGreaterThan(0);
+    expect(elite(qi)).toBe(1);
+    expect(elite(dao)).toBeLessThan(6);
+    // 钱管够：全部升完，再点也不会重复扣钱
+    w.stock.gold[1] = 1000;
+    w.upgradeUnits(all);
+    expect(elite(all)).toBe(10);
+    const left = w.stock.gold[1];
+    expect(w.upgradeUnits(all).count).toBe(0);
+    expect(w.stock.gold[1]).toBe(left);
+    expect(unitUpgradeCost(UNIT_BY_KEY.dao_e)).toBe(0);
+  });
+
+  it('高级形态更能打：同样的对手，挨的打更轻、打得更重', () => {
+    const w = flatWorld();
+    const a = w.spawnUnit(idx('dao'), 1, C, C), b = w.spawnUnit(idx('dao_e'), 1, C, C + 100);
+    const foe = UNIT_BY_KEY.yari;
+    damageUnit(w, a, 20, 0, 0, foe.vs, 2, -1);
+    damageUnit(w, b, 20, 0, 0, foe.vs, 2, -1);
+    expect(w.maxHp[b] - w.hp[b]).toBeLessThan(w.maxHp[a] - w.hp[a]);
+    expect(w.maxHp[b]).toBeGreaterThan(w.maxHp[a]);
+  });
+});
+
+describe('资源点', () => {
+  it('地图上每方后方各有粮、木、石、金，另有金矿靠近中线；每处四个箭塔位', () => {
+    for (const seed of [5, 42, 1234]) {
+      const m = generateMap(seed);
+      const n = (t: number): number => m.sites.filter(s => s.type === t).length;
+      expect([n(SITE_FARM), n(SITE_LUMBER), n(SITE_QUARRY), n(SITE_MINE)]).toEqual([2, 2, 2, 4]);
+      // 城池仍然排在最后（道路生成按这个找它）
+      expect(m.sites[m.sites.length - 1].type).toBe(1);
+      for (const s of m.sites) {
+        if (SITE_INFO[s.type].category !== 'resource') continue;
+        expect(s.owner).toBe(0);
+        expect(s.slots!.length).toBe(4);
+        for (const [tx, ty] of s.slots!) {
+          // 箭塔位上没有别的建筑
+          expect(m.buildings.some(b => tx >= b.tx && ty >= b.ty && tx < b.tx + BUILDINGS[b.def].w && ty < b.ty + BUILDINGS[b.def].h),
+            `seed ${seed} ${s.name}`).toBe(false);
+        }
+      }
+    }
+  }, 30000);
+
+  it('占领读秒短；占领后自动采集，农庄直接加军粮', () => {
+    const w = createGame({ seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false }).world;
+    clear(w);
+    expect(w.armyBase[1]).toBeGreaterThan(0);
+    const of = (t: number): Site => w.sites.find(s => s.type === t)!;
+    const lumber = of(SITE_LUMBER), quarry = of(SITE_QUARRY), mine = of(SITE_MINE), farm = of(SITE_FARM);
+    expect(SITE_INFO[SITE_LUMBER].captureTime).toBeLessThan(SITE_INFO[SITE_CAMP].captureTime / 2);
+    garrison(w, lumber, 1);
+    run(w, SITE_INFO[SITE_LUMBER].captureTime - 1.5);
+    expect(lumber.owner).toBe(0);
+    run(w, 3);
+    expect(lumber.owner).toBe(1);
+    expect(w.events.some(e => e.kind === 'captured' && e.site === lumber.id)).toBe(true);
+    const food0 = w.foodIn[1];
+    for (const s of [quarry, mine, farm]) give(w, s, 1);
+    for (const k of ['wood', 'stone', 'gold'] as const) w.stock[k][1] = 0;
+    run(w, 30);
+    expect(w.income.wood[1]).toBe(SITE_INFO[SITE_LUMBER].yields!.wood);
+    expect(w.income.stone[1]).toBe(SITE_INFO[SITE_QUARRY].yields!.stone);
+    expect(w.income.gold[1]).toBeCloseTo((SITE_INFO[SITE_MINE].yields!.gold! * w.armyBase[1]) / 100, 5);
+    expect(w.stock.wood[1]).toBeCloseTo(SITE_INFO[SITE_LUMBER].yields!.wood! / 2, 0);
+    expect(w.stock.stone[1]).toBeCloseTo(SITE_INFO[SITE_QUARRY].yields!.stone! / 2, 0);
+    expect(w.stock.gold[1]).toBeGreaterThan(0);
+    expect(w.stock.wood[2]).toBe(0);
+    expect(w.foodIn[1]).toBeCloseTo(food0 + (SITE_INFO[SITE_FARM].food * w.upkeep0[1]) / 100, 3);
+    // 资源点不出援军、不算据点：不能在里面休整
+    const u = w.spawnUnit(idx('dao'), 1, quarry.x + 30, quarry.y);
+    w.hp[u] = 40;
+    run(w, 5);
+    expect(w.hp[u]).toBe(40);
+    expect(w.sheltered[u]).toBe(0);
+    expect(w.events.some(e => e.kind === 'reinforce' && w.sites[e.site].type >= SITE_FARM)).toBe(false);
+  }, 30000);
+
+  it('木材建箭塔：位置固定、最多四座；敌人要先摧毁全部箭塔才能占领，被毁的箭塔不会随易主复原', () => {
+    const w = game();
+    clear(w);
+    const s = w.sites.find(x => x.type === SITE_LUMBER)!;
+    give(w, s, 1);
+    const cost = RULES.economy.towerCost;
+    expect(w.buildTower(s)).toBe(false);
+    w.stock.wood[1] = cost * 4 + 7;
+    for (let k = 0; k < 4; k++) expect(w.buildTower(s)).toBe(true);
+    expect(w.buildTower(s)).toBe(false);
+    expect(w.stock.wood[1]).toBeCloseTo(7, 5);
+    expect(towerCount(w, s)).toBe(4);
+    const towers = s.slots.map(sl => w.buildings[sl.bld]);
+    towers.forEach((b, k) => {
+      expect([b.tx, b.ty]).toEqual([s.slots[k].tx, s.slots[k].ty]);
+      expect(b.owner).toBe(1);
+      expect(b.tower).toBeTruthy();
+    });
+    // 敌军站到旗下：箭塔还在就不读秒，还会挨箭
+    const foes = garrison(w, s, 2, 4, 'yari');
+    for (const f of foes) w.hp[f] = w.maxHp[f] = 1e6;
+    run(w, 10);
+    expect(s.owner).toBe(1);
+    expect(s.cap).toBe(0);
+    expect(foes.some(f => w.hp[f] < 1e6)).toBe(true);
+    // 拆掉三座还不行，四座全毁才开始读秒
+    for (let k = 0; k < 3; k++) w.damageBuilding(towers[k], 1e6, 0, 1, 2);
+    run(w, 8);
+    expect(s.owner).toBe(1);
+    w.damageBuilding(towers[3], 1e6, 0, 1, 2);
+    run(w, SITE_INFO[s.type].captureTime + 2);
+    expect(s.owner).toBe(2);
+    expect(towerCount(w, s)).toBe(0);
+    expect(towers.every(b => !b.alive)).toBe(true);
+    // 新主人重新花木材，在原来的位置重建
+    w.stock.wood[2] = cost;
+    expect(w.buildTower(s)).toBe(true);
+    expect(towers[0].alive && towers[0].owner === 2).toBe(true);
+    expect(w.buildings.filter(b => b.def.key === RULES.economy.towerKey).length).toBe(4);
+  }, 30000);
+
+  it('待命的部队被箭塔射中会上去拆塔', () => {
+    const w = game();
+    clear(w);
+    const s = w.sites.find(x => x.type === SITE_QUARRY)!;
+    give(w, s, 1);
+    w.stock.wood[1] = RULES.economy.towerCost;
+    w.buildTower(s);
+    const t = w.buildings[s.slots[0].bld];
+    // 从没有别的建筑挡着的一侧过来
+    const g = w.spawnGroup(2, Array(6).fill(idx('yari')), t.cx - 200, t.cy, 1, 0);
+    run(w, 25);
+    expect(g.some(u => w.target[u] === -t.id - 2) || !t.alive || t.hp < t.maxHp).toBe(true);
+    expect(t.hp).toBeLessThan(t.maxHp);
+  }, 30000);
+
+  it('箭塔、塔楼的视野比普通建筑远得多', () => {
+    const w = game();
+    clear(w);
+    w.fog = true;
+    const s = w.sites.find(x => x.type === SITE_MINE)!;
+    give(w, s, 1);
+    const main = w.buildings[s.main];
+    const far = (RULES.vision.building + RULES.vision.tower) / 2;
+    w.refreshVision();
+    const seen = (x: number, y: number): boolean => w.teamVis[1][((y / 64) | 0) * w.vw + ((x / 64) | 0)] === 1;
+    expect(seen(main.cx, main.cy)).toBe(true);
+    expect(seen(s.x + far + 200, s.y)).toBe(false);
+    w.stock.wood[1] = 999;
+    while (w.buildTower(s));
+    w.refreshVision();
+    const t = w.buildings[s.slots[1].bld];
+    expect(seen(t.cx + far, t.cy)).toBe(true);
+    expect(RULES.vision.tower).toBeGreaterThan(RULES.vision.building * 2);
+  }, 30000);
+});
+
+describe('据点升级', () => {
+  it('城邦花石料、营寨花木材；升级后建筑更结实、箭塔更狠，主建筑也会放箭；易主后降回', () => {
+    const w = game();
+    clear(w);
+    const town = w.sites.find(s => s.type === SITE_TOWN)!;
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 1)!;
+    give(w, town, 1);
+    expect(SITE_INFO[SITE_TOWN].material).toBe('stone');
+    expect(SITE_INFO[SITE_CAMP].material).toBe('wood');
+    // 木材升不了城邦
+    w.stock.wood[1] = 9999;
+    expect(w.upgradeSite(town)).toBe(false);
+    w.stock.stone[1] = SITE_INFO[SITE_TOWN].upgradeCost + 5;
+    const hall = w.buildings[town.main];
+    const tower = town.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
+    hall.hp = hall.def.hp * 0.5;
+    hall.hitTick = w.tickCount;
+    expect(hall.tower).toBeNull();
+    expect(w.upgradeSite(town)).toBe(true);
+    expect(w.stock.stone[1]).toBeCloseTo(5, 5);
+    expect(town.level).toBe(1);
+    expect(w.upgradeSite(town)).toBe(false);
+    expect(hall.maxHp).toBe(Math.round(hall.def.hp * RULES.economy.siteHp));
+    // 新增的那部分生命补上，旧伤还在
+    expect(hall.hp).toBeCloseTo(hall.maxHp - hall.def.hp * 0.5, 3);
+    expect(hall.lv).toBe(1);
+    expect(tower.tower!.dmg).toBeCloseTo(tower.def.tower!.dmg * RULES.economy.towerDmg, 5);
+    expect(tower.tower!.range).toBeGreaterThan(tower.def.tower!.range);
+    expect(hall.tower).toBe(RULES.economy.mainTower);
+    // 护甲加成：同样一击，升级后的建筑掉血更少
+    const wallA = town.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'wall')!;
+    const wallB = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'wall')!;
+    w.damageBuilding(wallA, 30, 0, 1, 2);
+    w.damageBuilding(wallB, 30, 0, 1, 1);
+    expect(wallA.maxHp - wallA.hp).toBeLessThan(wallB.maxHp - wallB.hp);
+    // 升级后的镇公所会放箭
+    const foe = w.spawnUnit(idx('yari'), 2, hall.cx, hall.y1 + 60);
+    w.order[foe] = 4;
+    w.hp[foe] = w.maxHp[foe] = 1e6;
+    run(w, 6);
+    expect(w.hp[foe]).toBeLessThan(1e6);
+    w.removeUnit(foe);
+    // 营寨用木材
+    w.stock.wood[1] = SITE_INFO[SITE_CAMP].upgradeCost;
+    expect(w.upgradeSite(camp)).toBe(true);
+    expect(w.stock.wood[1]).toBeCloseTo(0, 5);
+    // 敌人夺走城镇：等级降回，要重新升级
+    for (const u of garrison(w, town, 2, 3, 'yumi')) w.hp[u] = w.maxHp[u] = 1e6;
+    run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
+    expect(town.owner).toBe(2);
+    expect(town.level).toBe(0);
+    expect(hall.maxHp).toBe(hall.def.hp);
+    expect(hall.hp).toBeLessThanOrEqual(hall.maxHp);
+    expect(hall.tower).toBeNull();
+    expect(tower.tower).toBe(tower.def.tower);
+    expect(hall.lv).toBe(0);
+  }, 30000);
+
+  it('手里有石料 / 木材时建筑修得快得多，同时少量消耗', () => {
+    const fix = (stone: number): { gain: number; used: number } => {
+      const w = game();
+      clear(w);
+      const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+      const main = w.buildings[hq.main];
+      main.hp = main.maxHp * 0.5;
+      main.hitTick = -99999;
+      w.stock.stone[1] = stone;
+      run(w, 10);
+      return { gain: main.hp - main.maxHp * 0.5, used: stone - w.stock.stone[1] };
+    };
+    const slow = fix(0), fast = fix(500);
+    expect(slow.used).toBe(0);
+    expect(fast.gain / slow.gain).toBeCloseTo(RULES.economy.repairBoost, 1);
+    expect(fast.used).toBeCloseTo((fast.gain * RULES.economy.repairCost) / 100, 3);
+    expect(fast.used).toBeLessThan(30);
+  }, 30000);
+});
+
+describe('临时据点', () => {
+  it('部队走到地方才搭起来：扣木材、能休整；被毁后不再重生', () => {
+    const w = flatWorld();
+    const E = RULES.economy;
+    const g = w.spawnGroup(1, Array(4).fill(idx('dao')), C - 300, C, 1, 0);
+    expect(w.orderOutpost(g, C, C)).toBe('wood');
+    w.stock.wood[1] = E.outpostCost + 10;
+    expect(w.orderOutpost(g, C, C)).toBeNull();
+    // 下令时就扣了木材，正在搭的也占名额
+    expect(w.stock.wood[1]).toBeCloseTo(10, 5);
+    expect(outpostCount(w, 1)).toBe(1);
+    expect(w.sites.length).toBe(0);
+    run(w, 14);
+    expect(w.sites.length).toBe(1);
+    const s = w.sites[0];
+    expect(s.type).toBe(SITE_OUTPOST);
+    expect(s.owner).toBe(1);
+    const b = w.buildings[s.main];
+    expect(b.def.key).toBe(E.outpostKey);
+    expect(w.events.some(e => e.kind === 'outpost' && e.built)).toBe(true);
+    // 离得太近不能再搭一座
+    w.stock.wood[1] = 999;
+    expect(w.orderOutpost(g, s.x + 60, s.y)).toBe('near');
+    // 在里面休整回血，雪天也算有遮蔽
+    w.hp[g[0]] = 30;
+    run(w, 10);
+    expect(w.hp[g[0]]).toBeGreaterThan(30);
+    expect(w.sheltered[g[0]]).toBe(1);
+    // 敌人站到旗下也占不走
+    const foe = w.spawnGroup(2, Array(3).fill(idx('yumi')), s.x, s.y + 40, 0, -1);
+    w.orderStop(foe, true);
+    for (const u of g) w.removeUnit(u);
+    run(w, 20);
+    expect(s.owner).toBe(1);
+    // 打掉就没了
+    w.damageBuilding(b, 1e6, 0, 1, 2);
+    expect(s.gone).toBe(true);
+    expect(outpostCount(w, 1)).toBe(0);
+    run(w, 30);
+    expect(s.owner).toBe(0);
+    expect(b.alive).toBe(false);
+  });
+
+  it('每方数量有上限；部队没到、被消灭则退还木材', () => {
+    const w = flatWorld();
+    const E = RULES.economy;
+    w.stock.wood[1] = E.outpostCost * 10;
+    const g = w.spawnGroup(1, Array(3).fill(idx('dao')), C - 900, C - 900, 1, 0);
+    for (let k = 0; k < E.outpostMax; k++) expect(w.orderOutpost(g, C - 600 + k * 500, C + 600)).toBeNull();
+    expect(w.orderOutpost(g, C, C - 600)).toBe('max');
+    expect(w.stock.wood[1]).toBe(E.outpostCost * (10 - E.outpostMax));
+    for (const u of g) w.removeUnit(u);
+    run(w, 2);
+    expect(w.builds.length).toBe(0);
+    expect(w.sites.length).toBe(0);
+    expect(w.stock.wood[1]).toBe(E.outpostCost * 10);
+    expect(w.events.filter(e => e.kind === 'outpost' && !e.built).length).toBe(E.outpostMax);
+  });
+});
+
+describe('雪天', () => {
+  const snowy = (w: World): void => {
+    w.env.enabled = true;
+    w.env.snowing = true;
+    w.env.raining = false;
+    w.env.nextWeather = 1e9;
+  };
+
+  it('下雪少见；雪天行军变慢、火把点不着，视野缩小并与夜晚叠乘', () => {
+    expect(RULES.env.snowChance).toBeLessThan(0.35);
+    const dist = (snow: boolean): number => {
+      const w = flatWorld();
+      w.env.enabled = true;
+      w.env.nextWeather = 1e9;
+      if (snow) snowy(w);
+      const u = w.spawnGroup(1, [idx('dao')], C - 400, C, 1, 0)[0];
+      w.orderMove([u], C + 600, C, false);
+      run(w, 8);
+      return w.x[u] - (C - 400);
+    };
+    const r = dist(true) / dist(false);
+    expect(r).toBeGreaterThan(RULES.env.snowSpeed - 0.05);
+    expect(r).toBeLessThan(RULES.env.snowSpeed + 0.05);
+    const w = flatWorld();
+    snowy(w);
+    const torch = w.spawnGroup(1, [idx('dao')], C, C, 1, 0)[0];
+    run(w, 1);
+    expect(w.env.visionMul).toBeCloseTo(RULES.env.snowVision, 2);
+    // 拨到深夜：两项叠乘，火把点不着
+    w.time = (0.95 - RULES.env.startClock) * RULES.env.dayLength;
+    run(w, 1);
+    expect(w.env.night).toBe(true);
+    expect(w.env.visionMul).toBeCloseTo(RULES.env.snowVision * RULES.env.nightVision, 2);
+    expect(w.state[torch] & S_TORCH).toBe(0);
+    // 雪停了火把就能点
+    w.env.nextWeather = w.time;
+    run(w, 1);
+    expect(w.env.snowing).toBe(false);
+    expect(w.state[torch] & S_TORCH).toBe(S_TORCH);
+  });
+
+  it('雪和雨共用一套日程，多数时候下的是雨', () => {
+    let snow = 0, rain = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      const w = flatWorld(40, seed);
+      w.env.enabled = true;
+      w.env.nextWeather = 0;
+      run(w, 0.5);
+      expect(w.env.snowing !== w.env.raining).toBe(true);
+      if (w.env.snowing) snow++;
+      else rain++;
+    }
+    expect(snow).toBeGreaterThan(0);
+    expect(rain).toBeGreaterThan(snow);
+  });
+
+  it('雪天在据点之外防御下降，在自家据点里不受影响', () => {
+    const w = game();
+    clear(w);
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const inside = w.spawnUnit(idx('dao'), 1, hq.x, hq.y + 60);
+    const outside = w.spawnUnit(idx('dao'), 1, hq.x + 900, hq.y - 900);
+    run(w, 1);
+    expect(w.sheltered[inside]).toBe(1);
+    expect(w.sheltered[outside]).toBe(0);
+    const hit = (u: number): number => {
+      const before = w.hp[u];
+      damageUnit(w, u, 10, 0, 0, UNIT_BY_KEY.yari.vs, 2, -1);
+      return before - w.hp[u];
+    };
+    const arm = UNIT_BY_KEY.dao.armM;
+    expect(hit(outside)).toBeCloseTo(10 - arm, 5);
+    snowy(w);
+    expect(hit(outside)).toBeCloseTo(10 - arm * RULES.env.snowArmor, 5);
+    expect(hit(inside)).toBeCloseTo(10 - arm, 5);
+  }, 30000);
+});
+
+describe('电脑会花资源', () => {
+  it('AI 对战几分钟后：占了资源点，升了兵或据点', () => {
+    const g = createGame({ seed: 100, factions: ['china', 'japan'], armySize: 200, difficulty: 1, fog: false, spectate: true });
+    const w = g.world;
+    for (let t = 0; t < 30 * 60 * 7 && !w.winner; t++) {
+      w.tick();
+      for (const ai of g.ais) ai.update();
+      w.fxN = 0;
+    }
+    const res = w.sites.filter(s => SITE_INFO[s.type].category === 'resource' && s.owner !== 0).length;
+    expect(res).toBeGreaterThan(2);
+    let elite = 0;
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.defs[w.type[i]].tier === 1) elite++;
+    const upgraded = w.sites.filter(s => s.level === 1).length;
+    const towers = w.buildings.filter(b => b.def.key === RULES.economy.towerKey).length;
+    if (import.meta.env.VITE_DUMP) console.log({ res, elite, upgraded, towers, stock: w.stock });
+    expect(elite + upgraded + towers).toBeGreaterThan(0);
+  }, 180000);
+});

@@ -1,4 +1,4 @@
-/** 昼夜与天气：推进时刻、算出天光与视野倍率，按随机日程下雨 */
+/** 昼夜与天气：推进时刻、算出天光与视野倍率，按随机日程下雨、下雪 */
 import { DT, RULES } from '../content';
 import type { World } from '../world';
 import { ENV_EVERY } from './index';
@@ -19,24 +19,32 @@ export function updateEnvironment(w: World): void {
   const env = w.env, E = RULES.env;
   if (!env.enabled) {
     env.light = env.visionMul = 1;
-    env.night = env.raining = false;
-    env.rain = 0;
+    env.night = env.raining = env.snowing = false;
+    env.rain = env.snow = 0;
     return;
   }
   const dt = ENV_EVERY * DT;
   env.clock = (E.startClock + w.time / E.dayLength) % 1;
   env.light = lightAt(env.clock);
-  env.visionMul = E.nightVision + (1 - E.nightVision) * env.light;
   const night = env.light < 0.4;
   if (night !== env.night) {
     env.night = night;
     w.events.push({ kind: 'daynight', night });
   }
   if (w.time >= env.nextWeather) {
-    env.raining = !env.raining;
-    const span = env.raining ? E.rainLength : E.rainGap;
+    // 晴天转雨或雪（雪少见），雨雪停了转晴
+    const wet = env.raining || env.snowing;
+    env.raining = env.snowing = false;
+    if (!wet) {
+      if (w.rng.next() < E.snowChance) env.snowing = true;
+      else env.raining = true;
+    }
+    const span = wet ? E.rainGap : E.rainLength;
     env.nextWeather = w.time + span[0] + w.rng.next() * (span[1] - span[0]);
-    w.events.push({ kind: 'weather', rain: env.raining });
+    w.events.push({ kind: 'weather', rain: env.raining, snow: env.snowing });
   }
+  // 雪天看不远，和夜晚叠乘
+  env.visionMul = (E.nightVision + (1 - E.nightVision) * env.light) * (env.snowing ? E.snowVision : 1);
   env.rain = Math.max(0, Math.min(1, env.rain + (env.raining ? dt : -dt) / 6));
+  env.snow = Math.max(0, Math.min(1, env.snow + (env.snowing ? dt : -dt) / 6));
 }

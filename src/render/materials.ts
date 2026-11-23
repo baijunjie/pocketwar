@@ -8,6 +8,8 @@ export const shared = {
   uMap: { value: new THREE.Vector2(1, 1) },
   uFogOn: { value: 0 },
   uTime: { value: 0 },
+  /** 积雪程度 0..1：朝上的面渐渐变白 */
+  uSnow: { value: 0 },
 };
 
 const FOG_PARS = `
@@ -45,7 +47,10 @@ export function litMaterial(opts: THREE.MeshLambertMaterialParameters = {}): THR
         #endif
         vWorld = (modelMatrix * fw).xyz;`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${FOG_PARS}`)
+      .replace('#include <common>', `#include <common>\nuniform float uSnow;\n${FOG_PARS}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float snowUp = dot(normalize(vNormal), normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.84, 0.90), uSnow * smoothstep(0.3, 0.75, snowUp));`)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>\n${FOG_APPLY}`);
   };
   return m;

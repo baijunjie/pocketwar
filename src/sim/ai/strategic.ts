@@ -1,7 +1,8 @@
 /** 战略 AI：把部队编成若干战斗群，争夺据点、回防、时机成熟后总攻敌方主堡 */
-import { SITE_HQ, SITE_INFO } from '../content';
+import { RULES, SITE_HQ, SITE_INFO } from '../content';
 import { O_ATTACK, S_ROUT } from '../state';
 import type { Site, World } from '../world';
+import { canUpgradeSite, towerCount } from '../systems/economy';
 import { Commander } from './commander';
 
 const M_IDLE = 0, M_MARCH = 1, M_DEFEND = 2, M_ASSAULT = 3, M_RETREAT = 4;
@@ -30,6 +31,8 @@ export class StrategicAI implements Commander {
   private nextThink = 0;
   private gid = 1;
   private enemies: number[] = [];
+  /** 下一笔木材该拿去建箭塔（否则拿去升级营寨） */
+  private towerTurn = true;
 
   /** @param level 0 简单 1 普通 2 困难 */
   constructor(readonly w: World, readonly team: number, readonly level: number) {
@@ -173,7 +176,8 @@ export class StrategicAI implements Commander {
     const hqThreat = this.enemyNear(hq.x, hq.y, 760);
     const assigned = new Map<number, number>();
     for (const g of this.groups) if (g.mode === M_MARCH || g.mode === M_DEFEND) assigned.set(g.obj, (assigned.get(g.obj) ?? 0) + g.power);
-    const capturable = w.sites.filter(s => s.type !== SITE_HQ && s.owner !== tm);
+    const capturable = w.sites.filter(s => SITE_INFO[s.type].captureTime > 0 && s.owner !== tm && !s.gone);
+    this.spend();
     const assaultReady = capturable.length === 0 || myTotal > enTotal * [1.6, 1.25, 1.05][this.level]
       || w.time > [900, 600, 420][this.level];
 
@@ -254,6 +258,39 @@ export class StrategicAI implements Commander {
       }
     }
     this.groups = this.groups.filter(g => g.slots.length > 0);
+  }
+
+  /** 把攒下的资源花掉：黄金升级部队（老兵优先），石料 / 木材升级据点，富余的木材给资源点添箭塔 */
+  private spend(): void {
+    const w = this.w, tm = this.team;
+    if (w.stock.gold[tm] >= RULES.economy.unitGold * 12) {
+      const mine: number[] = [];
+      for (let i = 0; i < w.n; i++) if (w.alive[i] && w.team[i] === tm) mine.push(i);
+      w.upgradeUnits(mine);
+    }
+    // 木材两头用：升一座营寨、建一座箭塔，轮着来（不然木材永远先被升级花光）
+    if (this.towerTurn && w.stock.wood[tm] >= RULES.economy.towerCost) {
+      let built = false, any = false;
+      for (const s of w.sites) {
+        if (s.owner !== tm || s.disabled || !s.slots.length || towerCount(w, s) >= s.slots.length) continue;
+        any = true;
+        if (w.buildTower(s)) {
+          built = true;
+          break;
+        }
+      }
+      if (built || !any) this.towerTurn = false;
+    }
+    let best: Site | null = null;
+    for (const s of w.sites) {
+      if (s.owner !== tm || !canUpgradeSite(s)) continue;
+      const info = SITE_INFO[s.type];
+      if (w.stock[info.material][tm] < info.upgradeCost || (info.material === 'wood' && this.towerTurn)) continue;
+      // 大本营最要紧，其余按价值
+      const v = s.type === SITE_HQ ? 10 : info.value;
+      if (!best || v > (best.type === SITE_HQ ? 10 : SITE_INFO[best.type].value)) best = s;
+    }
+    if (best && w.upgradeSite(best) && SITE_INFO[best.type].material === 'wood') this.towerTurn = true;
   }
 
   private choose(g: Group, capturable: Site[], assigned: Map<number, number>, assaultReady: boolean): void {

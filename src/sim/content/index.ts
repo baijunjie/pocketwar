@@ -1,9 +1,9 @@
 /** 内容层入口：按依赖顺序加载各张表并展开兵种 */
-import { HP_SCALE, LEVELS } from './rules';
+import { ELITE, HP_SCALE, LEVELS } from './rules';
 import './units';
 import { CLASSES, finalizeUnits } from './types';
 
-finalizeUnits(LEVELS, HP_SCALE);
+finalizeUnits(LEVELS, HP_SCALE, ELITE);
 
 export * from './types';
 export * from './rules';

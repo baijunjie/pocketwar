@@ -2,7 +2,7 @@
  * 规则数值：各系统的可调参数集中在这里，系统代码里不写死数字。
  * 每一项的玩法含义见 docs/gameplay.md；改了这里要同步改那份文档。
  */
-import { LevelRules, defineSize } from './types';
+import { EliteRules, LevelRules, TowerDef, defineSize } from './types';
 
 // ---------- 体型：越大越慢、越吃粮、越容易被围 ----------
 defineSize({ key: 'small', name: '小型', radius: 6, speedMul: 1, upkeep: 1, slots: 3, forestMul: 1 });
@@ -22,6 +22,9 @@ export const LEVELS: LevelRules = {
   cd: 0.04,
   rout: [30, 24, 17, 9, -1],
 };
+
+/** 高级形态（花黄金升级）相对初级形态的加成 */
+export const ELITE: EliteRules = { hp: 1.35, dmg: 1.25, armor: 2, prefix: '重甲' };
 
 export const RULES = {
   xp: {
@@ -54,6 +57,11 @@ export const RULES = {
     shieldHold: 4,
     /** 站定出手的单位只有被挤到重叠超过这个比例（两者半径和的占比）才会让位 */
     plantGive: 0.7,
+  },
+  vision: {
+    /** 建筑提供的视野（像素）：会放箭的箭塔 / 塔楼看得远得多 */
+    building: 192,
+    tower: 560,
   },
   march: {
     /** 编队行军：部队离各自的队列位置平均不超过 lagFull 时全速前进，超过 lagStop 时领队原地等待 */
@@ -159,6 +167,11 @@ export const RULES = {
     rainLength: [70, 150],
     rainGap: [200, 420],
     rainSpeed: 0.85,
+    /** 雪：一场降水是雪的概率；雪天的行军速度、视野倍率（与夜晚叠乘），以及据点之外的单位护甲打几折 */
+    snowChance: 0.22,
+    snowSpeed: 0.75,
+    snowVision: 0.7,
+    snowArmor: 0.5,
   },
   supply: {
     /** 开局存粮够全军吃几分钟 */
@@ -170,5 +183,28 @@ export const RULES = {
     recoverTime: 20,
     /** 存粮超过上限的这个比例时，士气有少量加成 */
     surplusAt: 0.5,
+  },
+  economy: {
+    /** 兵种升为高级形态：每份口粮（体型）花多少黄金 */
+    unitGold: 10,
+    /** 据点升级后：建筑生命倍率、护甲加成、箭塔伤害与射程倍率 */
+    siteHp: 1.6,
+    siteArmor: 3,
+    towerDmg: 1.5,
+    towerRange: 1.1,
+    /** 升级后的据点，主建筑若原本不会放箭，就添一队弓手 */
+    mainTower: { range: 240, dmg: 16, cd: 1.2 } as TowerDef,
+    /** 有石料 / 木材时建筑自修加快到几倍，以及每修复 100 点生命消耗多少 */
+    repairBoost: 4,
+    repairCost: 1,
+    /** 资源点的箭塔：用哪种建筑、每座花多少木材 */
+    towerKey: 'arrowtower',
+    towerCost: 50,
+    /** 临时据点：用哪种建筑、花多少木材、每方最多几座、部队离多近才能搭起来、下令后多久搭不成就作罢 */
+    outpostKey: 'outpost',
+    outpostCost: 90,
+    outpostMax: 3,
+    outpostReach: 90,
+    outpostTimeout: 150,
   },
 };

@@ -28,3 +28,10 @@ bld('granary', '粮仓', BK_MAIN, 2, 2, 700, 2, 8, 800, 34, true);
 bld('stable', '马厩', BK_MAIN, 3, 2, 800, 2, 8, 800, 26, true);
 bld('workshop', '工坊', BK_MAIN, 3, 2, 900, 3, 9, 800, 30, false);
 bld('farmhouse', '农舍', BK_HOUSE, 2, 2, 350, 1, 7, 800, 24, true);
+// 资源点的主建筑、玩家用木材搭的箭塔与临时据点
+bld('farmstead', '谷仓', BK_MAIN, 2, 2, 600, 2, 8, 800, 30, true);
+bld('lumbercamp', '伐木棚', BK_MAIN, 2, 2, 600, 2, 8, 800, 24, true);
+bld('quarry', '采石棚', BK_MAIN, 2, 2, 700, 3, 9, 800, 26, false);
+bld('goldmine', '矿洞', BK_MAIN, 2, 2, 800, 3, 10, 800, 26, false);
+bld('arrowtower', '箭塔', BK_TOWER, 1, 1, 600, 2, 9, 500, 40, true, { range: 250, dmg: 18, cd: 1.1 });
+bld('outpost', '行营', BK_MAIN, 2, 2, 500, 2, 8, 700, 24, true);
