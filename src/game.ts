@@ -1,5 +1,5 @@
 /** 一局游戏：主循环、镜头、选择与指令输入 */
-import { DT, FactionDef, RES_NAMES, RULES, SITE_INFO } from './sim/defs';
+import { BK_GATE, BK_TOWER, BK_WALL, DT, FactionDef, RES_NAMES, RULES, SITE_INFO } from './sim/defs';
 import { Game, GameOptions, createGame } from './sim/setup';
 import { canUpgradeSite, unitUpgradeCost, upgradeQueue } from './sim/systems/economy';
 import { MAX_UNITS, S_ROUT, Site, World } from './sim/world';
@@ -10,7 +10,7 @@ import { Sound } from './audio/sound';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
 /** 界面上能交互的元素：鼠标停在这些上面时不边缘卷屏 */
-const INTERACTIVE = 'button, canvas, input, select, a, .site, .chip, .ucard, .card';
+const INTERACTIVE = 'button, canvas, input, select, a, .site, .chip, .ucard, .card, .unitbar, .detail';
 
 /** 离屏幕边缘多少像素以内开始卷屏 */
 const EDGE_ZONE = 72;
@@ -62,7 +62,7 @@ export class GameApp {
       upgrade: a => this.upgrade(a),
       selectSite: id => this.selectSite(id),
       siteAction: (act, id) => this.siteAction(act, id),
-      selectType: (t, remove) => this.selectType(t, remove),
+      pickTypes: (types, mode) => this.pickTypes(types, mode),
       setSpeed: s => this.setSpeed(s),
       focus: (x, y) => this.focus(x, y),
       exit: () => this.onExit(),
@@ -376,13 +376,13 @@ export class GameApp {
     for (const s of list) this.sel[s] = 1;
     // 选了部队就不再选着据点
     if (list.length) this.selSite = this.renderer.selSite = -1;
-    this.hud.updateSelection(list, this.selSite);
+    this.hud.updateSelection(list, this.selSite, this.screenUnits());
   }
 
   private selectSite(id: number): void {
     if (id >= 0 && this.selList.length) this.setSelection([]);
     this.selSite = this.renderer.selSite = id;
-    this.hud.updateSelection(this.selList, id);
+    this.hud.updateSelection(this.selList, id, this.screenUnits());
   }
 
   /** 鼠标点到的据点：点在它的建筑上，或者点在旗帜圈里 */
@@ -484,7 +484,7 @@ export class GameApp {
 
   private refreshUi(): void {
     this.hud.update();
-    this.hud.updateSelection(this.selList, this.selSite);
+    this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
     this.hud.updateUpgrades(this.offers());
   }
 
@@ -583,9 +583,43 @@ export class GameApp {
     this.setSelection(list);
   }
 
-  private selectType(defIdx: number, remove: boolean): void {
+  /** 屏幕内的己方可操控单位 */
+  private screenUnits(): number[] {
+    const w = this.world, rd = this.renderer, human = w.humanTeam;
+    const out: number[] = [];
+    if (!human) return out;
+    rd.updateCamera();
+    for (let i = 0; i < w.n; i++) {
+      if (!w.controllable(i) || w.team[i] !== human) continue;
+      const p = rd.worldToScreen(w.x[i], w.y[i], 8);
+      if (p && p.x > 0 && p.y > 0 && p.x < rd.viewW && p.y < rd.viewH) out.push(i);
+    }
+    return out;
+  }
+
+  /** 兵种栏里点选 / 框选卡片（见 HudCallbacks.pickTypes） */
+  private pickTypes(types: number[], mode: 'replace' | 'add' | 'toggle' | 'map'): void {
     const w = this.world;
-    this.setSelection(this.selList.filter(s => (w.type[s] === defIdx) !== remove));
+    const want = new Set(types);
+    if (mode === 'map') {
+      const list: number[] = [];
+      for (let i = 0; i < w.n; i++) if (w.controllable(i) && w.team[i] === w.humanTeam && want.has(w.type[i])) list.push(i);
+      this.setSelection(list);
+      return;
+    }
+    if (mode === 'toggle' && this.selList.some(s => want.has(w.type[s]))) {
+      this.setSelection(this.selList.filter(s => !want.has(w.type[s])));
+      return;
+    }
+    const base = mode === 'replace' ? [] : this.selList.slice();
+    const have = new Set(base);
+    for (const s of this.screenUnits()) if (want.has(w.type[s]) && !have.has(s)) base.push(s);
+    // 屏幕内没有这个兵种（只是选着、镜头挪开了）：保留原来选着的那些
+    if (mode === 'replace') {
+      const got = new Set(base);
+      for (const s of this.selList) if (want.has(w.type[s]) && !got.has(s)) base.push(s);
+    }
+    this.setSelection(base);
   }
 
   // ------------------------------------------------------------------ 指令
@@ -675,8 +709,12 @@ export class GameApp {
     const bid = w.nav.bld[w.cellAt(x, y)];
     if (bid < 0) return false;
     const b = w.buildings[bid];
+    // 中立建筑要 Ctrl+右键才打；例外：带着器械时，中立的石质城防（城墙、门楼、角楼）直接右键就砸
+    const siege = this.selList.some(s => w.defs[w.type[s]].siege);
+    const kind = b.def.kind;
+    if (siege && b.owner === 0 && !b.def.wood && (kind === BK_WALL || kind === BK_GATE || kind === BK_TOWER)) force = true;
     if (!b.alive || b.owner === human || (b.owner === 0 && !force) || (w.fog && !w.isExplored(b.cx, b.cy))) return false;
-    if (b.def.fort && !this.selList.some(s => w.defs[w.type[s]].siege)) {
+    if (b.def.fort && !siege) {
       this.hud.message(`${b.def.name}只有器械和战象能破坏`, 'info');
       this.sound.ui('deny');
       return true;

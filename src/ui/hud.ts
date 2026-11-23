@@ -28,7 +28,11 @@ export interface HudCallbacks {
   selectSite(id: number): void;
   /** 对选中的据点：升级 / 建一座箭塔 */
   siteAction(act: 'upgrade' | 'tower', id: number): void;
-  selectType(defIdx: number, remove: boolean): void;
+  /**
+   * 兵种栏里点选 / 框选卡片：replace = 改选屏幕内这些兵种；add = 加选；toggle = 这个兵种选着就去掉、没选就加上；
+   * map = 选中全图的这个兵种（双击卡片）
+   */
+  pickTypes(types: number[], mode: 'replace' | 'add' | 'toggle' | 'map'): void;
   setSpeed(s: number): void;
   focus(x: number, y: number): void;
   exit(): void;
@@ -74,7 +78,15 @@ export class Hud {
   private readonly windArrow: HTMLElement;
   private windDeg = NaN;
   private readonly sitesBox: HTMLDivElement;
+  /** 选中单个单位 / 据点时的详情（兵种栏上方） */
   private readonly selBox: HTMLDivElement;
+  /** 兵种栏：屏幕内每个己方兵种一张卡片 */
+  private readonly roster: HTMLDivElement;
+  private rosterKey = '?';
+  private readonly boxEl: HTMLDivElement;
+  /** 正在兵种栏里拖框（拖动期间不重建卡片） */
+  private dragging = false;
+  private readonly cmdBtns = new Map<string, HTMLButtonElement>();
   private readonly feed: HTMLDivElement;
   private readonly modeTip: HTMLDivElement;
   private readonly help: HTMLDivElement;
@@ -88,7 +100,9 @@ export class Hud {
   private readonly foodBox: HTMLSpanElement;
   private readonly moraleBox: HTMLSpanElement;
   private readonly resBox: HTMLSpanElement;
+  /** 指令面板里的「升级」一栏 */
   private readonly upBar: HTMLDivElement;
+  private readonly upHead: HTMLElement;
   private upKey = '';
   private sitesHtml = '';
 
@@ -146,7 +160,10 @@ export class Hud {
       cb.focus(s.x, s.y);
       cb.selectSite(s.id);
     };
-    root.appendChild(this.sitesBox);
+    // 右侧一列：上面据点列表（占满剩下的高度），下面指令面板
+    const right = el('div', 'rightcol');
+    right.appendChild(this.sitesBox);
+    root.appendChild(right);
 
     // ---- 小地图 ----
     const mm = el('div', 'panel mini');
@@ -154,46 +171,66 @@ export class Hud {
     mm.appendChild(this.minimap);
     root.appendChild(mm);
 
-    // ---- 选中面板（升级按钮紧挨在它右边） ----
+    // ---- 底部中央：上面是详情（选中单个单位 / 据点时），下面是兵种栏 ----
     const bottom = el('div', 'bottom');
-    this.selBox = el('div', 'panel selection');
+    this.selBox = el('div', 'panel detail');
+    this.selBox.hidden = true;
     // 面板内容会被定时重建，按钮用事件委托
     this.selBox.addEventListener('click', e => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-act]');
       if (b && !b.disabled) cb.siteAction(b.dataset.act as 'upgrade' | 'tower', Number(b.dataset.site));
     });
-    bottom.appendChild(this.selBox);
-
-    // ---- 升级按钮（有资源、有可升级的对象时才出现） ----
-    this.upBar = el('div', 'upbar');
-    this.upBar.onclick = e => {
-      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-up]');
-      if (b) cb.upgrade(b.dataset.up as UpgradeAction);
-    };
-    bottom.appendChild(this.upBar);
+    this.roster = el('div', 'panel unitbar');
+    this.boxEl = el('div', 'rbox');
+    this.boxEl.hidden = true;
+    this.bindRoster();
+    bottom.append(this.selBox, this.roster);
     root.appendChild(bottom);
 
-    // ---- 指令 ----
+    // ---- 右下：指令面板，分「部队」「援军」「升级」三栏 ----
     const cmds = el('div', 'panel cmds');
+    const btn = (name: string, key: string, cmd: Parameters<HudCallbacks['command']>[0], tip: string): HTMLButtonElement => {
+      const b = el('button', '', `<b>${name}</b><i>${key}</i>`);
+      b.title = tip;
+      b.onclick = () => cb.command(cmd);
+      this.cmdBtns.set(cmd, b);
+      return b;
+    };
+    const section = (title: string, ...items: HTMLElement[]): HTMLDivElement => {
+      const sec = el('div', 'csec');
+      sec.append(el('h3', '', title), ...items);
+      return sec;
+    };
     if (human) {
-      const defs: [string, string, Parameters<HudCallbacks['command']>[0], string][] = [
-        ['攻击移动', 'F', 'amove', '行军途中遇敌即战'],
-        ['停止', 'X', 'stop', '停止当前行动'],
-        ['坚守', 'H', 'hold', '原地坚守，不追击'],
-        ['集结点', 'R', 'rally', '设置援军集结点：之后各据点新出的援军自动开赴那里（已经出来的部队不受影响）'],
-        ['取消集结', 'Shift+R', 'unrally', '取消集结点：之后各据点新出的援军留在自己的据点里驻守'],
-        ['火把', 'T', 'torch', '点燃 / 熄灭所选部队的火把：点着看得远，也更容易被发现'],
-        ['扎营', 'B', 'outpost', `派所选部队到指定位置搭一座临时据点（木材 ${RULES.economy.outpostCost}，最多 ${RULES.economy.outpostMax} 座）：部队在里面休整回血，被毁不会重生`],
-        ['全军', 'Ctrl+A', 'all', '选中全部部队'],
-      ];
-      for (const [name, key, cmd, tip] of defs) {
-        const b = el('button', '', `<b>${name}</b><i>${key}</i>`);
-        b.title = tip;
-        b.onclick = () => cb.command(cmd);
-        cmds.appendChild(b);
-      }
-    } else cmds.appendChild(el('div', 'hint', '观战模式'));
-    root.appendChild(cmds);
+      const unit = el('div', 'cgrid');
+      unit.append(
+        btn('攻击移动', 'F', 'amove', '行军途中遇敌即战、见敌方建筑就打'),
+        btn('停止', 'X', 'stop', '停止当前行动'),
+        btn('坚守', 'H', 'hold', '原地坚守，不追击'),
+        btn('火把', 'T', 'torch', '点燃 / 熄灭所选部队的火把：点着看得远，也更容易被发现'),
+        btn('扎营', 'B', 'outpost', `派所选部队到指定位置搭一座临时据点（木材 ${RULES.economy.outpostCost}，最多 ${RULES.economy.outpostMax} 座）：部队在里面休整回血，被毁不会重生`),
+        btn('全军', 'Ctrl+A', 'all', '选中全图的全部部队'),
+      );
+      const reinf = el('div', 'cgrid');
+      reinf.append(
+        btn('集结点', 'R', 'rally', '设置援军集结点：之后各据点新出的援军自动开赴那里（已经出来的部队不受影响）'),
+        btn('取消集结', '⇧R', 'unrally', '取消集结点：之后各据点新出的援军留在自己的据点里驻守'),
+      );
+      this.upBar = el('div', 'upbar');
+      this.upBar.onclick = e => {
+        const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-up]');
+        if (b) cb.upgrade(b.dataset.up as UpgradeAction);
+      };
+      const up = section('升级', this.upBar);
+      this.upHead = up;
+      up.hidden = true;
+      cmds.append(section('部队', unit), section('援军', reinf), up);
+    } else {
+      this.upBar = el('div');
+      this.upHead = this.upBar;
+      cmds.appendChild(el('div', 'hint', '观战模式'));
+    }
+    right.appendChild(cmds);
 
     this.feed = el('div', 'feed');
     this.modeTip = el('div', 'modetip');
@@ -205,9 +242,10 @@ export class Hud {
         <h2>操作说明</h2>
         <table>
           <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
+          <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；在卡片上拖框：一次选几个兵种（框住全部即选中屏幕内所有部队）；Shift 加选 / 去掉；双击：选中全图的这个兵种。选中的兵种卡片会上前一步</td></tr>
           <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
           <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
-          <tr><td>右键敌军 / 敌方建筑</td><td>攻击（Ctrl+右键可强攻中立建筑）</td></tr>
+          <tr><td>右键敌军 / 敌方建筑</td><td>攻击（Ctrl+右键可强攻中立建筑；带着器械时，中立的城墙、门楼、角楼直接右键就砸）</td></tr>
           <tr><td>F + 左键</td><td>攻击移动：沿途遇敌即战、见敌方建筑就打，遇墙自动破城；点在敌方建筑上则直接攻打它</td></tr>
           <tr><td>X / H</td><td>停止 / 坚守</td></tr>
           <tr><td>R + 左键</td><td>设置援军集结点（只对之后新出的援军有效）</td></tr>
@@ -380,7 +418,7 @@ export class Hud {
     return url;
   }
 
-  /** 选中面板右边的升级按钮：只列出此刻点了就能生效的 */
+  /** 指令面板里的升级按钮：只列出此刻点了就能生效的 */
   updateUpgrades(o: UpgradeOffers): void {
     const rows: string[] = [];
     if (o.sel) {
@@ -395,7 +433,7 @@ export class Hud {
     if (key === this.upKey) return;
     this.upKey = key;
     this.upBar.innerHTML = key;
-    this.upBar.style.display = key ? 'flex' : 'none';
+    this.upHead.hidden = !key;
   }
 
   /** 选中一个据点时：它的状况，以及能对它做的事（升级、建箭塔） */
@@ -531,58 +569,160 @@ export class Hud {
       </div>`;
   }
 
-  /** @param site 没选部队时选中的据点（-1 = 没有） */
-  updateSelection(sel: number[], site = -1): void {
+  /**
+   * @param site 没选部队时选中的据点（-1 = 没有）
+   * @param screen 屏幕内的己方单位（兵种栏按它数每个兵种的数量）
+   */
+  updateSelection(sel: number[], site = -1, screen: number[] = []): void {
     const w = this.world;
+    // ---- 详情：选中单个单位，或没选部队而选着据点 ----
     if (!sel.length && site >= 0 && !w.sites[site].gone) {
+      this.selBox.hidden = false;
       this.siteDetail(w.sites[site]);
-      return;
-    }
-    if (sel.length === 1 && w.alive[sel[0]]) {
+    } else if (sel.length === 1 && w.alive[sel[0]]) {
+      this.selBox.hidden = false;
       this.unitDetail(sel[0]);
-      return;
+    } else if (!this.selBox.hidden) {
+      this.selBox.hidden = true;
+      this.selKey = '?';
     }
-    const count = new Map<number, { n: number; hp: number; lv: number; top: number; morale: number }>();
+    // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
+    for (const [cmd, b] of this.cmdBtns) {
+      const off = cmd === 'unrally' ? !w.rally[w.humanTeam] : cmd !== 'all' && cmd !== 'rally' && !sel.length;
+      if (b.disabled !== off) b.disabled = off;
+    }
+    if (!this.dragging) this.renderRoster(sel, screen);
+  }
+
+  /** 兵种栏：屏幕内（以及已选中）的每个己方兵种一张卡片；选中的兵种卡片上前一步 */
+  private renderRoster(sel: number[], screen: number[]): void {
+    const w = this.world;
+    interface Row { scr: number; n: number; hp: number; lv: number; top: number; morale: number }
+    const rows = new Map<number, Row>();
+    const row = (t: number): Row => {
+      let r = rows.get(t);
+      if (!r) rows.set(t, (r = { scr: 0, n: 0, hp: 0, lv: 0, top: 0, morale: 0 }));
+      return r;
+    };
+    for (const s of screen) row(w.type[s]).scr++;
     let moraleSum = 0;
     for (const s of sel) {
-      const t = w.type[s];
-      let e = count.get(t);
-      if (!e) count.set(t, (e = { n: 0, hp: 0, lv: 0, top: 0, morale: 0 }));
-      e.n++;
-      e.hp += w.hp[s] / w.maxHp[s];
-      e.lv += w.level[s];
-      if (w.level[s] > e.top) e.top = w.level[s];
-      e.morale += w.morale[s];
+      const r = row(w.type[s]);
+      r.n++;
+      r.hp += w.hp[s] / w.maxHp[s];
+      r.lv += w.level[s];
+      if (w.level[s] > r.top) r.top = w.level[s];
+      r.morale += w.morale[s];
       moraleSum += w.morale[s];
     }
-    let key = `${Math.round(moraleSum / (sel.length || 1) / 4)}|`;
-    for (const [t, e] of count) key += `${t}:${e.n}:${Math.round((e.hp / e.n) * 20)}:${Math.round((e.lv / e.n) * 4)}:${e.top},`;
-    if (key === this.selKey) return;
-    this.selKey = key;
-    if (!sel.length) {
-      this.selBox.innerHTML = w.humanTeam
-        ? '<div class="hint">拖框选择部队 · 右键移动或攻击 · <b>F</b> 攻击移动 · 点据点可升级</div>'
-        : '<div class="hint">观战模式：方向键 / 拖动小地图移动镜头，滚轮缩放</div>';
+    // 没选中的兵种，等级与血量按屏幕内的人算
+    for (const s of screen) {
+      const r = rows.get(w.type[s])!;
+      if (r.n) continue;
+      r.hp += w.hp[s] / w.maxHp[s];
+      r.lv += w.level[s];
+      if (w.level[s] > r.top) r.top = w.level[s];
+      r.morale += w.morale[s];
+    }
+    const types = [...rows.keys()].sort((a, b) => UNITS[a].row - UNITS[b].row || a - b);
+    const mAvg = sel.length ? Math.round(moraleSum / sel.length) : 0;
+    let key = `${w.humanTeam}|${sel.length}|${screen.length}|${Math.round(mAvg / 4)}|`;
+    for (const t of types) {
+      const r = rows.get(t)!, k = r.n || r.scr;
+      key += `${t}:${r.scr}:${r.n}:${Math.round((r.hp / k) * 20)}:${Math.round((r.lv / k) * 4)}:${r.top},`;
+    }
+    if (key === this.rosterKey) return;
+    this.rosterKey = key;
+    if (!w.humanTeam) {
+      this.roster.innerHTML = '<div class="hint">观战模式：方向键 / 拖动小地图移动镜头，滚轮缩放</div>';
       return;
     }
-    const mAvg = Math.round(moraleSum / sel.length);
-    this.selBox.innerHTML = `<div class="total">已选 <b>${sel.length}</b><span class="${mAvg < 40 ? 'bad' : mAvg < 55 ? 'warn' : ''}">士气 ${mAvg}</span></div>`;
-    const types = [...count.keys()].sort((a, b) => UNITS[a].row - UNITS[b].row || a - b);
-    for (const t of types) {
-      const e = count.get(t)!;
-      const d = UNITS[t];
-      const card = el('div', `ucard${d.tier ? ' elite' : ''}`, `
-        <img src="${this.portrait(t, w.humanTeam)}" draggable="false">
-        <span class="n">${e.n}</span>
-        <span class="nm">${d.name}</span>
-        <span class="lv" title="平均等级（最高 ${LEVELS.thresholds.length} 级）">Lv${Math.round(e.lv / e.n) + 1}</span>
-        <span class="hp"><u style="width:${Math.round((e.hp / e.n) * 100)}%"></u></span>`);
-      const routAt = d.lvRout[Math.round(e.lv / e.n)];
-      card.title = `${unitTip(d)}\n—\n平均等级 ${Math.round(e.lv / e.n) + 1}（${LEVELS.names[Math.round(e.lv / e.n)]}），最高 ${e.top + 1} 级，满级 ${LEVELS.thresholds.length} 级　士气 ${Math.round(e.morale / e.n)}`
-        + `　${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}`;
-      card.onclick = ev => this.cb.selectType(t, ev.shiftKey || ev.ctrlKey || ev.metaKey);
-      this.selBox.appendChild(card);
+    if (!types.length) {
+      this.roster.innerHTML = '<div class="hint">屏幕内没有我方部队 · 拖框选择部队 · 右键移动或攻击 · 点据点可升级</div>';
+      return;
     }
+    const head = sel.length
+      ? `<div class="total">已选 <b>${sel.length}</b><span class="${mAvg < 40 ? 'bad' : mAvg < 55 ? 'warn' : ''}">士气 ${mAvg}</span></div>`
+      : `<div class="total">屏幕内 <b>${screen.length}</b><span>点卡片选择</span></div>`;
+    let html = head;
+    for (const t of types) {
+      const r = rows.get(t)!, d = UNITS[t], k = r.n || r.scr;
+      const lv = Math.round(r.lv / k);
+      const routAt = d.lvRout[lv];
+      const tip = `${unitTip(d)}\n—\n屏幕内 ${r.scr} 人${r.n ? `，已选 ${r.n} 人` : ''}　平均等级 ${lv + 1}（${LEVELS.names[lv]}），最高 ${r.top + 1} 级`
+        + `　士气 ${Math.round(r.morale / k)}　${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}`
+        + '\n—\n点击：选中屏幕内的这个兵种　Shift+点击：加选 / 去掉　双击：选中全图的这个兵种　在卡片上拖框：一次选几个兵种';
+      html += `<div class="ucard${d.tier ? ' elite' : ''}${r.n ? ' on' : ''}" data-t="${t}" title="${tip.replace(/"/g, '&quot;')}">
+        <img src="${this.portrait(t, w.humanTeam)}" draggable="false">
+        <span class="n">${r.scr}</span>
+        <span class="nm">${d.name}</span>
+        <span class="lv">Lv${lv + 1}</span>
+        <span class="hp"><u style="width:${Math.round((r.hp / k) * 100)}%"></u></span>
+        ${r.n ? `<span class="sel">选 ${r.n}</span>` : ''}</div>`;
+    }
+    this.roster.innerHTML = html;
+  }
+
+  /** 兵种栏的点选、双击、拖框 */
+  private bindRoster(): void {
+    const R = this.roster, box = this.boxEl;
+    this.root.appendChild(box);
+    let sx = 0, sy = 0, add = false, down = false, last = { t: 0, type: -1 };
+    const hits = (ex: number, ey: number): HTMLElement[] => {
+      const ax = Math.min(sx, ex), ay = Math.min(sy, ey), bx = Math.max(sx, ex), by = Math.max(sy, ey);
+      return [...R.querySelectorAll<HTMLElement>('.ucard')].filter(c => {
+        const r = c.getBoundingClientRect();
+        return r.right >= ax && r.left <= bx && r.bottom >= ay && r.top <= by;
+      });
+    };
+    R.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      down = true;
+      sx = e.clientX;
+      sy = e.clientY;
+      add = e.shiftKey || e.ctrlKey || e.metaKey;
+      R.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    R.addEventListener('pointermove', e => {
+      if (!down) return;
+      if (!this.dragging && Math.hypot(e.clientX - sx, e.clientY - sy) < 5) return;
+      this.dragging = true;
+      box.hidden = false;
+      box.style.left = `${Math.min(sx, e.clientX)}px`;
+      box.style.top = `${Math.min(sy, e.clientY)}px`;
+      box.style.width = `${Math.abs(e.clientX - sx)}px`;
+      box.style.height = `${Math.abs(e.clientY - sy)}px`;
+      const hot = new Set(hits(e.clientX, e.clientY));
+      for (const c of R.querySelectorAll<HTMLElement>('.ucard')) c.classList.toggle('hot', hot.has(c));
+    });
+    const end = (e: PointerEvent, cancel: boolean): void => {
+      if (!down) return;
+      down = false;
+      if (R.hasPointerCapture(e.pointerId)) R.releasePointerCapture(e.pointerId);
+      if (this.dragging) {
+        this.dragging = false;
+        box.hidden = true;
+        const types = cancel ? [] : hits(e.clientX, e.clientY).map(c => Number(c.dataset.t));
+        this.rosterKey = '?';
+        if (types.length) this.cb.pickTypes(types, add ? 'add' : 'replace');
+        else for (const c of R.querySelectorAll<HTMLElement>('.ucard')) c.classList.remove('hot');
+        return;
+      }
+      if (cancel) return;
+      const card = (document.elementFromPoint(sx, sy) as HTMLElement | null)?.closest<HTMLElement>('.ucard');
+      if (!card) return;
+      const t = Number(card.dataset.t), now = performance.now();
+      if (last.type === t && now - last.t < 350) {
+        this.cb.pickTypes([t], 'map');
+        last = { t: 0, type: -1 };
+      } else {
+        this.cb.pickTypes([t], add ? 'toggle' : 'replace');
+        last = { t: now, type: t };
+      }
+    };
+    R.addEventListener('pointerup', e => end(e, false));
+    R.addEventListener('pointercancel', e => end(e, true));
   }
 
   showGameOver(win: boolean | null, onAgain: () => void): void {
