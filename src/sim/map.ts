@@ -1,6 +1,6 @@
 /** 程序化地图生成：地形、河流、据点（城池/营地/村庄等）、道路与植被 */
 import {
-  BUILDINGS, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_HQ, SITE_LUMBER, SITE_MINE, SITE_QUARRY, SITE_RANCH, SITE_TOWN, SITE_VILLAGE,
+  BUILDINGS, SITE_INFO, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_HQ, SITE_LUMBER, SITE_MINE, SITE_QUARRY, SITE_RANCH, SITE_TOWN, SITE_VILLAGE,
   SITE_WORKSHOP, TILE,
   T_BRIDGE, T_DEEP, T_FARM, T_FOREST, T_GRASS, T_HILL, T_MOUNTAIN, T_ROAD, T_SHALLOW,
 } from './defs';
@@ -285,7 +285,8 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
   };
 
-  const walled = (si: number, cx: number, cy: number, hw: number, hh: number, wood: boolean, owner: number): void => {
+  /** @param mid 石墙每面在角楼与门楼之间再各加一座角楼（大本营城墙长） */
+  const walled = (si: number, cx: number, cy: number, hw: number, hh: number, wood: boolean, owner: number, mid = false): void => {
     const x0 = cx - hw, x1 = cx + hw - 1, y0 = cy - hh, y1 = cy + hh - 1;
     const wall = wood ? 'palisade' : 'wall', gh = wood ? 'wgate_h' : 'gate_h', gv = wood ? 'wgate_v' : 'gate_v';
     if (wood) {
@@ -295,10 +296,21 @@ export function generateMap(seed: number, size = 320): GameMap {
       put('tower', x0, y0, owner, si); put('tower', x1 - 1, y0, owner, si);
       put('tower', x0, y1 - 1, owner, si); put('tower', x1 - 1, y1 - 1, owner, si);
     }
-    // 石墙两格厚（门楼、角楼都是 2×2，正好嵌在墙里），木栅一格
+    // 石墙两格厚（角楼 2×2、门楼 4×2，正好嵌在墙里），木栅一格
     const th = wood ? 1 : 2;
-    put(gh, cx - 1, y0, owner, si); put(gh, cx - 1, y1 - th + 1, owner, si);
-    put(gv, x0, cy - 1, owner, si); put(gv, x1 - th + 1, cy - 1, owner, si);
+    const gw = BUILDINGS[gh].w, gx = cx - (gw >> 1), gy = cy - (gw >> 1);
+    put(gh, gx, y0, owner, si); put(gh, gx, y1 - th + 1, owner, si);
+    put(gv, x0, gy, owner, si); put(gv, x1 - th + 1, gy, owner, si);
+    if (mid && !wood) {
+      // 角楼（占 2 格）与门楼之间那段墙的正中
+      const midOf = (a: number, b: number): number => a + ((b - a + 1 - 2) >> 1);
+      for (const tx of [midOf(x0 + 2, gx - 1), midOf(gx + gw, x1 - 2)]) {
+        put('tower', tx, y0, owner, si); put('tower', tx, y1 - 1, owner, si);
+      }
+      for (const ty of [midOf(y0 + 2, gy - 1), midOf(gy + gw, y1 - 2)]) {
+        put('tower', x0, ty, owner, si); put('tower', x1 - 1, ty, owner, si);
+      }
+    }
     for (let k = 0; k < th; k++) {
       for (let x = x0; x <= x1; x++) {
         if (!occ[(y0 + k) * W + x]) put(wall, x, y0 + k, owner, si);
@@ -309,9 +321,9 @@ export function generateMap(seed: number, size = 320): GameMap {
         if (!occ[y * W + x1 - k]) put(wall, x1 - k, y, owner, si);
       }
     }
-    // 十字街与环墙马道
-    reserve(cx - 1, y0 + th, 2, y1 - y0 + 1 - th * 2);
-    reserve(x0 + th, cy - 1, x1 - x0 + 1 - th * 2, 2);
+    // 十字街（与城门同宽）与环墙马道
+    reserve(gx, y0 + th, gw, y1 - y0 + 1 - th * 2);
+    reserve(x0 + th, gy, x1 - x0 + 1 - th * 2, gw);
     reserve(x0 + th, y0 + th, x1 - x0 + 1 - th * 2, 1); reserve(x0 + th, y1 - th, x1 - x0 + 1 - th * 2, 1);
     reserve(x0 + th, y0 + th, 1, y1 - y0 + 1 - th * 2); reserve(x1 - th, y0 + th, 1, y1 - y0 + 1 - th * 2);
     dirtRect(x0, y0, x1, y1, 255);
@@ -358,6 +370,11 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
   };
 
+  /** 留出箭塔位（资源点、村庄：四角，数量见 SiteInfo.towerSlots） */
+  const towerSlots = (s: SiteSpec, cx: number, cy: number): void => {
+    s.slots = TOWER_SLOTS.slice(0, SITE_INFO[s.type].towerSlots).map(([ox, oy]) => [cx + ox, cy + oy] as [number, number]);
+    for (const [sx, sy] of s.slots) reserve(sx, sy, 1, 1);
+  };
   /** 资源点旁的装饰物（山石），格式同 props */
   const decor: number[] = [];
   for (let si = 0; si < sites.length; si++) {
@@ -366,7 +383,7 @@ export function generateMap(seed: number, size = 320): GameMap {
     const [hw, hh] = HALF[s.type];
     switch (s.type) {
       case SITE_HQ:
-        walled(si, cx, cy, hw, hh, false, s.owner);
+        walled(si, cx, cy, hw, hh, false, s.owner, true);
         mainAt('keep', cx - 2, cy - 6, s.owner, si);
         if (free(cx + 3, cy + 2, 3, 2)) put('barracks', cx + 3, cy + 2, s.owner, si);
         if (free(cx - 6, cy + 2, 3, 2)) put('barracks', cx - 6, cy + 2, s.owner, si);
@@ -390,6 +407,7 @@ export function generateMap(seed: number, size = 320): GameMap {
       case SITE_VILLAGE:
         reserve(cx - 1, cy - 1, 3, 3);
         put('granary', cx - 1, cy - 4, 0, si, true);
+        towerSlots(s, cx, cy);
         scatter(si, cx, cy, 'farmhouse', 7, 3.5, 7.5);
         farms(cx, cy);
         dirtDisc(cx, cy, 7, 170);
@@ -410,8 +428,7 @@ export function generateMap(seed: number, size = 320): GameMap {
         // 资源点：一座主建筑，四角留出箭塔位
         reserve(cx - 1, cy - 1, 3, 3);
         put(RES_SITES[s.type].main, cx - 1, cy - 4, 0, si, true);
-        s.slots = TOWER_SLOTS.map(([ox, oy]) => [cx + ox, cy + oy] as [number, number]);
-        for (const [sx, sy] of s.slots) reserve(sx, sy, 1, 1);
+        towerSlots(s, cx, cy);
         if (s.type === SITE_FARM) farms(cx, cy);
         else if (s.type === SITE_LUMBER) {
           // 伐木场四周是一圈林子

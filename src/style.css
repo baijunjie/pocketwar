@@ -42,7 +42,9 @@ button.primary:hover { filter: brightness(1.1); }
 .site u { position: absolute; left: 0; bottom: 0; height: 2px; }
 .mini { left: 16px; bottom: 16px; padding: 4px; line-height: 0; }
 .mini canvas { width: 220px; height: 220px; cursor: crosshair; border-radius: 3px; }
-.selection { left: 256px; right: 262px; bottom: 16px; min-height: 76px; max-height: 150px; overflow-y: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; width: fit-content; max-width: calc(100vw - 518px); margin: 0 auto; }
+.bottom { left: 256px; right: 262px; bottom: 16px; display: flex; justify-content: center; align-items: flex-end; gap: 6px; pointer-events: none !important; }
+.bottom > * { pointer-events: auto; }
+.selection { flex: 0 1 auto; min-width: 0; min-height: 76px; max-height: 150px; overflow-y: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; }
 .selection .hint, .cmds .hint { color: var(--dim); padding: 0 8px; }
 .selection .hint b { color: var(--gold); }
 .selection .total { color: var(--dim); padding-right: 6px; border-right: 1px solid var(--line); align-self: stretch; display: flex; flex-direction: column; justify-content: center; text-align: center; font-size: 12px; }
@@ -156,7 +158,7 @@ button.primary:hover { filter: brightness(1.1); }
 .chip.off { opacity: 0.55; }
 .chip i { font-style: normal; font-size: 9px; margin-left: 2px; color: #ffe9a8; }
 .chip u { position: absolute; left: 0; bottom: 0; height: 2px; }
-.upbar { left: 16px; bottom: 252px; width: 230px; display: none; flex-direction: column; gap: 4px; }
+.upbar { flex: none; width: 200px; display: none; flex-direction: column; gap: 4px; }
 .upbar button { display: flex; justify-content: space-between; align-items: center; padding: 6px 9px; background: rgba(22, 18, 13, 0.9); }
 .upbar button:hover { background: rgba(90, 70, 30, 0.95); }
 .upbar button b { font-weight: 600; }

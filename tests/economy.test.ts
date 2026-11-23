@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BUILDINGS, ELITE, RULES, SITE_CAMP, SITE_FARM, SITE_HQ, SITE_INFO, SITE_LUMBER, SITE_MINE, SITE_OUTPOST, SITE_QUARRY, SITE_TOWN,
+  BUILDINGS, ELITE, RULES, SITE_CAMP, SITE_FARM, SITE_HQ, SITE_INFO, SITE_LUMBER, SITE_MINE, SITE_OUTPOST, SITE_QUARRY, SITE_TOWN, SITE_VILLAGE,
   TILE, UNITS, UNIT_BY_KEY,
 } from '../src/sim/defs';
 import { generateMap } from '../src/sim/map';
@@ -287,7 +287,8 @@ describe('据点升级', () => {
     w.stock.wood[1] = SITE_INFO[SITE_CAMP].upgradeCost;
     expect(w.upgradeSite(camp)).toBe(true);
     expect(w.stock.wood[1]).toBeCloseTo(0, 5);
-    // 敌人夺走城镇：等级降回，要重新升级
+    // 敌人拆了镇公所再夺走城镇：等级降回，要重新升级
+    w.damageBuilding(hall, 1e9, 0, 1, 2);
     for (const u of garrison(w, town, 2, 3, 'yumi')) w.hp[u] = w.maxHp[u] = 1e6;
     run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
     expect(town.owner).toBe(2);
@@ -475,4 +476,90 @@ describe('电脑会花资源', () => {
     if (import.meta.env.VITE_DUMP) console.log({ res, elite, upgraded, towers, stock: w.stock });
     expect(elite + upgraded + towers).toBeGreaterThan(0);
   }, 180000);
+});
+
+describe('第八轮：城防与占领', () => {
+  it('村庄有四个箭塔位；大本营每面三座角楼之外再加两座；石城门四格宽', () => {
+    for (const seed of [5, 42, 1234]) {
+      const m = generateMap(seed);
+      const occupied = (tx: number, ty: number): boolean =>
+        m.buildings.some(b => tx >= b.tx && ty >= b.ty && tx < b.tx + BUILDINGS[b.def].w && ty < b.ty + BUILDINGS[b.def].h);
+      m.sites.forEach((s, si) => {
+        if (s.type === SITE_VILLAGE) {
+          expect(s.slots!.length).toBe(4);
+          for (const [tx, ty] of s.slots!) expect(occupied(tx, ty), `seed ${seed} ${s.name}`).toBe(false);
+        }
+        if (s.type === SITE_HQ) expect(m.buildings.filter(b => b.site === si && b.def === 'tower').length).toBe(12);
+        if (s.type === SITE_TOWN) expect(m.buildings.filter(b => b.site === si && b.def === 'tower').length).toBe(4);
+      });
+    }
+    expect(BUILDINGS.gate_h.w).toBe(4);
+    expect(BUILDINGS.gate_v.h).toBe(4);
+    // 村庄能花木材建箭塔
+    const w = game();
+    clear(w);
+    const v = w.sites.find(s => s.type === SITE_VILLAGE)!;
+    give(w, v, 1);
+    w.stock.wood[1] = RULES.economy.towerCost * 4;
+    for (let k = 0; k < 4; k++) expect(w.buildTower(v)).toBe(true);
+    expect(towerCount(w, v)).toBe(4);
+  }, 30000);
+
+  it('敌占的城邦、营寨要先拆毁主建筑才能读秒；中立的不用', () => {
+    const w = game();
+    clear(w);
+    const town = w.sites.find(s => s.type === SITE_TOWN)!;
+    give(w, town, 1);
+    for (const id of town.buildings) w.buildings[id].tower = null;
+    const hall = w.buildings[town.main];
+    for (const u of garrison(w, town, 2, 3, 'yari')) w.hp[u] = w.maxHp[u] = 1e6;
+    run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
+    expect(town.owner).toBe(1);
+    expect(town.cap).toBe(0);
+    w.damageBuilding(hall, 1e9, 0, 1, 2);
+    expect(town.disabled).toBe(true);
+    run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
+    expect(town.owner).toBe(2);
+    expect(hall.alive && hall.hp === hall.maxHp).toBe(true);
+    // 中立营地：主建筑立着也照常占领
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 0) ?? w.sites.find(s => s.type === SITE_VILLAGE && s.owner === 0)!;
+    for (const u of garrison(w, camp, 1, 3, 'yari')) w.hp[u] = w.maxHp[u] = 1e6;
+    run(w, SITE_INFO[camp.type].captureTime + 3);
+    expect(camp.owner).toBe(1);
+  }, 30000);
+
+  it('倒塌的角楼在据点脱离战斗后自行重建，修满之前不放箭；交战时停修', () => {
+    const w = game();
+    clear(w);
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const tower = hq.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
+    w.damageBuilding(tower, 1e9, 0, 1, 2);
+    expect(tower.alive).toBe(false);
+    w.stock.stone[1] = 1e6;
+    // 刚倒塌（挨过打）的据点还在交战
+    run(w, RULES.site.bldCalm - 1);
+    expect(tower.alive).toBe(false);
+    run(w, 3);
+    expect(tower.alive && tower.down).toBe(true);
+    expect(tower.hp).toBeGreaterThan(0);
+    // 敌人走进来：停修；而且重建中的角楼不放箭
+    const foe = w.spawnUnit(idx('yari'), 2, hq.x + (tower.cx - hq.x) * 0.5, hq.y + (tower.cy - hq.y) * 0.5);
+    w.hp[foe] = w.maxHp[foe] = 1e6;
+    w.orderStop([foe], true);
+    for (const id of hq.buildings) if (w.buildings[id] !== tower) w.buildings[id].tower = null;
+    const hp0 = tower.hp;
+    run(w, 5);
+    expect(tower.hp).toBe(hp0);
+    expect(w.hp[foe]).toBe(1e6);
+    w.removeUnit(foe);
+    // 修满后恢复放箭（有石料按 4 倍速）
+    run(w, 1 / (RULES.site.bldRegen * RULES.economy.repairBoost) + 5);
+    expect(tower.hp).toBe(tower.maxHp);
+    expect(tower.down).toBe(false);
+    const foe2 = w.spawnUnit(idx('yari'), 2, tower.cx, tower.cy + 120);
+    w.hp[foe2] = w.maxHp[foe2] = 1e6;
+    w.orderStop([foe2], true);
+    run(w, 4);
+    expect(w.hp[foe2]).toBeLessThan(1e6);
+  }, 60000);
 });

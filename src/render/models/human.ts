@@ -352,7 +352,8 @@ export class Human {
     }
   }
 
-  pose(action: 'idle' | 'walk' | 'run' | 'attack' | 'die' | 'charge' | 'brace' | 'guard' | 'guardWalk', k: number): void {
+  /** @param twist 攻击时上身相对坐骑 / 下身的扭转（弧度，绕竖轴）：骑射手回身射箭 */
+  pose(action: 'idle' | 'walk' | 'run' | 'attack' | 'die' | 'charge' | 'brace' | 'guard' | 'guardWalk', k: number, twist = 0): void {
     const { body, torso, head, L } = this;
     body.rotation.set(0, 0, 0);
     body.position.set(0, 0, 0);
@@ -412,6 +413,11 @@ export class Human {
       this.fore[1].rotation.z = 0.75;
     } else if (action === 'attack') {
       this.attack(k);
+      if (twist) {
+        // 扭腰回身：大半由上身扭过去，头再多转一点；坐骑上身子后仰一些
+        torso.rotation.y += twist;
+        torso.rotation.z += Math.abs(twist) > 2 ? 0.12 : 0.05;
+      }
     } else {
       // 向后倒地
       const f = sm(0, 0.85, k);

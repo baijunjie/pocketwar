@@ -47,6 +47,8 @@ export interface Building {
   extra: boolean;
   owner: number;
   alive: boolean;
+  /** 倒塌后正在自行重建：立起来了但还没修满，不放箭 */
+  down: boolean;
   gate: boolean;
   breach: number;
   climb: number;
@@ -378,7 +380,7 @@ export class World {
       id: this.buildings.length, def, tx, ty, w: def.w, h: def.h,
       x0: tx * TILE, y0: ty * TILE, x1: (tx + def.w) * TILE, y1: (ty + def.h) * TILE,
       cx: (tx + def.w / 2) * TILE, cy: (ty + def.h / 2) * TILE,
-      hp: def.hp, maxHp: def.hp, lv: 0, armor: 0, tower: def.tower, extra: false, owner, alive: true, gate: def.kind === BK_GATE, breach: def.breach, climb: def.top > 0 ? RULES.siege.climbCost : 0, site,
+      hp: def.hp, maxHp: def.hp, lv: 0, armor: 0, tower: def.tower, extra: false, owner, alive: true, down: false, gate: def.kind === BK_GATE, breach: def.breach, climb: def.top > 0 ? RULES.siege.climbCost : 0, site,
       cd: this.rng.next(), style, variant: this.rng.int(0, 3), hitTick: -999,
     };
     this.buildings.push(b);

@@ -645,11 +645,12 @@ describe('城墙与守御', () => {
     run(w, 10);
     expect(w.hp[inside]).toBeCloseTo(50 + w.maxHp[inside] * RULES.site.unitRegen * 10, 0);
     expect(w.hp[outside]).toBe(50);
-    // 刚挨过打的还不修，早就没人打的在修
+    // 据点里有建筑刚挨过打 = 在交战：全城都不修
     expect(main.hp).toBe(main.def.hp * 0.5);
-    expect(house.hp).toBeGreaterThan(house.def.hp * 0.5);
+    expect(house.hp).toBe(house.def.hp * 0.5);
     run(w, RULES.site.bldCalm);
     expect(main.hp).toBeGreaterThan(main.def.hp * 0.5);
+    expect(house.hp).toBeGreaterThan(house.def.hp * 0.5);
   }, 30000);
 });
 
@@ -833,7 +834,7 @@ describe('第六轮反馈', () => {
     expect(leaks).toBe(0);
   }, 30000);
 
-  it('自动攻击：人形单位先打敌兵、没有敌兵再烧建筑，工程类先打建筑；留着能占领的主建筑', () => {
+  it('自动攻击：人形单位先打敌兵、没有敌兵再烧建筑，工程类先打建筑', () => {
     const w = game();
     for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
     const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 2)!;
@@ -856,12 +857,12 @@ describe('第六轮反馈', () => {
     w.order[foe2] = 4;
     run(w, 1);
     expect(w.target[cat]).toBeLessThan(-1);
-    // 敌兵没了：转头烧营里别的建筑，但不动中军帐（留着占领）
+    // 敌兵没了：转头烧营里的建筑（中军帐也烧：敌占营寨要先拆主建筑才能占领）
     w.removeUnit(foe);
-    const rest = blds.filter(b => b !== main && b.def.key !== 'palisade');
+    const rest = blds.filter(b => b.def.key !== 'palisade');
     run(w, 8);
     expect(rest.some(b => !b.alive || b.hp < b.maxHp)).toBe(true);
-    expect(main.alive && main.hp === main.maxHp).toBe(true);
+    void main;
   }, 30000);
 
   it('冲锋一撞至少打掉普通步兵七成的血', () => {

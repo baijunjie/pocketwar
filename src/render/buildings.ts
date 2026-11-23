@@ -199,14 +199,17 @@ function baseGeo(key: string, style: string, variant: number, lv: number): G {
         if (lv) p.push(cyl(3.6, 4, 36, WOOD, -27, 18, 0, 6), cyl(3.6, 4, 36, WOOD, 27, 18, 0, 6), box(64, 2, 12, WOOD, 0, 27, 0), box(64, 5, 1.2, WOOD, 0, 30.5, 6), box(64, 5, 1.2, WOOD, 0, 30.5, -6),
           hip(64, 12, 8, 0x6e4a36, 37, 3), box(50, 2.4, 2.8, IRON, 0, 10, 0), box(50, 2.4, 2.8, IRON, 0, 2.5, 0), box(2.4, 17, 2.8, IRON, 0, 9, 0));
       } else {
-        // 门楼：占满两格见方，与两格厚的城墙齐平；门洞贯通，门扇在正中
-        const D = TILE * 2;
-        p.push(box(15, 40, D, STONE_D, -24.5, 20, 0), box(15, 40, D, STONE_D, 24.5, 20, 0), box(D, 14, D, STONE, 0, 33, 0), ...battlement(D, D, 40, STONE_L, 6, 4.5),
-          box(30, 12, 22, 0xb0483a, 0, 46, 0), hip(30, 22, 9, TILE_GREY, 52, 4),
-          box(34, 26, 3, 0x5a4028, 0, 13, 0), box(34, 2, 3.6, 0x3a3a40, 0, 18, 0), box(34, 2, 3.6, 0x3a3a40, 0, 7, 0), box(1.2, 26, 3.6, 0x3a3a40, 0, 13, 0));
+        // 门楼：四格宽、两格深，与两格厚的城墙齐平；门洞贯通（约 2.4 格宽），两扇门板向内敞开
+        const W = TILE * 4, D = TILE * 2, pier = 24, hole = W - pier * 2;
+        p.push(box(pier, 40, D, STONE_D, -(W - pier) / 2, 20, 0), box(pier, 40, D, STONE_D, (W - pier) / 2, 20, 0), box(W, 14, D, STONE, 0, 33, 0),
+          ...battlement(W, D, 40, STONE_L, 10, 4.5),
+          box(56, 12, 24, 0xb0483a, 0, 46, 0), hip(56, 24, 10, TILE_GREY, 52, 5),
+          box(hole, 2.4, 3.6, 0x3a3a40, 0, 26, 0));
+        for (const sx of [-1, 1]) p.push(box(hole / 2 - 2, 25, 3, 0x5a4028, sx * (hole / 4 + 1), 13, 0), box(hole / 2 - 2, 2, 3.6, 0x3a3a40, sx * (hole / 4 + 1), 18, 0),
+          box(hole / 2 - 2, 2, 3.6, 0x3a3a40, sx * (hole / 4 + 1), 7, 0));
         // 升级：城楼加一层重檐，两侧立旌旗
-        if (lv) p.push(box(46, 10, 34, 0xb0483a, 0, 51, 0), hip(46, 34, 9, TILE_GREY, 56, 5), box(24, 9, 18, 0xb0483a, 0, 67, 0), hip(24, 18, 9, TILE_GREY, 71, 4),
-          ...banner(-26, 28, 62), ...banner(22, 28, 62));
+        if (lv) p.push(box(76, 10, 36, 0xb0483a, 0, 51, 0), hip(76, 36, 9, TILE_GREY, 56, 5), box(40, 9, 20, 0xb0483a, 0, 67, 0), hip(40, 20, 9, TILE_GREY, 71, 4),
+          ...banner(-(W / 2 - 8), 28, 62), ...banner(W / 2 - 12, 28, 62));
       }
       const g = join(...p);
       return key.endsWith('_v') ? g.rotateY(Math.PI / 2) : g;

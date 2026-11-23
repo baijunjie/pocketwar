@@ -172,6 +172,7 @@ export function buildTower(w: World, s: Site): boolean {
     // 原来那座被毁了：在废墟上重建
     b = w.buildings[slot.bld];
     b.alive = true;
+    b.down = false;
     b.hp = b.maxHp;
     b.owner = s.owner;
     b.hitTick = -999;

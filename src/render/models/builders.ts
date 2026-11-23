@@ -4,7 +4,7 @@ import { asset } from '../assets';
 import { ball, box, cone, cyl, join, xf } from '../prims';
 import { Puppet, RigBuilder, UnitModel, skinnedBox } from '../rig';
 import { Human } from './human';
-import { DEFAULT_MOUNT, FootSpec, HorseSpec } from './spec';
+import { DEFAULT_MOUNT, FootSpec, HorseSpec, TWIST_CLIPS } from './spec';
 
 /** 每米对应的世界像素：士兵身高约 1.75 米 */
 export const M = 10;
@@ -97,6 +97,16 @@ export function horse(L: HorseSpec, team: THREE.Color): UnitModel {
     r.pose('attack', k);
     sit();
   });
+  // 弓骑：马照常向前奔，骑手扭身朝侧面、身后放箭
+  if (L.human.weapon === 'bow' || L.human.weapon === 'longbow') {
+    for (const [name, twist] of TWIST_CLIPS) {
+      rb.clip(name, 0.5, (_t, k) => {
+        hp.pose([{ clip: 'Gallop', t: k * 0.58 }]);
+        r.pose('attack', k, twist);
+        sit();
+      });
+    }
+  }
   rb.clip('die', 0.8, (_t, k) => {
     hp.pose([{ clip: 'Death', t: Math.min(0.98, k * 1.05) }]);
     r.pose('die', k);

@@ -56,7 +56,20 @@ export interface GltfSpec {
 }
 export type ModelSpec = FootSpec | HorseSpec | EngineSpec | GltfSpec;
 
+/**
+ * 骑射手边跑边射时骑手上身的扭转（绕竖轴，弧度；正值 = 模型绕 +Y 转，即从行进方向往左手边转）。
+ * 每个角度烘一个「attackMove 名」的动作，渲染层按目标方位挑最接近的那个；没有的退回 attackMove。
+ */
+export const TWIST_CLIPS: [string, number][] = [
+  ['attackMoveL', Math.PI / 2], ['attackMoveR', -Math.PI / 2],
+  ['attackMoveBL', Math.PI * 0.78], ['attackMoveBR', -Math.PI * 0.78],
+];
+
 export const CLIP_FALLBACK: Record<string, string[]> = {
+  attackMoveL: ['attackMove', 'attack', 'idle'],
+  attackMoveR: ['attackMove', 'attack', 'idle'],
+  attackMoveBL: ['attackMove', 'attack', 'idle'],
+  attackMoveBR: ['attackMove', 'attack', 'idle'],
   walk: ['run', 'idle'],
   run: ['walk', 'idle'],
   attack: ['idle'],

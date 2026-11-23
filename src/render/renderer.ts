@@ -14,7 +14,7 @@ import { litMaterial, shared } from './materials';
 import { box, cone, cyl, join } from './prims';
 import { Atlas, Q_AXIS, Q_BILLBOARD, Q_GROUND, Q_SCREEN, Quads, Sprite } from './quads';
 import { Terrain, WATER_Y } from './terrain';
-import { CLIP_FALLBACK, buildUnitModel } from './models/spec';
+import { CLIP_FALLBACK, TWIST_CLIPS, buildUnitModel } from './models/spec';
 import { Clip, clipOf } from './rig';
 import { UnitBatch } from './units';
 
@@ -32,6 +32,8 @@ export interface Marker {
   r: number;
   g: number;
   b: number;
+  /** 插不插令旗 */
+  flag: boolean;
 }
 
 /** 令旗在落点停留的秒数 */
@@ -105,6 +107,8 @@ export class Renderer {
   /** 对局中途搭起来的临时据点共用一张名牌 */
   private readonly outpostLabel: Sprite;
   private readonly star: Sprite;
+  /** 倒塌后重建中、还不能放箭的防御建筑头顶的标记：一支被斜杠划掉的箭 */
+  private readonly noShoot: Sprite;
   private readonly bldGroups = new Map<string, InstGroup>();
   private readonly bldKinds: BldKind[] = [];
   private readonly bldMat: THREE.Material;
@@ -251,10 +255,28 @@ export class Renderer {
       c.fillStyle = '#fff';
       c.fill();
     });
+    this.noShoot = at.add(26, 26, 2, c => {
+      c.beginPath();
+      c.arc(13, 13, 11, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(20,16,12,0.85)';
+      c.fill();
+      c.lineCap = 'round';
+      c.strokeStyle = '#fff';
+      c.lineWidth = 2.2;
+      c.beginPath();
+      c.moveTo(7, 19); c.lineTo(19, 7); c.moveTo(19, 7); c.lineTo(13.5, 8); c.moveTo(19, 7); c.lineTo(18, 12.5);
+      c.stroke();
+      c.strokeStyle = '#ff5a3c';
+      c.lineWidth = 2.6;
+      c.beginPath();
+      c.arc(13, 13, 10, 0, Math.PI * 2);
+      c.moveTo(6, 6); c.lineTo(20, 20);
+      c.stroke();
+    });
     const tex = at.finish();
     this.ground = new Quads(tex, { ground: true });
     this.sprites = new Quads(tex, {}, 4096);
-    this.overlay = new Quads(tex, { overlay: true }, 128);
+    this.overlay = new Quads(tex, { overlay: true }, 256);
     this.raised = new Quads(tex, { lift: true }, 256);
     scene.add(this.ground.mesh, this.sprites.mesh, this.overlay.mesh, this.raised.mesh);
     this.disposables.push(tex, this.ground, this.sprites, this.overlay, this.raised, this.terrain);
@@ -267,7 +289,7 @@ export class Renderer {
         const b = new UnitBatch(buildUnitModel(d.model, this.teamRgb[tm]));
         this.batches[tm][d.idx] = b;
         const set: Record<string, Clip> = {};
-        for (const name of ['idle', 'walk', 'run', 'attack', 'attackMove', 'die', 'charge', 'brace', 'guard', 'guardWalk']) {
+        for (const name of ['idle', 'walk', 'run', 'attack', 'attackMove', 'die', 'charge', 'brace', 'guard', 'guardWalk', ...TWIST_CLIPS.map(t => t[0])]) {
           set[name] = clipOf(b.model, name, CLIP_FALLBACK);
         }
         this.clips[tm][d.idx] = set;
@@ -466,6 +488,27 @@ export class Renderer {
   }
 
   /** 贴地标记：在桥面、墙顶上改用做深度测试的那一层，免得被模型盖住 */
+  /** 边跑边打的动作：骑射手按目标在马头的哪一侧挑骑手扭身的角度（模型绕 +Y 转 a = 模拟里的方位角减 a） */
+  private moveShot(i: number, cl: Record<string, Clip>): Clip {
+    const w = this.world, t = w.target[i];
+    let tx: number, ty: number;
+    if (t >= 0) { tx = w.x[t]; ty = w.y[t]; }
+    else if (t < -1 && w.buildings[-t - 2]) { const b = w.buildings[-t - 2]; tx = b.cx; ty = b.cy; }
+    else return cl.attackMove;
+    let rel = Math.atan2(ty - w.y[i], tx - w.x[i]) - w.dir[i];
+    rel -= Math.round(rel / (Math.PI * 2)) * Math.PI * 2;
+    const want = -rel;
+    let best = cl.attackMove, gap = Math.abs(want);
+    for (const [name, a] of TWIST_CLIPS) {
+      const g = Math.abs(want - a);
+      if (g < gap && cl[name]) {
+        gap = g;
+        best = cl[name];
+      }
+    }
+    return best;
+  }
+
   private flat(s: Sprite, x: number, y: number, z: number, w: number, h: number, r: number, g: number, b: number, a: number): void {
     const map = this.world.map;
     const tx = (x / TILE) | 0, tz = (z / TILE) | 0;
@@ -554,8 +597,9 @@ export class Renderer {
     c.y = Math.max(0, Math.min(w.H, c.y));
   }
 
-  addMarker(x: number, y: number, r: number, g: number, b: number): void {
-    this.markers.push({ x, y, t: 0, r, g, b });
+  /** @param flag 是否插令旗：集结点本身就有一面常驻的旗，再插一面就成了两面 */
+  addMarker(x: number, y: number, r: number, g: number, b: number, flag = true): void {
+    this.markers.push({ x, y, t: 0, r, g, b, flag });
   }
 
   private spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, size: number, grow: number,
@@ -899,6 +943,11 @@ export class Renderer {
         O.add(Q_SCREEN, white, s.x, ly, s.y, 34 * s.cap, 2.4, cc[0], cc[1], cc[2], 1, 0.5 / s.cap, -1.2);
       }
     }
+    // 倒塌后正在重建、修满之前不放箭的防御建筑：头顶一个禁射标记
+    for (const b of w.buildings) {
+      if (!b.down || !b.alive || !b.tower || !(this.bldSig[b.id] & 2) || !this.inView(b.cx, b.cy)) continue;
+      O.add(Q_SCREEN, this.noShoot, b.cx, gy(b.cx, b.cy) + b.def.tall + 16, b.cy, 28, 28, 1, 1, 1, 0.95, 0.5, 0.5);
+    }
     // 已下令、还没搭起来的临时据点：工地上一圈跳动的黄环
     for (const p of w.builds) {
       if (p.team !== human || !this.inView(p.x, p.y)) continue;
@@ -972,7 +1021,7 @@ export class Renderer {
       const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
       let clip: Clip, ph: number;
       if (aa > 0) {
-        clip = sp2 > 900 ? cl.attackMove : cl.attack;
+        clip = sp2 > 900 ? this.moveShot(i, cl) : cl.attack;
         ph = 1 - aa / 0.3;
       } else if (sp2 > 30) {
         // 走还是跑看实际速度；步幅与行进距离挂钩，脚下不打滑
@@ -1123,7 +1172,7 @@ export class Renderer {
         this.flat(ring, mk.x, y, mk.y, sz * 0.9, sz * 0.9, mk.r, mk.g, mk.b, (1 - rt) * 0.8);
       }
       this.flat(ring, mk.x, y, mk.y, 16 * zoomK, 16 * zoomK, mk.r, mk.g, mk.b, 0.7 * Math.min(1, (MARKER_LIFE - mk.t) / 0.4));
-      if (ncf < MAX_CMD_FLAGS) {
+      if (mk.flag && ncf < MAX_CMD_FLAGS) {
         // 插下去时弹一下，收起时缩回地里
         const pop = mk.t < 0.18 ? mk.t / 0.18 * 1.15 : mk.t < 0.26 ? 1.15 - (mk.t - 0.18) / 0.08 * 0.15 : Math.min(1, (MARKER_LIFE - mk.t) / 0.3);
         const sc = pop * zoomK * 1.25;

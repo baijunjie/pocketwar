@@ -319,7 +319,7 @@ export function updateProjectiles(w: World): void {
 export function updateTowers(w: World): void {
   for (const b of w.armed) {
     const tw = b.tower;
-    if (!tw || !b.alive || b.owner === 0) continue;
+    if (!tw || !b.alive || b.down || b.owner === 0) continue;
     b.cd -= DT;
     if (b.cd > 0) continue;
     const e = w.findEnemy(b.cx, b.cy, b.owner, tw.range, 0);

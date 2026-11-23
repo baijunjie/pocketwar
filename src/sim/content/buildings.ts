@@ -10,8 +10,9 @@ function bld(key: string, name: string, kind: number, w: number, h: number, hp: 
 }
 // 城墙两格厚（地图上铺两圈），墙顶与角楼顶可以站人
 bld('wall', '城墙', BK_WALL, 1, 1, 1400, 4, 14, 2500, 22, false, null, 26);
-bld('gate_h', '门楼', BK_GATE, 2, 2, 2400, 4, 14, 450, 40, false, { range: 270, dmg: 20, cd: 1 });
-bld('gate_v', '门楼', BK_GATE, 2, 2, 2400, 4, 14, 450, 40, false, { range: 270, dmg: 20, cd: 1 });
+// 石城门四格宽（大部队进出不至于挤成一路），两格深与城墙齐平
+bld('gate_h', '门楼', BK_GATE, 4, 2, 2400, 4, 14, 450, 40, false, { range: 270, dmg: 20, cd: 1 });
+bld('gate_v', '门楼', BK_GATE, 2, 4, 2400, 4, 14, 450, 40, false, { range: 270, dmg: 20, cd: 1 });
 bld('tower', '角楼', BK_TOWER, 2, 2, 2400, 4, 14, 900, 46, false, { range: 290, dmg: 24, cd: 0.9 }, 40);
 bld('keep', '主堡', BK_KEEP, 4, 4, 9000, 5, 15, 900, 84, false, { range: 310, dmg: 30, cd: 0.6 });
 bld('citadel', '内城', BK_MAIN, 4, 4, 6000, 5, 15, 900, 70, false, { range: 300, dmg: 26, cd: 0.7 });

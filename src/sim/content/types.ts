@@ -417,4 +417,6 @@ export interface SiteInfo {
   counts: boolean;
   /** 可以建几座箭塔；有敌方箭塔立着时不能占领 */
   towerSlots: number;
+  /** 敌占时要先拆毁主建筑才能读秒（主建筑倒了据点即成废墟） */
+  razeFirst: boolean;
 }

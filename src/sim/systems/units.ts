@@ -557,6 +557,9 @@ export function updateUnits(w: World): void {
       if (nvx > 6) w.facing[i] = 1;
       else if (nvx < -6) w.facing[i] = -1;
       if (nvx * nvx + nvy * nvy > 64) aim = Math.atan2(nvy, nvx);
+    } else if (d.traits & TR_FIREMOVE && nvx * nvx + nvy * nvy > 400) {
+      // 骑射边跑边射：马头始终朝着跑的方向，骑手回身放箭（转身由渲染层表现）
+      aim = Math.atan2(nvy, nvx);
     }
     let turn = aim - w.dir[i];
     if (turn > Math.PI) turn -= Math.PI * 2;

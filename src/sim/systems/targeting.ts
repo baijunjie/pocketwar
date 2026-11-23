@@ -111,7 +111,8 @@ export function findBuilding(w: World, i: number, ux: number, uy: number, tm: nu
       if (b.owner !== foe || !b.alive || b.def.kind === BK_WALL || (b.def.fort && !d.siege)) continue;
       if (!b.tower) {
         const s = sites[b.site];
-        if (s && s.main === k && SITE_INFO[s.type].captureTime > 0) continue;
+        // 资源点不放箭的主建筑留着占领；城邦、营寨的主建筑要先拆掉才能占领（razeFirst）
+        if (s && s.main === k && SITE_INFO[s.type].captureTime > 0 && !SITE_INFO[s.type].razeFirst) continue;
       }
       const px = ux < b.x0 ? b.x0 : ux > b.x1 ? b.x1 : ux, py = uy < b.y0 ? b.y0 : uy > b.y1 ? b.y1 : uy;
       const d2 = (px - ux) * (px - ux) + (py - uy) * (py - uy);

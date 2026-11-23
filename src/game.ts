@@ -645,7 +645,7 @@ export class GameApp {
     } else if (this.mode === 'rally') {
       const w = this.world;
       w.rally[w.humanTeam] = { x, y };
-      this.renderer.addMarker(x, y, 1, 0.9, 0.3);
+      this.renderer.addMarker(x, y, 1, 0.9, 0.3, false);
     }
     this.setMode('');
   }
