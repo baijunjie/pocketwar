@@ -5,7 +5,7 @@ import {
 } from '../src/sim/defs';
 import { generateMap } from '../src/sim/map';
 import { createGame } from '../src/sim/setup';
-import { damageUnit } from '../src/sim/systems/combat';
+import { damageUnit, spawnProj, windRangeMul } from '../src/sim/systems/combat';
 import { outpostCount, towerCount, unitUpgradeCost, upgradeAllCost, upgradeQueue } from '../src/sim/systems/economy';
 import { S_TORCH, Site, World } from '../src/sim/world';
 import { flatWorld, run } from './helpers';
@@ -607,4 +607,69 @@ describe('风', () => {
     expect(windyDry / dry).toBeLessThan(0.6);
     expect(calmZero).toBe(true);
   }, 120000);
+});
+
+describe('风与远程', () => {
+  const windy = (w: World, dir: number, force: number): void => {
+    w.env.enabled = true;
+    w.env.nextWeather = w.env.nextWind = 1e9;
+    w.env.windy = force > 0;
+    w.env.wind = w.env.windTarget = force;
+    w.env.windDir = dir;
+  };
+
+  it('顺风射得远、顶风射得近，侧风不变', () => {
+    const w = flatWorld();
+    windy(w, 0, 1);
+    const K = RULES.env.windRange;
+    expect(windRangeMul(w, 1, 0)).toBeCloseTo(1 + K, 5);
+    expect(windRangeMul(w, -1, 0)).toBeCloseTo(1 - K, 5);
+    expect(windRangeMul(w, 0, 1)).toBeCloseTo(1, 5);
+    // 坚守的弩手：射程外一点点的敌人，顺风一侧够得着，顶风一侧够不着
+    const R = UNIT_BY_KEY.nu.range;
+    const shoot = (side: number): number => {
+      const v = flatWorld();
+      windy(v, 0, 1);
+      const a = v.spawnUnit(idx('nu'), 1, C, C);
+      v.orderStop([a], true);
+      const e = v.spawnUnit(idx('yari'), 2, C + side * (R * (1 + K / 2) + 10), C);
+      v.hp[e] = v.maxHp[e] = 1e6;
+      v.orderStop([e], true);
+      run(v, 6);
+      return 1e6 - v.hp[e];
+    };
+    expect(shoot(1)).toBeGreaterThan(0);
+    expect(shoot(-1)).toBe(0);
+  }, 30000);
+
+  it('侧风让箭落空，器械落点顺风偏；无风时箭必中', () => {
+    const fire = (force: number, dir: number): number => {
+      const w = flatWorld();
+      windy(w, dir, force);
+      const e = w.spawnUnit(idx('yari'), 2, C + RULES.env.windMissDist, C);
+      let miss = 0;
+      for (let k = 0; k < 400; k++) {
+        w.pn = 0;
+        spawnProj(w, C, C, e, w.x[e], w.y[e], 0, 5, 1, 0, 0, -1, 1, -1);
+        miss += w.pMiss[0];
+      }
+      return miss / 400;
+    };
+    expect(fire(0, 0)).toBe(0);
+    const cross = fire(1, Math.PI / 2), tail = fire(1, 0);
+    expect(cross).toBeGreaterThan(RULES.env.windMiss * 0.75);
+    expect(cross).toBeLessThan(RULES.env.windMiss * 1.25);
+    expect(tail).toBe(0);
+    // 投石：落点往下风（+y）偏
+    const w = flatWorld();
+    windy(w, Math.PI / 2, 1);
+    const e = w.spawnUnit(idx('yari'), 2, C + 400, C);
+    let sum = 0;
+    for (let k = 0; k < 50; k++) {
+      w.pn = 0;
+      spawnProj(w, C, C, e, w.x[e], w.y[e], 4, 30, 2, 40, 0, -1, 1, -1);
+      sum += w.pTy[0] - C;
+    }
+    expect(sum / 50).toBeGreaterThan(400 * RULES.env.windDrift * 0.7);
+  }, 30000);
 });

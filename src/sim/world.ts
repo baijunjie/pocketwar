@@ -280,6 +280,8 @@ export class World {
   readonly pTgtUid = new Uint32Array(MAX_PROJ);
   readonly pSrc = new Int32Array(MAX_PROJ);
   readonly pSrcUid = new Uint32Array(MAX_PROJ);
+  /** 被风吹偏、注定落空的箭（不追踪目标、不造成伤害） */
+  readonly pMiss = new Uint8Array(MAX_PROJ);
 
   // ---- 尸体（环形缓冲，仅供渲染） ----
   corpseN = 0;

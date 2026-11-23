@@ -36,6 +36,9 @@ export interface Marker {
   flag: boolean;
 }
 
+/** 有风时箭的弯曲程度：中途横向鼓出 射程 × 这个比例 × 风力 */
+const WIND_BEND = 0.12;
+
 /** 令旗在落点停留的秒数 */
 const MARKER_LIFE = 2.4;
 const MAX_CMD_FLAGS = 24;
@@ -1099,18 +1102,25 @@ export class Renderer {
     }
 
     // ---------------- 投射物 ----------------
+    const windOn = w.env.wind > 0, windX = Math.cos(w.env.windDir), windZ = Math.sin(w.env.windDir);
     for (let p = 0; p < w.pn; p++) {
       const t = Math.min(1, (w.pT[p] + alpha * DT) / w.pDur[p]);
       const sx = w.pSx[p], sz = w.pSy[p], dx = w.pTx[p] - sx, dz = w.pTy[p] - sz;
-      const x = sx + dx * t, z = sz + dz * t;
+      // 有风时轻的投射物（箭、弩、标枪、火箭）半路被吹弯：中途顺风鼓出去一截，落点不变
+      const type0 = w.pType[p];
+      const bend = windOn && type0 !== P_STONE && type0 !== P_BALL && type0 !== P_BULLET && type0 !== P_TORCH
+        ? Math.sqrt(dx * dx + dz * dz) * WIND_BEND * w.env.wind : 0;
+      const bt = 4 * t * (1 - t);
+      const x = sx + dx * t + windX * bend * bt, z = sz + dz * t + windZ * bend * bt;
       if (!this.inView(x, z)) continue;
       if (fog && !vis[((z / VIS_CELL) | 0) * vw + ((x / VIS_CELL) | 0)]) continue;
       const type = w.pType[p];
       const len = Math.sqrt(dx * dx + dz * dz) || 1;
       const arc = PROJ_ARC[type] * len;
       const y = gy(x, z) + arc * 4 * t * (1 - t) + 11;
-      // 切线方向
-      const ax = dx, ay = arc * 4 * (1 - 2 * t), az = dz;
+      // 切线方向（含被风吹弯的那部分）
+      const bd = bend * 4 * (1 - 2 * t);
+      const ax = dx + windX * bd, ay = arc * 4 * (1 - 2 * t), az = dz + windZ * bd;
       if (type === P_TORCH) {
         S.add(Q_BILLBOARD, soft, x, y, z, 9, 11, 1, 0.5, 0.12, 0.9);
         S.add(Q_BILLBOARD, soft, x, y, z, 4.5, 6, 1, 0.9, 0.55, 1);

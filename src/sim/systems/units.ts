@@ -6,7 +6,7 @@ import { A_MELEE, A_PIERCE, DT, RULES, SIZES, TERRAIN_SPEED, TICK_RATE, TILE, TR
 import { DIRX, DIRY } from '../nav';
 import { FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
 import type { World } from '../world';
-import { attack, damageUnit, spawnProj } from './combat';
+import { attack, damageUnit, spawnProj, windRangeMul } from './combat';
 import { orderAttackUnit, orderMove } from './orders';
 import { P_NONE, P_POSTED, stepPost } from './garrison';
 import { SLOT, marchSlot } from './march';
@@ -35,6 +35,8 @@ export function updateUnits(w: World): void {
   const LEASH2 = C.leash * C.leash;
   const rainMul = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
   // 风：顺风快、顶风慢，按行进方向在风向上的投影算
+  // 顺风时远程最远能射到射程的几倍（索敌按这个找，出手前再按实际方向核对）
+  const windMax = 1 + RULES.env.windRange * w.env.wind;
   const windK = w.env.wind * RULES.env.windSpeed, windX = Math.cos(w.env.windDir), windY = Math.sin(w.env.windDir);
   const canTorch = w.env.night && !w.env.raining && !w.env.snowing;
   const mc = RULES.morale.cell, mcw = w.mw, mch = w.mh;
@@ -156,7 +158,7 @@ export function updateUnits(w: World): void {
         // 近战的不出据点，只打进了据点的敌人；挨了敌方远程的打才出击追打那个射手
         const guard = ord === O_IDLE && w.sheltered[i] === 1;
         const prov = guard && melee ? provoker(w, i, tm, TICK_RATE * SITE.provoke) : NONE;
-        let acqR = ord === O_HOLD ? (melee ? 44 : d.range * (onWall ? SG.wallRange : hill)) : d.acq * hill;
+        let acqR = ord === O_HOLD ? (melee ? 44 : d.range * (onWall ? SG.wallRange : hill) * windMax) : d.acq * hill;
         // 攻击移动：看见了就打，不等敌人走进平时的索敌距离
         if (ord === O_AMOVE && d.alert > acqR) acqR = d.alert;
         if (guard && !melee && SITE.alarm > acqR) acqR = SITE.alarm;
@@ -270,7 +272,7 @@ export function updateUnits(w: World): void {
         const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
         const edge = dist - tr - d.radius;
         const reach = tgt < 0 && d.humanoid ? SG.torchRange
-          : d.range > 0 ? d.range * (onWall ? SG.wallRange : tt === T_HILL ? 1.12 : 1) : 7;
+          : d.range > 0 ? d.range * (onWall ? SG.wallRange : tt === T_HILL ? 1.12 : 1) * windRangeMul(w, dx, dy) : 7;
         if (edge <= reach) {
           if (d.minRange > 0 && dist < d.minRange) {
             // 器械无法攻击贴身目标

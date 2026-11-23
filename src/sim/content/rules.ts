@@ -208,6 +208,17 @@ export const RULES = {
     windLength: [60, 160],
     windForce: [0.4, 1],
     windSpeed: 0.15,
+    /** 远程：顺风射程最多长 windRange（正顶风短同样多，侧风不变），都要乘风力 */
+    windRange: 0.15,
+    /**
+     * 直射的箭、弩、标枪不再必中：落空的概率 = 风力 × 距离系数（windMissDist 处为 1）×
+     * （windMiss × 侧风分量 + windHeadMiss × 顶风分量）。落空的箭顺风偏到目标旁边。
+     */
+    windMiss: 0.45,
+    windHeadMiss: 0.12,
+    windMissDist: 320,
+    /** 抛射器械（投石、火炮等）的落点顺风偏移：每飞 100 像素偏 windDrift × 100 × 风力 */
+    windDrift: 0.08,
   },
   supply: {
     /** 开局存粮够全军吃几分钟 */

@@ -234,11 +234,36 @@ export function spawnProj(w: World, sx: number, sy: number, tgt: number, tx: num
   atk: number, splash: number, pen: number, defIdx: number, tm: number, src: number): void {
   if (w.pn >= MAX_PROJ) return;
   const p = w.pn++;
+  const env = w.env, E = RULES.env, wind = env.wind;
+  let miss = 0;
   if (splash > 0 && tgt >= 0) {
     // 抛射武器打预判落点，带散布
     const lead = Math.hypot(tx - sx, ty - sy) / PROJ_SPEED[ptype];
     tx += w.vx[tgt] * lead * 0.7 + (w.rng.next() - 0.5) * splash * 0.9;
     ty += w.vy[tgt] * lead * 0.7 + (w.rng.next() - 0.5) * splash * 0.9;
+  }
+  if (wind > 0) {
+    const wx = Math.cos(env.windDir), wy = Math.sin(env.windDir);
+    const dx = tx - sx, dy = ty - sy, dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    if (splash > 0) {
+      // 器械的落点整体顺风偏
+      tx += wx * wind * E.windDrift * dist;
+      ty += wy * wind * E.windDrift * dist;
+    } else if (tgt >= 0 && atk !== A_FIRE) {
+      // 直射的箭：侧风、顶风会让它偏出去落空
+      const ux = dx / dist, uy = dy / dist;
+      const along = ux * wx + uy * wy, cross = ux * wy - uy * wx;
+      const p = wind * Math.min(1, dist / E.windMissDist) * (E.windMiss * Math.abs(cross) + E.windHeadMiss * Math.max(0, -along));
+      if (w.rng.next() < p) {
+        miss = 1;
+        // 偏到目标的下风侧（垂直于弹道的那一侧），离目标足够远
+        // 弹道的法向 n = (−uy, ux)；风在 n 上的分量是 −cross，往那一侧偏（正顶风时随机一侧）
+        const c = -cross, side = c > 0.05 ? 1 : c < -0.05 ? -1 : w.rng.next() < 0.5 ? 1 : -1;
+        const off = 18 + 26 * wind + w.rng.next() * 14;
+        tx += -uy * side * off + wx * off * 0.3;
+        ty += ux * side * off + wy * off * 0.3;
+      }
+    }
   }
   w.pType[p] = ptype;
   w.pSx[p] = sx;
@@ -257,6 +282,16 @@ export function spawnProj(w: World, sx: number, sy: number, tgt: number, tx: num
   w.pTgtUid[p] = tgt >= 0 ? w.uid[tgt] : 0;
   w.pSrc[p] = src;
   w.pSrcUid[p] = src >= 0 ? w.uid[src] : 0;
+  w.pMiss[p] = miss;
+}
+
+/** 风对射程的影响：沿 (dx, dy) 方向射击时的射程倍率 */
+export function windRangeMul(w: World, dx: number, dy: number): number {
+  const wind = w.env.wind;
+  if (wind <= 0) return 1;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d < 1e-6) return 1;
+  return 1 + RULES.env.windRange * wind * (dx * Math.cos(w.env.windDir) + dy * Math.sin(w.env.windDir)) / d;
 }
 
 export function updateProjectiles(w: World): void {
@@ -265,7 +300,8 @@ export function updateProjectiles(w: World): void {
     const tgt = w.pTgt[p];
     const splash = w.pSplash[p];
     const live = tgt >= 0 && w.alive[tgt] === 1 && w.uid[tgt] === w.pTgtUid[p];
-    if (live && splash === 0) {
+    const miss = w.pMiss[p] === 1;
+    if (live && splash === 0 && !miss) {
       // 直射武器追踪目标
       w.pTx[p] = w.x[tgt];
       w.pTy[p] = w.y[tgt];
@@ -287,7 +323,7 @@ export function updateProjectiles(w: World): void {
     } else if (splash > 0) {
       splashDamage(w, ix, iy, splash, w.pDmg[p], w.pAtk[p], w.pPen[p], ad, tm, src, true);
       w.addFx(FX_EXPLODE, ix, iy, splash);
-    } else if (live) {
+    } else if (live && !miss) {
       damageUnit(w, tgt, w.pDmg[p], w.pAtk[p], w.pPen[p], ad.vs, tm, src);
     }
     // 删除：末尾元素补位
@@ -310,6 +346,7 @@ export function updateProjectiles(w: World): void {
       w.pTgtUid[p] = w.pTgtUid[q];
       w.pSrc[p] = w.pSrc[q];
       w.pSrcUid[p] = w.pSrcUid[q];
+      w.pMiss[p] = w.pMiss[q];
     }
     p--;
   }
@@ -322,7 +359,13 @@ export function updateTowers(w: World): void {
     if (!tw || !b.alive || b.down || b.owner === 0) continue;
     b.cd -= DT;
     if (b.cd > 0) continue;
-    const e = w.findEnemy(b.cx, b.cy, b.owner, tw.range, 0);
+    // 顺风射得远、顶风射得近：先按最远的可能找，再按那个方向的实际射程核对
+    const maxR = tw.range * (1 + RULES.env.windRange * w.env.wind);
+    let e = w.findEnemy(b.cx, b.cy, b.owner, maxR, 0);
+    if (e !== NONE) {
+      const dx = w.x[e] - b.cx, dy = w.y[e] - b.cy;
+      if (dx * dx + dy * dy > (tw.range * windRangeMul(w, dx, dy)) ** 2) e = NONE;
+    }
     if (e === NONE) {
       b.cd = 0.4;
       continue;
