@@ -349,7 +349,11 @@ export function updateUnits(w: World): void {
                 // 瞄准位置前方一小段：到位后正好与领队同速，落后了就跑步追
                 const ex = px + SLOT.hx * g.v * 0.4 - ux, ey = py + SLOT.hy * g.v * 0.4 - uy;
                 const ed = Math.sqrt(ex * ex + ey * ey);
-                if (ed > 0.5) {
+                // 位置在自己身后（变阵收窄后排到了更后面）：原地站着等它走过来，不往回跑
+                const behind = (px - ux) * SLOT.hx + (py - uy) * SLOT.hy < -RULES.march.waitAhead;
+                if (behind) {
+                  wx = wy = 0;
+                } else if (ed > 0.5) {
                   let v = ed / 0.4;
                   if (v > run) v = run;
                   wx = (ex / ed) * v;

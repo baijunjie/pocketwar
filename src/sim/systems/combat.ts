@@ -74,6 +74,8 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
     // 城墙上有垛口掩护
     if (w.state[j] & S_WALL) dmg *= RULES.siege.wallCover;
   }
+  // 等级的防御加成
+  if (lv > 0) dmg /= 1 + LEVELS.def * lv;
   if (dmg < 1) dmg = 1;
   w.hp[j] -= dmg;
   w.flash[j] = 0.12;

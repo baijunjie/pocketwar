@@ -14,14 +14,12 @@ const C = (120 * TILE) / 2;
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;
 
 describe('兵种定义', () => {
-  it('体型越大越慢，行军比奔跑慢，等级只加生命与攻防', () => {
+  it('体型越大越慢，行军比奔跑慢；5 级攻击 ×3', () => {
     for (const d of UNITS) {
       expect(d.speed).toBe(Math.round(d.pace * SIZES[d.size].speedMul));
       expect(d.walk).toBeLessThanOrEqual(d.speed);
       expect(d.lvHp.length).toBe(LEVELS.thresholds.length);
-      expect(d.lvHp[4]).toBeGreaterThan(d.lvHp[0]);
-      expect(d.lvDmg[4]).toBeGreaterThan(d.lvDmg[0]);
-      expect(d.lvCd[4]).toBeLessThan(d.lvCd[0]);
+      expect(d.lvDmg[4]).toBeCloseTo(d.lvDmg[0] * 3, 5);
       expect(d.lvRout[4]).toBeLessThan(0);
     }
     for (let i = 1; i < SIZES.length; i++) expect(SIZES[i].speedMul).toBeLessThan(SIZES[i - 1].speedMul);
@@ -140,7 +138,7 @@ describe('特殊动作', () => {
 });
 
 describe('经验与升级', () => {
-  it('击杀得经验并升级，助攻次之；升级加生命和攻防', () => {
+  it('击杀得经验并升级，助攻次之；升级加攻防', () => {
     const w = flatWorld();
     const a = w.spawnGroup(1, [idx('samurai'), idx('samurai')], C, C, 1, 0);
     const victims = w.spawnGroup(2, Array(30).fill(idx('kamandar')), C + 20, C, -1, 0);
@@ -154,7 +152,14 @@ describe('经验与升级', () => {
     const d = UNIT_BY_KEY.samurai;
     expect(w.maxHp[best]).toBeCloseTo(1e5 + d.lvHp[w.level[best]] - d.lvHp[0], 0);
     expect(d.lvDmg[w.level[best]]).toBeGreaterThan(d.dmg);
-    expect(d.lvArmM[w.level[best]]).toBeGreaterThan(d.armM);
+    // 防御：同样一击，等级越高掉血越少（5 级是 1/3）
+    const v = flatWorld();
+    const lo = v.spawnUnit(idx('samurai'), 1, C, C), hi = v.spawnUnit(idx('samurai'), 1, C + 40, C);
+    v.level[hi] = 4;
+    v.hp[lo] = v.hp[hi] = 1e4;
+    damageUnit(v, lo, 300, 0, 0, UNIT_BY_KEY.dao.vs, 2, -1);
+    damageUnit(v, hi, 300, 0, 0, UNIT_BY_KEY.dao.vs, 2, -1);
+    expect((1e4 - v.hp[hi]) / (1e4 - v.hp[lo])).toBeCloseTo(1 / 3, 2);
     // 两人打同一批敌人：都有经验入账
     expect(Math.min(...xp)).toBeGreaterThan(0);
   });
@@ -794,9 +799,11 @@ describe('第六轮反馈', () => {
     const m = w.marches[w.grp[g[0]]];
     const full = m.width, depth0 = m.depth;
     expect(full).toBeGreaterThan(4 * TILE);
-    let inValley = 0, left = 0, minW = full, maxLag = 0;
+    let inValley = 0, left = 0, minW = full, maxLag = 0, back = 0;
     for (let t = 0; t < 30 * 120 && !m.arrived; t++) {
       w.tick();
+      // 变阵收窄时：跟着队列的人不往回跑（沿行进方向的速度不为负），位置在身后就原地等
+      if (t > 30 * 3) for (const s of g) if (w.grp[s] >= 0 && w.vx[s] * m.hx + w.vy[s] * m.hy < -15) back++;
       // 领队走在谷里的那一段：没有人掉出编队去各自寻路，队列也都跟得上
       if (m.x > 56 * TILE && m.x < 78 * TILE) {
         inValley++;
@@ -805,6 +812,7 @@ describe('第六轮反馈', () => {
         maxLag = Math.max(maxLag, m.lag);
       }
     }
+    expect(back).toBe(0);
     expect(inValley).toBeGreaterThan(100);
     expect(left).toBe(0);
     expect(minW).toBeLessThanOrEqual(4 * TILE);

@@ -251,6 +251,8 @@ export interface LevelRules {
   /** 每升一级的加成 */
   hp: number;
   dmg: number;
+  /** 防御：受到的伤害除以 1 + def × 级数 */
+  def: number;
   armor: number;
   cd: number;
   /** 各级的溃逃士气阈值，负数 = 死战 */
@@ -388,6 +390,8 @@ export const SITE_HQ = 0, SITE_CITY = 1, SITE_TOWN = 2, SITE_CAMP = 3, SITE_VILL
 export type ResKind = 'wood' | 'stone' | 'gold';
 export const RES_KINDS: ResKind[] = ['wood', 'stone', 'gold'];
 export const RES_NAMES: Record<ResKind, string> = { wood: '木材', stone: '石料', gold: '黄金' };
+/** 界面上的单字简称 */
+export const RES_SHORT: Record<ResKind, string> = { wood: '木', stone: '石', gold: '金' };
 export interface SiteInfo {
   label: string;
   /** 占领圈半径（像素） */

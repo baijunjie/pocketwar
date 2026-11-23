@@ -1,6 +1,6 @@
 /** 游戏内界面：顶栏、据点与援军、选中面板、指令按钮、战报、帮助与结算 */
 import {
-  CLASS_NAMES, ELITE, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_HQ, SITE_INFO, SIZES, UNITS,
+  CLASS_NAMES, ELITE, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RES_SHORT, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_HQ, SITE_INFO, SIZES, UNITS,
   UnitDef,
 } from '../sim/defs';
 import { canUpgradeSite, towerCount, unitUpgradeCost } from '../sim/systems/economy';
@@ -318,7 +318,7 @@ export class Hud {
       gold: `把部队升为高级形态（每份口粮 ${RULES.economy.unitGold}）`,
     };
     this.resBox.innerHTML = RES_KINDS.map(k => `<span class="r-${k}" title="${RES_NAMES[k]}：每分钟 +${Math.round(w.income[k][human])}\n${use[k]}">`
-      + `${RES_NAMES[k][0]} <b>${Math.floor(w.stock[k][human])}</b></span>`).join('');
+      + `${RES_SHORT[k]} <b>${Math.floor(w.stock[k][human])}</b></span>`).join('');
     // 粮草
     if (w.upkeep0[human] > 0) {
       const net = w.foodIn[human] - w.foodOut[human];
@@ -345,8 +345,9 @@ export class Hud {
       const c = css(this.teamRgb[s.owner]);
       if (info.category === 'resource') {
         const towers = towerCount(w, s);
+        const short = info.yields ? RES_SHORT[Object.keys(info.yields)[0] as ResKind] : info.provides[0];
         chips += `<span class="chip${s.disabled ? ' off' : ''}" data-id="${s.id}" style="--c:${s.disabled ? '#555' : c}" title="${s.name}：${s.disabled ? '废墟' : s.owner === human ? '我方' : s.owner ? '敌占' : '中立'}`
-          + `${towers ? `，箭塔 ${towers}` : ''}">${info.provides[0]}${towers ? `<i>${towers}</i>` : ''}`
+          + `${towers ? `，箭塔 ${towers}` : ''}">${short}${towers ? `<i>${towers}</i>` : ''}`
           + `${s.cap > 0 && s.capTeam ? `<u style="width:${Math.round(s.cap * 100)}%;background:${css(this.teamRgb[s.capTeam])}"></u>` : ''}</span>`;
         continue;
       }
@@ -463,7 +464,7 @@ export class Hud {
     const key = `one:${s}:${w.uid[s]}:${lv}:${Math.round(w.hp[s])}:${Math.round(w.xp[s])}:${Math.round(w.morale[s])}:${st}`;
     if (key === this.selKey) return;
     this.selKey = key;
-    const pct = (v: number): string => (lv > 0 ? ` <i>+${Math.round(v * lv * 100)}%</i>` : '');
+    const pct = (v: number): string => (lv > 0 && v ? ` <i>+${Math.round(v * lv * 100)}%</i>` : '');
     const num = (v: number): string => String(Math.round(v * 10) / 10);
     const next = lv + 1 < max ? LEVELS.thresholds[lv + 1] : 0;
     const base = LEVELS.thresholds[lv];
@@ -500,9 +501,10 @@ export class Hud {
           <div class="grid">
             <span>生命</span><b>${Math.round(w.hp[s])} / ${Math.round(w.maxHp[s])}${pct(LEVELS.hp)}</b>
             <span>攻击</span><b>${num(d.lvDmg[lv])}${d.splash ? '（范围）' : ''}${pct(LEVELS.dmg)}</b>
-            <span>间隔</span><b>${num(d.lvCd[lv])} 秒${lv > 0 ? ` <i>−${Math.round(LEVELS.cd * lv * 100)}%</i>` : ''}</b>
+            <span>间隔</span><b>${num(d.lvCd[lv])} 秒${lv > 0 && LEVELS.cd ? ` <i>−${Math.round(LEVELS.cd * lv * 100)}%</i>` : ''}</b>
             <span>射程</span><b>${d.range ? d.range : '近战'}</b>
-            <span>护甲</span><b>近 ${num(d.lvArmM[lv])} · 远 ${num(d.lvArmP[lv])}${lv > 0 ? ` <i>+${num(LEVELS.armor * lv)}</i>` : ''}</b>
+            <span>护甲</span><b>近 ${num(d.lvArmM[lv])} · 远 ${num(d.lvArmP[lv])}${lv > 0 && LEVELS.armor ? ` <i>+${num(LEVELS.armor * lv)}</i>` : ''}</b>
+            <span>防御</span><b>×${num(1 + LEVELS.def * lv)}${lv > 0 ? ' <i>受到的伤害按此折算</i>' : ''}</b>
             <span>速度</span><b>行军 ${d.walk} · 奔跑 ${d.speed}</b>
             <span>士气</span><b class="${routAt >= 0 && m < routAt + 12 ? 'bad' : m < 55 ? 'warn' : ''}">${m} <i>${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}</i></b>
             <span>状态</span><b>${flags.join(' · ')}</b>

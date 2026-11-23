@@ -1,5 +1,6 @@
 /** 小地图（Canvas 2D） */
 import { SITE_INFO } from '../sim/defs';
+import { O_AMOVE, O_ATTACK, O_MOVE, S_ROUT } from '../sim/state';
 import { World } from '../sim/world';
 
 export class Minimap {
@@ -12,6 +13,9 @@ export class Minimap {
   pings: { x: number; y: number; t: number; color: string }[] = [];
   /** 镜头的水平转角：小地图跟着转，屏幕的「上」就是小地图的「上」 */
   yaw = 0;
+  /** 行进路线虚线的流动相位 */
+  private flow = 0;
+  private readonly routes = new Map<number, { sx: number; sy: number; n: number; dx: number; dy: number; amove: boolean }>();
 
   constructor(readonly canvas: HTMLCanvasElement, private readonly world: World, miniColors: Uint8ClampedArray,
     private readonly colors: string[]) {
@@ -91,6 +95,8 @@ export class Minimap {
         c.fillRect(w.x[i] * k - 1, w.y[i] * k - 1, 2, 2);
       }
     }
+    // 己方正在行进的部队：从部队到目的地一条流动的虚线
+    this.drawRoutes(k, dt);
     // 据点
     for (const s of w.sites) {
       if (s.gone) continue;
@@ -140,6 +146,52 @@ export class Minimap {
     c.closePath();
     c.stroke();
     c.restore();
+    c.restore();
+  }
+
+  /** 编队按领队画一条；不在编队里的按目的地归堆，从这一堆人的重心画起 */
+  private drawRoutes(k: number, dt: number): void {
+    const c = this.ctx, w = this.world, human = w.humanTeam;
+    if (!human) return;
+    const R = this.routes;
+    R.clear();
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.team[i] !== human || w.state[i] & S_ROUT) continue;
+      const o = w.order[i];
+      if (o !== O_MOVE && o !== O_AMOVE && o !== O_ATTACK) continue;
+      const gi = w.grp[i];
+      let key: number, sx: number, sy: number, dx: number, dy: number;
+      if (gi >= 0 && w.marches[gi].alive && !w.marches[gi].arrived) {
+        const g = w.marches[gi];
+        key = -1 - gi;
+        sx = g.x; sy = g.y; dx = g.destX; dy = g.destY;
+      } else {
+        dx = w.destX[i]; dy = w.destY[i];
+        key = Math.round(dx / 48) * 100003 + Math.round(dy / 48);
+        sx = w.x[i]; sy = w.y[i];
+      }
+      const r = R.get(key);
+      if (!r) R.set(key, { sx, sy, n: 1, dx, dy, amove: o !== O_MOVE });
+      else if (key >= 0) { r.sx += sx; r.sy += sy; r.n++; }
+    }
+    if (!R.size) return;
+    this.flow = (this.flow + dt * 24) % 1000;
+    c.save();
+    c.lineWidth = 1.4;
+    c.setLineDash([4, 3]);
+    c.lineDashOffset = -this.flow;
+    for (const [key, r] of R) {
+      const n = key >= 0 ? r.n : 1;
+      const sx = (r.sx / n) * k, sy = (r.sy / n) * k, ex = r.dx * k, ey = r.dy * k;
+      if ((ex - sx) ** 2 + (ey - sy) ** 2 < 9) continue;
+      c.strokeStyle = r.amove ? 'rgba(255, 150, 110, 0.95)' : 'rgba(150, 255, 150, 0.95)';
+      c.beginPath();
+      c.moveTo(sx, sy);
+      c.lineTo(ex, ey);
+      c.stroke();
+      c.fillStyle = c.strokeStyle;
+      c.fillRect(ex - 1.5, ey - 1.5, 3, 3);
+    }
     c.restore();
   }
 }
