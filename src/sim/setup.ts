@@ -100,7 +100,10 @@ export function createGame(opts: GameOptions): Game {
       ai?.addGroup(g, true);
     }
     if (ai) {
-      ai.addGroup(world.spawnGroup(tm, take(0.16), hq.x, hq.y + 70, dp.dx, dp.dy), true);
+      // 大本营的守备队：弓弩手开局就登城驻守
+      const home = world.spawnGroup(tm, take(0.16), hq.x, hq.y + 70, dp.dx, dp.dy);
+      ai.addGroup(home, true);
+      world.orderGarrison(home);
       const rest = list.length - cursor;
       const lx = -dp.dy, ly = dp.dx;
       for (let k = 0; k < 3; k++) {

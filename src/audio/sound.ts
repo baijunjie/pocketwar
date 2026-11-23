@@ -2,7 +2,7 @@
  * 音效：全部用 Web Audio 现场合成（噪声 + 振荡器 + 滤波），不依赖任何音频文件。
  * 战斗声来自模拟层每帧抛出的特效事件（world.fx），按离镜头的远近定音量、按屏幕左右定声像；
  * 同一种声音在很短的时间内只响一次（把这段时间里的事件合并成一声，事件越多越响），千人混战也不会爆音。
- * 环境声（风、雨）是两条常驻的噪声链路，音量跟着天气和镜头高度走。
+ * 环境声（风、雨）是常驻的噪声链路，音量跟着天气和镜头高度走；雨声是粉红噪声打底加一层稀疏的雨点。
  */
 import {
   FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_FIRE, FX_HIT, FX_IMPACT, FX_LEVEL, FX_SHOT, FX_SMOKE, World,
@@ -61,17 +61,26 @@ export class Sound {
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
 
-    // 雨：高通 + 低通的嘶嘶声
-    const rain = this.loop();
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 900;
-    const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 6500;
+    // 雨：一层低沉的「沙沙」打底（粉红噪声，削掉刺耳的高频），再叠一层稀疏的雨点声
     this.rainGain = ctx.createGain();
     this.rainGain.gain.value = 0;
-    rain.connect(hp).connect(lp).connect(this.rainGain).connect(this.master);
+    this.rainGain.connect(this.master);
+    const wash = this.loop(this.pinkNoise(6));
+    const washLp = ctx.createBiquadFilter();
+    washLp.type = 'lowpass';
+    washLp.frequency.value = 2600;
+    washLp.Q.value = 0.3;
+    const washHp = ctx.createBiquadFilter();
+    washHp.type = 'highpass';
+    washHp.frequency.value = 180;
+    wash.connect(washLp).connect(washHp).connect(this.rainGain);
+    const drops = this.loop(this.dropNoise(7));
+    const dropLp = ctx.createBiquadFilter();
+    dropLp.type = 'lowpass';
+    dropLp.frequency.value = 5200;
+    const dropGain = ctx.createGain();
+    dropGain.gain.value = 0.55;
+    drops.connect(dropLp).connect(dropGain).connect(this.rainGain);
     // 风：带通噪声，中心频率和音量缓慢起伏
     const wind = this.loop();
     this.windFilter = ctx.createBiquadFilter();
@@ -83,12 +92,61 @@ export class Sound {
     wind.connect(this.windFilter).connect(this.windGain).connect(this.master);
   }
 
-  private loop(): AudioBufferSourceNode {
+  private loop(buf: AudioBuffer | null = this.noise): AudioBufferSourceNode {
     const src = this.ctx!.createBufferSource();
-    src.buffer = this.noise;
+    src.buffer = buf;
     src.loop = true;
     src.start(0, Math.random() * 1.5);
     return src;
+  }
+
+  /** 粉红噪声（每倍频程能量相等，听起来比白噪声柔和得多）；首尾交叠一小段，循环时听不出接缝 */
+  private pinkNoise(secs: number): AudioBuffer {
+    const ctx = this.ctx!;
+    const len = Math.floor(ctx.sampleRate * secs), fade = Math.floor(ctx.sampleRate * 0.25);
+    const raw = new Float32Array(len + fade);
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const wn = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + wn * 0.0555179;
+      b1 = 0.99332 * b1 + wn * 0.0750759;
+      b2 = 0.969 * b2 + wn * 0.153852;
+      b3 = 0.8665 * b3 + wn * 0.3104856;
+      b4 = 0.55 * b4 + wn * 0.5329522;
+      b5 = -0.7616 * b5 - wn * 0.016898;
+      raw[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + wn * 0.5362) * 0.11;
+      b6 = wn * 0.115926;
+    }
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = raw[i];
+    for (let i = 0; i < fade; i++) {
+      const k = i / fade;
+      d[i] = raw[i] * Math.sqrt(k) + raw[len + i] * Math.sqrt(1 - k);
+    }
+    return buf;
+  }
+
+  /** 雨点：一段里随机撒上很多极短的「嗒」声（几毫秒的衰减噪声，轻重、音色各不相同） */
+  private dropNoise(secs: number): AudioBuffer {
+    const ctx = this.ctx!;
+    const sr = ctx.sampleRate, len = Math.floor(sr * secs);
+    const buf = ctx.createBuffer(1, len, sr);
+    const d = buf.getChannelData(0);
+    const count = Math.floor(secs * 90);
+    for (let n = 0; n < count; n++) {
+      const at = Math.floor(Math.random() * len);
+      const dur = Math.floor(sr * (0.003 + Math.random() * 0.012));
+      const amp = 0.05 + Math.random() ** 3 * 0.4;
+      // 一阶低通的截止随机：有的闷（打在泥地上），有的脆（打在瓦和甲上）
+      const a = 0.15 + Math.random() * 0.6;
+      let y = 0;
+      for (let i = 0; i < dur; i++) {
+        y += ((Math.random() * 2 - 1) - y) * a;
+        d[(at + i) % len] += y * amp * Math.exp((-5 * i) / dur);
+      }
+    }
+    return buf;
   }
 
   toggle(): boolean {
@@ -194,7 +252,8 @@ export class Sound {
 
     // ---- 环境声 ----
     const env = w.env;
-    this.rainGain!.gain.setTargetAtTime(env.rain * 0.16, now, 0.4);
+    // 雨声是垫在底下的：音量压得很低，镜头拉高了更轻
+    this.rainGain!.gain.setTargetAtTime(env.rain * (0.09 + 0.05 * zk), now, 0.8);
     // 风：平时若有若无，镜头越高越明显，夜里和雨天更大；强弱缓慢起伏
     this.wind += 0.016;
     const gust = 0.6 + 0.4 * Math.sin(this.wind * 0.37) * Math.sin(this.wind * 0.11 + 1.3);

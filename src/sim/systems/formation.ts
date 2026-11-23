@@ -5,9 +5,12 @@ import type { World } from '../world';
  * 阵型站位：按各兵种的默认排次（UnitDef.row）分行，近战在前、远程居后、器械殿后，同一档里快的在前。
  * 返回值里的 fa / fl 是每个单位相对队列中心沿前进方向、沿横向的偏移（编队行军时用）。
  * @param pos 若提供（单位槽位），按现有位置就近分配以减少交叉
+ * @param maxWidth 大于 0 时横排不超过这个宽度（至少留一路纵队），排不下的往后加排
+ * @param byOffset 为 true 时按各单位现有的队列位置（offA / offL）而不是实际位置来排先后——行军途中变阵用
  */
-export function formation(w: World, defIdxs: number[], cx: number, cy: number, dx: number, dy: number, pos: number[] | null):
-  { sx: Float32Array; sy: Float32Array; fa: Float32Array; fl: Float32Array; radius: number } {
+export function formation(w: World, defIdxs: number[], cx: number, cy: number, dx: number, dy: number, pos: number[] | null,
+  maxWidth = 0, byOffset = false):
+  { sx: Float32Array; sy: Float32Array; fa: Float32Array; fl: Float32Array; radius: number; width: number; depth: number; area: number } {
   const n = defIdxs.length;
   const sx = new Float32Array(n), sy = new Float32Array(n), fa = new Float32Array(n), fl = new Float32Array(n);
   const dl = Math.hypot(dx, dy);
@@ -23,19 +26,21 @@ export function formation(w: World, defIdxs: number[], cx: number, cy: number, d
   if (pos) {
     for (let m = 0; m < n; m++) {
       const s = pos[m];
-      along[m] = w.x[s] * dx + w.y[s] * dy;
-      lat[m] = w.x[s] * lx + w.y[s] * ly;
+      along[m] = byOffset ? w.offA[s] : w.x[s] * dx + w.y[s] * dy;
+      lat[m] = byOffset ? w.offL[s] : w.x[s] * lx + w.y[s] * ly;
     }
   }
   const defs = w.defs;
   const idx = Array.from({ length: n }, (_, i) => i);
   idx.sort((a, b) => defs[defIdxs[a]].row - defs[defIdxs[b]].row || along[b] - along[a] || a - b);
-  let area = 0;
+  let area = 0, maxSp = 0;
   for (let m = 0; m < n; m++) {
     const sp = defs[defIdxs[m]].radius * 2 + 3;
     area += sp * sp;
+    if (sp > maxSp) maxSp = sp;
   }
-  const width = Math.max(48, Math.sqrt(area * 2.6));
+  let width = Math.max(48, Math.sqrt(area * 2.6));
+  if (maxWidth > 0 && maxWidth < width) width = Math.max(maxWidth, maxSp);
   // 分行
   const rows: number[][] = [];
   let cur: number[] = [], curW = 0, curRow = -1;
@@ -79,5 +84,5 @@ export function formation(w: World, defIdxs: number[], cx: number, cy: number, d
     }
     dAcc += rowDepth[ri];
   }
-  return { sx, sy, fa, fl, radius: Math.hypot(width, depth) / 2 };
+  return { sx, sy, fa, fl, radius: Math.hypot(width, depth) / 2, width, depth, area };
 }

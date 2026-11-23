@@ -7,9 +7,11 @@ import { DIRX, DIRY } from '../nav';
 import { FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
 import type { World } from '../world';
 import { attack, damageUnit, spawnProj } from './combat';
+import { P_NONE, P_POSTED, stepPost } from './garrison';
+import { SLOT, marchSlot } from './march';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
-import { SCAN, findArmedBuilding, scan } from './targeting';
+import { SCAN, findBuilding, scan } from './targeting';
 
 function arrive(w: World, i: number, atSlot: boolean): void {
   w.order[i] = O_IDLE;
@@ -28,7 +30,7 @@ export function updateUnits(w: World): void {
   const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
   const maxX = w.W - 6, maxY = w.H - 6;
   const bldAt = w.nav.bld, buildings = w.buildings;
-  const C = RULES.combat, SG = RULES.siege;
+  const C = RULES.combat, SG = RULES.siege, SITE = RULES.site;
   const LEASH2 = C.leash * C.leash;
   const rainMul = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
   const canTorch = w.env.night && !w.env.raining && !w.env.snowing;
@@ -48,6 +50,9 @@ export function updateUnits(w: World): void {
   for (let i = 0; i < n; i++) {
     if (!alive[i]) continue;
     const d = defs[type[i]];
+    // 城墙驻守：上下墙的过场由驻守系统接管
+    if (w.pmode[i] !== P_NONE && stepPost(w, i, d)) continue;
+    const posted = w.pmode[i] === P_POSTED;
     const ab = d.abilities;
     const tm = team[i];
     const blk = w.nav.block[tm], dk = w.nav.deck[tm];
@@ -138,8 +143,15 @@ export function updateUnits(w: World): void {
           if (on) w.braceT[i] = C.braceHold;
         }
         const hill = tt === T_HILL && !melee ? 1.12 : 1;
-        const acqR = ord === O_HOLD ? (melee ? 44 : d.range * hill) : d.acq * hill;
-        scan(w, i, tm, ux, uy, d.alert > acqR ? d.alert : acqR, acqR, d, tgt, ord === O_IDLE ? (acqR > C.leash ? acqR : C.leash) : 0);
+        // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击，近战的守在原地待命
+        const guard = ord === O_IDLE && w.sheltered[i] === 1;
+        let acqR = ord === O_HOLD ? (melee ? 44 : d.range * (onWall ? SG.wallRange : hill)) : d.acq * hill;
+        // 攻击移动：看见了就打，不等敌人走进平时的索敌距离
+        if (ord === O_AMOVE && d.alert > acqR) acqR = d.alert;
+        if (guard && !melee && SITE.alarm > acqR) acqR = SITE.alarm;
+        let scanR = d.alert > acqR ? d.alert : acqR;
+        if (guard && SITE.alarm > scanR) scanR = SITE.alarm;
+        scan(w, i, tm, ux, uy, scanR, acqR, d, tgt, ord === O_IDLE ? (acqR > C.leash ? acqR : C.leash) : 0);
         const near = SCAN.near;
         if (near !== NONE) {
           w.combatT[i] = C.linger;
@@ -164,17 +176,28 @@ export function updateUnits(w: World): void {
             }
           }
         }
-        if (ord !== O_MOVE && ord !== O_ATTACK && w.ignoreT[i] <= 0 && !(st & S_CHARGE)
-          && (tgt === NONE || tgt < 0 || (melee && !w.engaged[i] && w.waitT[i] <= 0))) {
+        const auto = ord !== O_MOVE && ord !== O_ATTACK && w.ignoreT[i] <= 0 && !(st & S_CHARGE);
+        const seekB = auto && ord !== O_HOLD;
+        const bLeash = ord === O_IDLE ? C.leash : 0;
+        // 工程类先找建筑打：附近有建筑就不理会敌兵（正在肉搏的除外）
+        if (seekB && d.siege && tgt >= NONE && !(melee && w.engaged[i])) {
+          const b = findBuilding(w, i, ux, uy, tm, d.range > acqR ? d.range : acqR, d, bLeash);
+          if (b >= 0) {
+            tgt = target[i] = -b - 2;
+            w.waitT[i] = 0;
+          }
+        }
+        if (auto && (tgt === NONE || (tgt < 0 && !d.siege) || (tgt >= 0 && melee && !w.engaged[i] && w.waitT[i] <= 0))) {
           const e = SCAN.pick;
           if (e !== NONE) {
+            // 人形单位先打敌兵：手头盯着的是建筑也换过去
             if (e !== tgt && (!melee || !w.lineBlocked(ux, uy, x[e], y[e], tm))) {
               tgt = target[i] = e;
               w.targetUid[i] = w.uid[e];
               w.waitT[i] = 0;
             }
-          } else if (tgt === NONE && (melee || d.humanoid || d.vsBld >= 2) && ord !== O_HOLD) {
-            const b = findArmedBuilding(w, ux, uy, tm, Math.max(acqR, 160), d.siege);
+          } else if (tgt === NONE && seekB && !d.siege) {
+            const b = findBuilding(w, i, ux, uy, tm, acqR > C.bldSeek ? acqR : C.bldSeek, d, bLeash);
             if (b >= 0) tgt = target[i] = -b - 2;
           }
         }
@@ -246,7 +269,8 @@ export function updateUnits(w: World): void {
           }
         } else if (ord === O_HOLD) {
           target[i] = tgt = NONE;
-        } else if (ord === O_IDLE && !(st & S_CHARGE) && (tx - w.homeX[i]) ** 2 + (ty - w.homeY[i]) ** 2 > LEASH2 * 1.2) {
+        } else if (ord === O_IDLE && !(st & S_CHARGE) && (tx - w.homeX[i]) ** 2 + (ty - w.homeY[i]) ** 2
+          > (w.sheltered[i] && d.range > 0 ? SITE.alarm * SITE.alarm : LEASH2) * 1.2) {
           // 待命：敌人离岗位太远就不追了
           target[i] = tgt = NONE;
           w.ignoreT[i] = 1.5;
@@ -286,13 +310,14 @@ export function updateUnits(w: World): void {
           if (gi >= 0 && tgt === NONE) {
             const g = marches[gi];
             if (!g.alive || g.arrived) w.grp[i] = -1;
-            else if (!g.blocked) {
-              const oa = w.offA[i], ol = w.offL[i];
-              const px = g.x + g.hx * oa - g.hy * ol, py = g.y + g.hy * oa + g.hx * ol;
+            else if (!g.blocked && !g.loose && !inCombat) {
+              // 只有不在打仗的时候才排队：自己进入战斗状态、或队伍已经打起来了，就各走各的
+              marchSlot(g, w.offA[i], w.offL[i]);
+              const px = SLOT.x, py = SLOT.y;
               const pc = ((py / TILE) | 0) * mw + ((px / TILE) | 0);
               if (px > 8 && py > 8 && px < maxX && py < maxY && !blk[pc] && !w.lineBlocked(ux, uy, px, py, tm)) {
                 // 瞄准位置前方一小段：到位后正好与领队同速，落后了就跑步追
-                const ex = px + g.hx * g.v * 0.4 - ux, ey = py + g.hy * g.v * 0.4 - uy;
+                const ex = px + SLOT.hx * g.v * 0.4 - ux, ey = py + SLOT.hy * g.v * 0.4 - uy;
                 const ed = Math.sqrt(ex * ex + ey * ey);
                 if (ed > 0.5) {
                   let v = ed / 0.4;
@@ -389,10 +414,11 @@ export function updateUnits(w: World): void {
     // 骑兵交手时脚下可以动，但不会被自己人挤出战位；在战线后面列队等待的也一样
     const firm = plant || ((eng === 1 || (w.waitT[i] > 0 && wx === 0 && wy === 0)) && !(st & (S_CHARGE | S_ROUT)));
     planted[i] = plant ? 1 : firm ? 2 : 0;
-    if (plant) {
+    if (plant || posted) {
       wx = wy = 0;
       vx[i] = vy[i] = 0;
     }
+    if (posted) planted[i] = 1;
 
     // ---- 分离（单位互不重叠）与冲撞 ----
     let pxs = 0, pys = 0;
@@ -466,20 +492,28 @@ export function updateUnits(w: World): void {
     vx[i] = nvx;
     vy[i] = nvy;
     let nx = ux + nvx * DT + pxs, ny = uy + nvy * DT + pys;
+    // 垛口上的人钉在原位
+    if (posted) {
+      nx = ux;
+      ny = uy;
+    }
     if (nx < 6) nx = 6;
     else if (nx > maxX) nx = maxX;
     if (ny < 6) ny = 6;
     else if (ny > maxY) ny = maxY;
+    // 坐标按 32 位浮点存：先舍入成存进去的值再判格子，否则刚好贴着格线时会被舍入到隔壁格里，绕过下面的检查
+    nx = Math.fround(nx);
+    ny = Math.fround(ny);
     if (!blk[cell]) {
-      // 进不去的格子：地形与敌方建筑；墙顶和地面之间只能在城内一侧上下
+      // 进不去的格子：地形与敌方建筑；地面上不了墙顶，墙顶只能往城内一侧下
       const c1 = ((uy / TILE) | 0) * mw + ((nx / TILE) | 0);
-      if (c1 !== cell && (blk[c1] || (dk[c1] !== dk[cell] && !inner[dk[cell] ? c1 : cell]))) {
+      if (c1 !== cell && (blk[c1] || (dk[c1] !== dk[cell] && !(dk[cell] && inner[c1])))) {
         nx = ux;
         vx[i] = 0;
         blockedByTerrain = true;
       }
       const c2 = ((ny / TILE) | 0) * mw + ((nx / TILE) | 0);
-      if (c2 !== cell && (blk[c2] || (dk[c2] !== dk[cell] && !inner[dk[cell] ? c2 : cell]))) {
+      if (c2 !== cell && (blk[c2] || (dk[c2] !== dk[cell] && !(dk[cell] && inner[c2])))) {
         ny = uy;
         vy[i] = 0;
         blockedByTerrain = true;

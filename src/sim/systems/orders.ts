@@ -4,6 +4,7 @@ import type { Field } from '../nav';
 import { NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT } from '../state';
 import type { Building, World } from '../world';
 import { formation } from './formation';
+import { P_POSTED, leavePost } from './garrison';
 import { createMarch } from './march';
 
 function obey(w: World, units: number[]): number[] {
@@ -68,7 +69,7 @@ export function orderMove(w: World, all: number[], tx: number, ty: number, amove
     }
   }
   const destCell = w.nav.nearestFree(tm, w.cellAt(tx, ty));
-  if (blk[w.cellAt(tx, ty)]) {
+  if (destCell !== w.cellAt(tx, ty)) {
     tx = (destCell % mw + 0.5) * TILE;
     ty = (((destCell / mw) | 0) + 0.5) * TILE;
   }
@@ -81,15 +82,18 @@ export function orderMove(w: World, all: number[], tx: number, ty: number, amove
     let sp2 = 0;
     for (const s of units) sp2 += (w.x[s] - mx) ** 2 + (w.y[s] - my) ** 2;
     if (Math.sqrt(sp2 / n) <= RULES.march.maxSpread && (tx - mx) ** 2 + (ty - my) ** 2 > 60 * 60) {
-      march = createMarch(w, tm, mx, my, tx, ty, destCell, slow, slowRun, amove, fx, fy, n).id;
+      march = createMarch(w, tm, mx, my, tx, ty, destCell, slow, slowRun, amove, fx, fy, n, f.width, f.depth, f.area).id;
     }
   }
   const face = Math.atan2(fy, fx);
+  // 行军时领队走在最前面：队列位置都排在它身后
+  let front = -1e9;
+  for (let m = 0; m < n; m++) if (f.fa[m] > front) front = f.fa[m];
   for (let m = 0; m < n; m++) {
     const s = units[m];
     let sx = Math.min(w.W - 24, Math.max(24, f.sx[m])), sy = Math.min(w.H - 24, Math.max(24, f.sy[m]));
     const c = w.cellAt(sx, sy);
-    if (blk[c]) {
+    if (blk[c] || w.nav.deck[tm][c]) {
       const nc = w.nav.nearestFree(tm, c, 6);
       sx = (nc % mw + 0.5) * TILE;
       sy = (((nc / mw) | 0) + 0.5) * TILE;
@@ -105,8 +109,9 @@ export function orderMove(w: World, all: number[], tx: number, ty: number, amove
         }
       }
     }
+    leavePost(w, s);
     w.grp[s] = march;
-    w.offA[s] = f.fa[m];
+    w.offA[s] = f.fa[m] - front;
     w.offL[s] = f.fl[m];
     w.faceA[s] = face;
     w.order[s] = amove ? O_AMOVE : O_MOVE;
@@ -140,6 +145,7 @@ export function orderAttackUnit(w: World, all: number[], tgt: number): void {
   for (const s of obey(w, all)) {
     const tm = w.team[s];
     if (w.team[tgt] === tm) continue;
+    leavePost(w, s);
     w.order[s] = O_ATTACK;
     w.target[s] = w.otarget[s] = tgt;
     w.targetUid[s] = w.otargetUid[s] = w.uid[tgt];
@@ -156,6 +162,7 @@ export function orderAttackBuilding(w: World, all: number[], b: Building): void 
     const tm = w.team[s];
     // 城防工事只有工程类单位打得动
     if (b.owner === tm || (b.def.fort && !w.defs[w.type[s]].siege)) continue;
+    leavePost(w, s);
     w.order[s] = O_ATTACK;
     w.target[s] = w.otarget[s] = -b.id - 2;
     w.destX[s] = b.cx;
@@ -171,6 +178,9 @@ export function orderAttackBuilding(w: World, all: number[], b: Building): void 
 
 export function orderStop(w: World, all: number[], hold: boolean): void {
   for (const s of obey(w, all)) {
+    // 已经在垛口上的：坚守就是留在原位
+    if (hold && w.pmode[s] === P_POSTED) continue;
+    leavePost(w, s);
     w.order[s] = hold ? O_HOLD : O_IDLE;
     w.target[s] = w.otarget[s] = NONE;
     w.homeX[s] = w.x[s];

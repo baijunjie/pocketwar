@@ -2,10 +2,12 @@ import { T_GRASS } from '../src/sim/defs';
 import { GameMap } from '../src/sim/map';
 import { World } from '../src/sim/world';
 
-/** 一块空旷平地，没有据点和建筑；默认关掉昼夜天气，需要时自己打开 */
-export function flatWorld(n = 120, seed = 7): World {
+/** 一块空旷平地，没有据点和建筑；默认关掉昼夜天气，需要时自己打开。paint 可以在建世界之前改地形 */
+export function flatWorld(n = 120, seed = 7, paint?: (terrain: Uint8Array, n: number) => void): World {
+  const terrain = new Uint8Array(n * n).fill(T_GRASS);
+  paint?.(terrain, n);
   const map: GameMap = {
-    seed: 1, w: n, h: n, terrain: new Uint8Array(n * n).fill(T_GRASS), height: new Float32Array(n * n),
+    seed: 1, w: n, h: n, terrain, height: new Float32Array(n * n),
     dirt: new Uint8Array(n * n), sites: [], buildings: [], props: new Float32Array(0), propChunk: new Int32Array(1),
     chunkW: 0, chunkH: 0, spawn: [], deploy: [],
   };

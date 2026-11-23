@@ -13,6 +13,8 @@ import * as orders from './systems/orders';
 import { refreshVision } from './systems/vision';
 import { damageBuilding } from './systems/combat';
 import * as economy from './systems/economy';
+import * as garrison from './systems/garrison';
+import type { WallSlot } from './systems/garrison';
 import type { PendingBuild } from './systems/economy';
 import { MAX_CORPSE, MAX_PROJ, MAX_UNITS, COARSE, GRID, NONE, O_IDLE, S_ROUT, VIS_CELL } from './state';
 
@@ -189,6 +191,10 @@ export class World {
   readonly faceA = new Float32Array(MAX_UNITS);
   /** 正站定出手（不会被挤动） */
   readonly planted = new Uint8Array(MAX_UNITS);
+  /** 城墙驻守：分到的垛口位（slots 下标，-1 = 没有）与进度（garrison.ts 的 P_*） */
+  readonly post = new Int16Array(MAX_UNITS).fill(-1);
+  readonly pmode = new Uint8Array(MAX_UNITS);
+  readonly slots: WallSlot[] = [];
   readonly marches: March[] = [];
   readonly level = new Uint8Array(MAX_UNITS);
   readonly xp = new Float32Array(MAX_UNITS);
@@ -429,6 +435,8 @@ export class World {
     this.grp[i] = -1;
     this.faceA[i] = this.dir[i];
     this.planted[i] = 0;
+    this.post[i] = -1;
+    this.pmode[i] = 0;
     this.morale[i] = RULES.morale.base + d.discipline + level * RULES.morale.perLevel;
     this.steadyT[i] = 0;
     this.routSite[i] = -1;
@@ -455,6 +463,12 @@ export class World {
     this.state[j] = 0;
     this.grp[j] = -1;
     this.planted[j] = 0;
+    if (this.post[j] >= 0) {
+      const sl = this.slots[this.post[j]];
+      if (sl.unit === j) sl.unit = -1;
+      this.post[j] = -1;
+      this.pmode[j] = 0;
+    }
     this.field[j] = null;
     this.free[this.freeN++] = j;
   }
@@ -467,7 +481,7 @@ export class World {
     for (let m = 0; m < defIdxs.length; m++) {
       let sx = Math.min(this.W - 40, Math.max(40, f.sx[m])), sy = Math.min(this.H - 40, Math.max(40, f.sy[m]));
       const c = this.cellAt(sx, sy);
-      if (blk[c]) {
+      if (blk[c] || this.nav.deck[tm][c]) {
         const nc = this.nav.nearestFree(tm, c);
         sx = (nc % this.map.w + 0.5) * TILE;
         sy = (((nc / this.map.w) | 0) + 0.5) * TILE;
@@ -501,6 +515,10 @@ export class World {
   orderTorch(units: number[], on: boolean): void {
     orders.orderTorch(this, units, on);
   }
+  /** 让其中的远程步兵登上所在城邦的城墙驻守；返回派上去几人（-1 没有能上墙的兵种，-2 不在自家城邦里，0 垛口满了） */
+  orderGarrison(units: number[]): number {
+    return garrison.orderGarrison(this, units);
+  }
 
   // =====================================================================
   // 资源的用处（算法在 systems/economy.ts）
@@ -527,7 +545,7 @@ export class World {
     return this.alive[i] === 1 && !(this.state[i] & S_ROUT);
   }
 
-  /** 两点之间是否走不通：被本队不可通行的格子挡住，或者要从城外一侧翻上 / 翻下墙顶 */
+  /** 两点之间是否走不通：被本队不可通行的格子挡住，或者要上墙顶、要从城外一侧下墙顶 */
   lineBlocked(ax: number, ay: number, bx: number, by: number, tm: number): boolean {
     const dx = bx - ax, dy = by - ay;
     const len = Math.hypot(dx, dy);
@@ -539,7 +557,7 @@ export class World {
       const t = k / steps;
       const c = (((ay + dy * t) / TILE) | 0) * w + (((ax + dx * t) / TILE) | 0);
       if (c === prev) continue;
-      if (blk[c] || (dk[c] !== dk[prev] && !inner[dk[c] ? prev : c])) return true;
+      if (blk[c] || (dk[c] !== dk[prev] && !(dk[prev] && inner[c]))) return true;
       prev = c;
     }
     return false;
@@ -567,6 +585,7 @@ export class World {
       }
     }
     nav.version++;
+    garrison.buildSlots(this);
   }
 
   // =====================================================================

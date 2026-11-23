@@ -10,6 +10,8 @@ export class Minimap {
   private readonly fogImg: ImageData;
   private readonly size: number;
   pings: { x: number; y: number; t: number; color: string }[] = [];
+  /** 镜头的水平转角：小地图跟着转，屏幕的「上」就是小地图的「上」 */
+  yaw = 0;
 
   constructor(readonly canvas: HTMLCanvasElement, private readonly world: World, miniColors: Uint8ClampedArray,
     private readonly colors: string[]) {
@@ -32,7 +34,18 @@ export class Minimap {
 
   /** 小地图上的像素位置 → 世界坐标 */
   toWorld(mx: number, my: number): { x: number; y: number } {
-    return { x: (mx / this.size) * this.world.W, y: (my / this.size) * this.world.H };
+    const S = this.size, h = S / 2;
+    const cs = Math.cos(this.yaw), sn = Math.sin(this.yaw), f = this.fit();
+    // 把 draw() 里的「绕中心转 yaw、再缩小到装得下」反过来
+    const px = mx - h, py = my - h;
+    const x = (px * cs + py * sn) / f + h, y = (-px * sn + py * cs) / f + h;
+    const w = this.world;
+    return { x: Math.min(w.W, Math.max(0, (x / S) * w.W)), y: Math.min(w.H, Math.max(0, (y / S) * w.H)) };
+  }
+
+  /** 转过角度之后，整张图缩小到这个比例才不会被小地图的方框裁掉 */
+  private fit(): number {
+    return 1 / (Math.abs(Math.cos(this.yaw)) + Math.abs(Math.sin(this.yaw)));
   }
 
   /** @param view 屏幕四角落在地面上的位置 */
@@ -40,6 +53,13 @@ export class Minimap {
     const c = this.ctx, w = this.world, S = this.size;
     const k = S / w.W;
     c.imageSmoothingEnabled = true;
+    c.fillStyle = '#14110d';
+    c.fillRect(0, 0, S, S);
+    c.save();
+    c.translate(S / 2, S / 2);
+    c.rotate(this.yaw);
+    c.scale(this.fit(), this.fit());
+    c.translate(-S / 2, -S / 2);
     c.drawImage(this.base, 0, 0, S, S);
     // 建筑
     const fog = w.fog && w.humanTeam !== 0;
@@ -123,6 +143,7 @@ export class Minimap {
     view.forEach((p, i) => (i ? c.lineTo(p.x * k, p.y * k) : c.moveTo(p.x * k, p.y * k)));
     c.closePath();
     c.stroke();
+    c.restore();
     c.restore();
   }
 }

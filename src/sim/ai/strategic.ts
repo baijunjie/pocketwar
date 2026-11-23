@@ -187,12 +187,13 @@ export class StrategicAI implements Commander {
         const c = this.enemyCentroid(g.ax, g.ay, 620);
         if (c) {
           if (tick - g.lastOrder > 150) {
-            w.orderMove(g.slots, c.x, c.y, true);
+            // 城墙上的弓弩手留在垛口上，不跟着出击
+            w.orderMove(g.slots.filter(s => w.pmode[s] === 0), c.x, c.y, true);
             g.lastOrder = tick;
             g.mode = M_DEFEND;
           }
         } else if (g.mode === M_DEFEND) {
-          w.orderMove(g.slots, g.ax, g.ay, true);
+          w.orderMove(g.slots.filter(s => w.pmode[s] === 0), g.ax, g.ay, true);
           g.mode = M_IDLE;
         }
         continue;

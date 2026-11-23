@@ -2,7 +2,7 @@
  * 索敌：在看得见的敌人里挑一个「打得到」的，而不是单纯最近的。
  * 评分 = 距离 × 克制偏好 + 各种惩罚：目标已被围满、刚被判定够不着、已经溃逃。
  */
-import { RULES, SIZES, UnitDef } from '../content';
+import { BK_WALL, RULES, SITE_INFO, SIZES, TILE, UnitDef } from '../content';
 import { COARSE, GRID, NONE, S_ROUT } from '../state';
 import type { World } from '../world';
 
@@ -83,16 +83,45 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
   SCAN.nearD2 = nearD2;
 }
 
-/** 最近的、可攻击的敌方有武装建筑 */
-export function findArmedBuilding(w: World, ux: number, uy: number, tm: number, range: number, siege: boolean): number {
-  let best = range * range, id = -1;
-  for (const b of w.armed) {
-    if (!b.alive || !b.tower || b.owner === tm || b.owner === 0 || (b.def.fort && !siege)) continue;
-    const ox = b.cx - ux, oy = b.cy - uy;
-    const d2 = ox * ox + oy * oy;
-    if (d2 < best) {
-      best = d2;
-      id = b.id;
+/**
+ * 附近最该打的敌方建筑（自动攻击用）：先挑会放箭的，再挑近的。
+ * 不挑的：城墙与木栅（只在挡路时才打，否则会沿着墙一格一格拆下去）、自己打不动的城防工事、
+ * 能占领的据点里不放箭的主建筑（留着占领，烧掉就成废墟了）、中立建筑。
+ * @param leash 大于 0 时只挑离岗位不超过这个距离的
+ */
+export function findBuilding(w: World, i: number, ux: number, uy: number, tm: number, range: number, d: UnitDef, leash = 0): number {
+  const mw = w.map.w, mh = w.map.h, bld = w.nav.bld, bs = w.buildings, sites = w.sites;
+  let x0 = ((ux - range) / TILE) | 0, x1 = ((ux + range) / TILE) | 0;
+  let y0 = ((uy - range) / TILE) | 0, y1 = ((uy + range) / TILE) | 0;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 >= mw) x1 = mw - 1;
+  if (y1 >= mh) y1 = mh - 1;
+  const foe = 3 - tm, min2 = d.minRange * d.minRange, leash2 = leash * leash;
+  const hx = w.homeX[i], hy = w.homeY[i];
+  const armed = RULES.combat.armedFirst;
+  let best = range * range, id = -1, last = -1;
+  for (let y = y0; y <= y1; y++) {
+    const row = y * mw;
+    for (let x = x0; x <= x1; x++) {
+      const k = bld[row + x];
+      if (k < 0 || k === last) continue;
+      last = k;
+      const b = bs[k];
+      if (b.owner !== foe || !b.alive || b.def.kind === BK_WALL || (b.def.fort && !d.siege)) continue;
+      if (!b.tower) {
+        const s = sites[b.site];
+        if (s && s.main === k && SITE_INFO[s.type].captureTime > 0) continue;
+      }
+      const px = ux < b.x0 ? b.x0 : ux > b.x1 ? b.x1 : ux, py = uy < b.y0 ? b.y0 : uy > b.y1 ? b.y1 : uy;
+      const d2 = (px - ux) * (px - ux) + (py - uy) * (py - uy);
+      if (d2 < min2 || d2 > range * range) continue;
+      if (leash2 > 0 && (px - hx) * (px - hx) + (py - hy) * (py - hy) > leash2) continue;
+      const score = b.tower ? d2 * armed : d2;
+      if (score < best) {
+        best = score;
+        id = k;
+      }
     }
   }
   return id;

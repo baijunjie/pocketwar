@@ -20,7 +20,7 @@ export interface UpgradeOffers {
 export type UpgradeAction = 'sel' | 'all' | 'forts' | 'camps';
 
 export interface HudCallbacks {
-  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch' | 'outpost'): void;
+  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch' | 'outpost' | 'garrison'): void;
   /** 点了某个升级按钮 */
   upgrade(act: UpgradeAction): void;
   /** 选中一个据点（-1 = 取消） */
@@ -168,9 +168,10 @@ export class Hud {
     const cmds = el('div', 'panel cmds');
     if (human) {
       const defs: [string, string, Parameters<HudCallbacks['command']>[0], string][] = [
-        ['攻击移动', 'A', 'amove', '行军途中遇敌即战'],
-        ['停止', 'S', 'stop', '停止当前行动'],
+        ['攻击移动', 'F', 'amove', '行军途中遇敌即战'],
+        ['停止', 'X', 'stop', '停止当前行动'],
         ['坚守', 'H', 'hold', '原地坚守，不追击'],
+        ['登城驻守', 'G', 'garrison', '所选部队里的远程步兵登上所在城邦的城墙，各守一个垛口（射得更远、挨箭更轻）；垛口满了不能再上，下别的命令即下墙'],
         ['集结点', 'R', 'rally', '设置援军集结位置'],
         ['火把', 'T', 'torch', '点燃 / 熄灭所选部队的火把：点着看得远，也更容易被发现'],
         ['扎营', 'B', 'outpost', `派所选部队到指定位置搭一座临时据点（木材 ${RULES.economy.outpostCost}，最多 ${RULES.economy.outpostMax} 座）：部队在里面休整回血，被毁不会重生`],
@@ -198,20 +199,21 @@ export class Hud {
           <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
           <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
           <tr><td>右键敌军 / 敌方建筑</td><td>攻击（Ctrl+右键可强攻中立建筑）</td></tr>
-          <tr><td>A + 左键</td><td>攻击移动：沿途遇敌即战，遇墙自动破城</td></tr>
-          <tr><td>S / H</td><td>停止 / 坚守</td></tr>
+          <tr><td>F + 左键</td><td>攻击移动：沿途遇敌即战、见敌方建筑就打，遇墙自动破城；点在敌方建筑上则直接攻打它</td></tr>
+          <tr><td>X / H</td><td>停止 / 坚守</td></tr>
+          <tr><td>G</td><td>登城驻守：城邦里的远程步兵登上城墙，各守一个垛口</td></tr>
           <tr><td>R + 左键</td><td>设置援军集结点</td></tr>
           <tr><td>T</td><td>点燃 / 熄灭所选部队的火把（夜间）</td></tr>
           <tr><td>B + 左键</td><td>扎营：派所选部队去搭一座临时据点（耗木材）</td></tr>
           <tr><td>左键点据点</td><td>选中据点：升级，或给资源点建箭塔</td></tr>
           <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
           <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
-          <tr><td>鼠标移到屏幕边缘、方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
+          <tr><td>鼠标移到屏幕边缘、W A S D / 方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
           <tr><td>中键拖动、Q / E</td><td>旋转镜头（上下拖动调俯角）；Shift+中键拖动平移；Home 复位</td></tr>
           <tr><td>空格 / + −　M</td><td>暂停 / 调整速度　开关音效</td></tr>
         </table>
         <p><b>目标：</b>摧毁敌方大本营的主堡。<b>占领据点：</b>先肃清圈内守军，再派人站到中央旗帜下读秒；敌人回到圈内读秒暂停，旗下没人则清零。占领后援军定时从己方后方入场，被毁的建筑也会修好。</p>
-        <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙只有器械与战象能破（门楼、角楼可以慢慢烧毁，它们和营寨的望楼都会放箭）。己方单位可以从城内一侧走上自家城墙和角楼驻守，射得更远、挨箭更轻。</p>
+        <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙只有器械与战象能破（门楼、角楼可以慢慢烧毁，它们和营寨的望楼都会放箭）。城邦里的远程步兵按 G 登上自家城墙驻守，每个垛口一人，射得更远、挨箭更轻；别的兵种上不了墙。</p>
         <p>高地上的远程部队射程与伤害更高；森林减免远程伤害并拖慢骑兵；浅滩可涉水但行动迟缓。</p>
         <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会溃逃（头顶一面小白旗，防御大减），逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
         <p><b>粮草：</b>据点产粮、部队吃粮，只靠大本营养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。偶尔下雪：走得更慢、看得更近，据点外的部队防御下降。</p>
@@ -516,7 +518,7 @@ export class Hud {
     this.selKey = key;
     if (!sel.length) {
       this.selBox.innerHTML = w.humanTeam
-        ? '<div class="hint">拖框选择部队 · 右键移动或攻击 · <b>A</b> 攻击移动 · 点据点可升级</div>'
+        ? '<div class="hint">拖框选择部队 · 右键移动或攻击 · <b>F</b> 攻击移动 · 点据点可升级</div>'
         : '<div class="hint">观战模式：方向键 / 拖动小地图移动镜头，滚轮缩放</div>';
       return;
     }

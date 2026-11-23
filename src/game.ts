@@ -11,7 +11,7 @@ import { Sound } from './audio/sound';
 type Mode = '' | 'amove' | 'rally' | 'outpost';
 
 /** 离屏幕边缘多少像素以内开始卷屏 */
-const EDGE_ZONE = 36;
+const EDGE_ZONE = 72;
 
 export class GameApp {
   readonly world: World;
@@ -34,7 +34,8 @@ export class GameApp {
   private raf = 0;
   private mode: Mode = '';
   private readonly keys = new Set<string>();
-  private mouse = { x: 0, y: 0, inside: false };
+  /** ui：鼠标正停在界面面板上（此时不卷屏；面板与屏幕边缘之间的空隙照常卷） */
+  private mouse = { x: 0, y: 0, inside: false, ui: false };
   private drag: { x: number; y: number; active: boolean } | null = null;
   private pan: { x: number; y: number; rotate: boolean } | null = null;
   /** 右键按下的位置：拖出一段距离就是在指定队列朝向 */
@@ -196,12 +197,13 @@ export class GameApp {
         else this.clickSelect(p.x, p.y, e.shiftKey);
       }
     });
-    // 鼠标位置在整个窗口上跟踪：停在界面面板上时也能靠屏幕边缘卷屏
+    // 鼠标位置在整个窗口上跟踪，并记下它是不是停在界面面板上
     this.on(window, 'pointermove', e => {
       const p = this.local(e);
       this.mouse.x = p.x;
       this.mouse.y = p.y;
       this.mouse.inside = p.x >= 0 && p.y >= 0 && p.x <= this.renderer.viewW && p.y <= this.renderer.viewH;
+      this.mouse.ui = e.target !== cv;
     });
     this.on(document.documentElement, 'pointerleave', () => {
       this.mouse.inside = false;
@@ -251,7 +253,8 @@ export class GameApp {
     this.on(window, 'keydown', e => {
       if (e.target instanceof HTMLInputElement) return;
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-      this.keys.add(k);
+      // 带 Ctrl / Cmd 的组合键不记入「按住的键」：Mac 上按着 Cmd 时字母键收不到松开事件，会一直卷屏
+      if (!e.ctrlKey && !e.metaKey) this.keys.add(k);
       this.sound.unlock();
       if (e.repeat) return;
       const human = this.world.humanTeam;
@@ -274,8 +277,9 @@ export class GameApp {
       else if (k === 'a' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         this.command('all');
-      } else if (k === 'a') this.command('amove');
-      else if (k === 's') this.command('stop');
+      } else if (k === 'f') this.command('amove');
+      else if (k === 'x') this.command('stop');
+      else if (k === 'g') this.command('garrison');
       else if (k === 'h') this.command('hold');
       else if (k === 'r') this.command('rally');
       else if (k === 't') this.command('torch');
@@ -583,7 +587,7 @@ export class GameApp {
   }
 
   // ------------------------------------------------------------------ 指令
-  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch' | 'outpost'): void {
+  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch' | 'outpost' | 'garrison'): void {
     const w = this.world;
     if (!w.humanTeam) return;
     if (c === 'all') {
@@ -608,6 +612,11 @@ export class GameApp {
       const lit = w.env.night && !w.env.raining;
       this.hud.message(off ? '火把已熄灭' : lit ? '火把已点燃' : '已下令：入夜且不下雨时点燃火把', 'info');
     }
+    else if (c === 'garrison') {
+      const n = w.orderGarrison(this.selList);
+      this.hud.message(n > 0 ? `${n} 人登城驻守` : n === -1 ? '只有远程步兵能上城墙驻守' : n === -2 ? '要在自家城邦（有石墙的据点）里才能上墙驻守' : '城墙上的垛口已经站满了', 'info');
+      this.sound.ui(n > 0 ? 'order' : 'deny');
+    }
     else w.orderStop(this.selList, c === 'hold');
   }
 
@@ -618,8 +627,10 @@ export class GameApp {
 
   /** 在世界坐标处执行当前指令模式（攻击移动 / 集结点） */
   private modeAt(x: number, y: number): void {
-    if (this.mode === 'amove') this.issueMove(x, y, true);
-    else if (this.mode === 'outpost') {
+    if (this.mode === 'amove') {
+      // 点在敌方建筑上：直接攻打它（点在空地上才是攻击移动）
+      if (!this.attackBuildingAt(x, y, false)) this.issueMove(x, y, true);
+    } else if (this.mode === 'outpost') {
       const E = RULES.economy;
       const err = this.world.orderOutpost(this.selList, x, y);
       if (err) {
@@ -647,6 +658,29 @@ export class GameApp {
     else this.renderer.addMarker(x, y, 0.4, 1, 0.45);
   }
 
+  /**
+   * (x, y) 处是可以攻打的建筑就下令攻打（或提示打不动），返回 true；不是则返回 false。
+   * @param force 中立建筑也打
+   */
+  private attackBuildingAt(x: number, y: number, force: boolean): boolean {
+    const w = this.world;
+    const human = w.humanTeam;
+    if (!human || !this.selList.length || !(x > 0 && y > 0 && x < w.W && y < w.H)) return false;
+    const bid = w.nav.bld[w.cellAt(x, y)];
+    if (bid < 0) return false;
+    const b = w.buildings[bid];
+    if (!b.alive || b.owner === human || (b.owner === 0 && !force) || (w.fog && !w.isExplored(b.cx, b.cy))) return false;
+    if (b.def.fort && !this.selList.some(s => w.defs[w.type[s]].siege)) {
+      this.hud.message(`${b.def.name}只有器械和战象能破坏`, 'info');
+      this.sound.ui('deny');
+      return true;
+    }
+    w.orderAttackBuilding(this.selList, b);
+    this.sound.ui('attack');
+    this.renderer.addMarker(b.cx, b.cy, 1, 0.25, 0.2);
+    return true;
+  }
+
   private rightClick(sx: number, sy: number, force: boolean): void {
     const w = this.world;
     const human = w.humanTeam;
@@ -659,23 +693,7 @@ export class GameApp {
       this.renderer.addMarker(w.x[enemy], w.y[enemy], 1, 0.25, 0.2);
       return;
     }
-    if (p.x > 0 && p.y > 0 && p.x < w.W && p.y < w.H) {
-      const bid = w.nav.bld[w.cellAt(p.x, p.y)];
-      if (bid >= 0) {
-        const b = w.buildings[bid];
-        if (b.alive && b.owner !== human && (b.owner !== 0 || force) && (!w.fog || w.isExplored(b.cx, b.cy))) {
-          if (b.def.fort && !this.selList.some(s => w.defs[w.type[s]].siege)) {
-            this.hud.message(`${b.def.name}只有器械和战象能破坏`, 'info');
-            this.sound.ui('deny');
-            return;
-          }
-          w.orderAttackBuilding(this.selList, b);
-          this.sound.ui('attack');
-          this.renderer.addMarker(b.cx, b.cy, 1, 0.25, 0.2);
-          return;
-        }
-      }
-    }
+    if (this.attackBuildingAt(p.x, p.y, force)) return;
     this.issueMove(p.x, p.y, false);
   }
 
@@ -718,6 +736,7 @@ export class GameApp {
     this.mmTimer -= real;
     if (this.mmTimer <= 0) {
       this.mmTimer = 0.1;
+      this.minimap.yaw = this.renderer.cam.yaw;
       this.minimap.draw(this.renderer.viewQuad(), 0.1);
     }
     this.uiTimer -= real;
@@ -731,12 +750,12 @@ export class GameApp {
   private updateCamera(dt: number): void {
     const cam = this.renderer.cam, k = this.keys;
     let dx = 0, dy = 0;
-    if (k.has('ArrowLeft')) dx -= 1;
-    if (k.has('ArrowRight')) dx += 1;
-    if (k.has('ArrowUp')) dy -= 1;
-    if (k.has('ArrowDown')) dy += 1;
+    if (k.has('ArrowLeft') || k.has('a')) dx -= 1;
+    if (k.has('ArrowRight') || k.has('d')) dx += 1;
+    if (k.has('ArrowUp') || k.has('w')) dy -= 1;
+    if (k.has('ArrowDown') || k.has('s')) dy += 1;
     // 鼠标移到屏幕边缘卷屏：越靠近边缘越快
-    if (this.mouse.inside && !this.drag && !this.pan && !this.rdrag?.active && !this.hud.helpOpen && document.hasFocus()) {
+    if (this.mouse.inside && !this.mouse.ui && !this.drag && !this.pan && !this.rdrag?.active && !this.hud.helpOpen && document.hasFocus()) {
       const m = EDGE_ZONE, vw = this.renderer.viewW, vh = this.renderer.viewH;
       const edge = (v: number): number => (v >= m ? 0 : 0.25 + 0.75 * (1 - Math.max(0, v) / m) ** 2);
       dx += edge(vw - this.mouse.x) - edge(this.mouse.x);

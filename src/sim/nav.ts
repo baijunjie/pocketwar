@@ -151,16 +151,16 @@ export class Nav {
     this.version++;
   }
 
-  /** 本队单位能否从 a 格直接走到相邻的 b 格：墙顶与地面之间只能在城内一侧上下 */
+  /** 本队单位能否从 a 格直接走到相邻的 b 格：地面上不了墙顶（上墙只有驻守一条路），墙顶只能往城内一侧下 */
   canStep(team: number, a: number, b: number): boolean {
     const dk = this.deck[team];
-    return dk[a] === dk[b] || this.inner[dk[a] ? b : a] === 1;
+    return dk[a] === dk[b] || (dk[a] === 1 && this.inner[b] === 1);
   }
 
-  /** 找到离给定格最近的可站立格 */
+  /** 找到离给定格最近的可站立格（墙顶不算） */
   nearestFree(team: number, cell: number, maxR = 10): number {
-    const blk = this.block[team];
-    if (!blk[cell]) return cell;
+    const blk = this.block[team], dk = this.deck[team];
+    if (!blk[cell] && !dk[cell]) return cell;
     const cx = cell % this.w, cy = (cell / this.w) | 0;
     for (let r = 1; r <= maxR; r++) {
       let best = -1, bestD = 1e9;
@@ -170,7 +170,7 @@ export class Nav {
           const x = cx + dx, y = cy + dy;
           if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
           const c = y * this.w + x;
-          if (blk[c]) continue;
+          if (blk[c] || dk[c]) continue;
           const d = dx * dx + dy * dy;
           if (d < bestD) {
             bestD = d;
@@ -320,7 +320,8 @@ export class Nav {
           if (dk[nc] !== k || dk[c + offX[dir]] !== k || dk[c + offY[dir]] !== k) continue;
           nd = d + cd;
         } else {
-          if (dk[c] !== dk[nc] && !inner[dk[c] ? nc : c]) continue;
+          // 搜索是从终点往外扩的：这一步是单位从 nc 走到 c
+          if (dk[c] !== dk[nc] && !(dk[nc] && inner[c])) continue;
           nd = d + cc;
         }
         if (nd < dist[nc]) {
