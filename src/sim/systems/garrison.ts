@@ -1,10 +1,10 @@
 /**
- * 城墙驻守：墙顶不能随意走动，只有固定的垛口位。城里的远程步兵接到「驻守」命令后走到墙根、登上分给自己的垛口，
+ * 城墙驻守：墙顶不能随意走动，只有固定的垛口位。城里待命的远程步兵自动走到墙根、登上分给自己的垛口，
  * 在那里原地坚守；接到别的命令就先下墙再照办。垛口满了就不能再上人。
  * 上下墙是一段按直线走的「过场」，不走寻路也不参与碰撞。
  */
 import { DT, RULES, TILE, UnitDef } from '../content';
-import { NONE, O_HOLD, O_MOVE, S_ROUT, S_WALL } from '../state';
+import { NONE, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_WALL } from '../state';
 import type { World } from '../world';
 
 /** 垛口位 */
@@ -141,8 +141,22 @@ export function orderGarrison(w: World, all: number[]): number {
   return !able ? -1 : !inTown ? -2 : sent;
 }
 
+/** 在自家城邦里待命的远程步兵自动登城（每隔一段时间由据点系统调用；垛口满了就留在地上） */
+export function autoGarrison(w: World): void {
+  if (!w.slots.length) return;
+  const one = [0];
+  for (let i = 0; i < w.n; i++) {
+    if (!w.alive[i] || !w.sheltered[i] || w.order[i] !== O_IDLE || w.pmode[i] !== P_NONE || w.state[i] & S_ROUT) continue;
+    if (!canGarrison(w.defs[w.type[i]])) continue;
+    one[0] = i;
+    orderGarrison(w, one);
+  }
+}
+
 /** 腾出垛口。已经在墙上（或正在上墙）的先走下来，再去做别的 */
 export function leavePost(w: World, i: number): void {
+  // 任何新命令都取消「出击后回原位」
+  w.sortie[i] = 0;
   const pm = w.pmode[i];
   if (pm === P_NONE || pm === P_DESCEND) return;
   const sl = w.slots[w.post[i]];

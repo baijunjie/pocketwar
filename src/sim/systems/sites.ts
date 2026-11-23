@@ -3,6 +3,7 @@ import { RULES, SITE_INFO, UNIT_BY_KEY } from '../content';
 import { NONE, S_ROUT } from '../state';
 import type { Building, Site, World } from '../world';
 import { setSiteLevel } from './economy';
+import { autoGarrison } from './garrison';
 import { SITE_EVERY } from './index';
 
 export function updateSites(w: World): void {
@@ -26,11 +27,13 @@ export function updateSites(w: World): void {
       // 在自家据点里（大本营没有占领圈，另按休整半径算；资源点不算据点）：雪天有遮蔽，不在战斗中就慢慢养伤
       if (s.owner === w.team[i] && !s.disabled && SITE_INFO[s.type].haven && d2 < (s.radius > 0 ? s.radius * s.radius : rest2)) {
         w.sheltered[i] = 1;
+        w.shelterSite[i] = s.id;
         if (w.combatT[i] <= 0 && w.target[i] === NONE && w.hp[i] < w.maxHp[i]) w.hp[i] = Math.min(w.maxHp[i], w.hp[i] + w.maxHp[i] * heal);
       }
       if (d2 < flag2) s.flag[w.team[i]]++;
     }
   }
+  autoGarrison(w);
   const calm = RULES.site.bldCalm * 30, mend = RULES.site.bldRegen * step;
   const E = RULES.economy;
   for (const s of sites) {

@@ -9,6 +9,8 @@ import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
+/** 界面上能交互的元素：鼠标停在这些上面时不边缘卷屏 */
+const INTERACTIVE = 'button, canvas, input, select, a, .site, .chip, .ucard, .card';
 
 /** 离屏幕边缘多少像素以内开始卷屏 */
 const EDGE_ZONE = 72;
@@ -203,7 +205,9 @@ export class GameApp {
       this.mouse.x = p.x;
       this.mouse.y = p.y;
       this.mouse.inside = p.x >= 0 && p.y >= 0 && p.x <= this.renderer.viewW && p.y <= this.renderer.viewH;
-      this.mouse.ui = e.target !== cv;
+      // 只读的面板（顶栏文字、提示条等）不挡卷屏；按钮、列表项、小地图这类能交互的才挡
+      const t = e.target as Element | null;
+      this.mouse.ui = t !== cv && !!t?.closest?.(INTERACTIVE);
     });
     this.on(document.documentElement, 'pointerleave', () => {
       this.mouse.inside = false;
@@ -279,7 +283,6 @@ export class GameApp {
         this.command('all');
       } else if (k === 'f') this.command('amove');
       else if (k === 'x') this.command('stop');
-      else if (k === 'g') this.command('garrison');
       else if (k === 'h') this.command('hold');
       else if (k === 'r') this.command('rally');
       else if (k === 't') this.command('torch');
@@ -587,7 +590,7 @@ export class GameApp {
   }
 
   // ------------------------------------------------------------------ 指令
-  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch' | 'outpost' | 'garrison'): void {
+  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'all' | 'torch' | 'outpost'): void {
     const w = this.world;
     if (!w.humanTeam) return;
     if (c === 'all') {
@@ -611,11 +614,6 @@ export class GameApp {
       w.orderTorch(this.selList, !off);
       const lit = w.env.night && !w.env.raining;
       this.hud.message(off ? '火把已熄灭' : lit ? '火把已点燃' : '已下令：入夜且不下雨时点燃火把', 'info');
-    }
-    else if (c === 'garrison') {
-      const n = w.orderGarrison(this.selList);
-      this.hud.message(n > 0 ? `${n} 人登城驻守` : n === -1 ? '只有远程步兵能上城墙驻守' : n === -2 ? '要在自家城邦（有石墙的据点）里才能上墙驻守' : '城墙上的垛口已经站满了', 'info');
-      this.sound.ui(n > 0 ? 'order' : 'deny');
     }
     else w.orderStop(this.selList, c === 'hold');
   }

@@ -2,11 +2,12 @@
  * 单位每帧的行为：校验目标 → 索敌与状态切换 → 行军 / 追击 / 攻击 / 溃逃 → 分离 → 位移。
  * 这是整个模拟里最热的循环，所以写成一个大函数；具体的规则（选谁、打多少、何时溃逃）都在别的系统里。
  */
-import { A_MELEE, A_PIERCE, DT, RULES, SIZES, TERRAIN_SPEED, TILE, TR_FIREMOVE, T_FOREST, T_HILL } from '../content';
+import { A_MELEE, A_PIERCE, DT, RULES, SIZES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL } from '../content';
 import { DIRX, DIRY } from '../nav';
 import { FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
 import type { World } from '../world';
 import { attack, damageUnit, spawnProj } from './combat';
+import { orderAttackUnit, orderMove } from './orders';
 import { P_NONE, P_POSTED, stepPost } from './garrison';
 import { SLOT, marchSlot } from './march';
 import { FLEE, fleeStep } from './morale';
@@ -114,6 +115,12 @@ export function updateUnits(w: World): void {
             if (ok) {
               tgt = target[i] = ot;
               w.targetUid[i] = w.otargetUid[i];
+            } else if (w.sortie[i]) {
+              // 出击的守军打完了：回原位
+              const hx = w.sortieX[i], hy = w.sortieY[i];
+              ONE[0] = i;
+              orderMove(w, ONE, hx, hy, false);
+              ord = order[i];
             } else {
               ord = order[i] = O_IDLE;
               w.otarget[i] = NONE;
@@ -143,8 +150,10 @@ export function updateUnits(w: World): void {
           if (on) w.braceT[i] = C.braceHold;
         }
         const hill = tt === T_HILL && !melee ? 1.12 : 1;
-        // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击，近战的守在原地待命
+        // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击（城邦里的自动登城），
+        // 近战的不出据点，只打进了据点的敌人；挨了敌方远程的打才出击追打那个射手
         const guard = ord === O_IDLE && w.sheltered[i] === 1;
+        const prov = guard && melee ? provoker(w, i, tm, TICK_RATE * SITE.provoke) : NONE;
         let acqR = ord === O_HOLD ? (melee ? 44 : d.range * (onWall ? SG.wallRange : hill)) : d.acq * hill;
         // 攻击移动：看见了就打，不等敌人走进平时的索敌距离
         if (ord === O_AMOVE && d.alert > acqR) acqR = d.alert;
@@ -187,8 +196,19 @@ export function updateUnits(w: World): void {
             w.waitT[i] = 0;
           }
         }
-        if (auto && (tgt === NONE || (tgt < 0 && !d.siege) || (tgt >= 0 && melee && !w.engaged[i] && w.waitT[i] <= 0))) {
-          const e = SCAN.pick;
+        if (prov !== NONE && !w.engaged[i] && auto) {
+          // 出击：改成明确的攻击命令（走寻路出城门），打完回原位
+          const hx = w.homeX[i], hy = w.homeY[i];
+          ONE[0] = i;
+          orderAttackUnit(w, ONE, prov);
+          w.sortie[i] = 1;
+          w.sortieX[i] = hx;
+          w.sortieY[i] = hy;
+          ord = order[i];
+          tgt = target[i];
+        } else if (auto && (tgt === NONE || (tgt < 0 && !d.siege) || (tgt >= 0 && melee && !w.engaged[i] && w.waitT[i] <= 0))) {
+          let e = SCAN.pick;
+          if (e !== NONE && guard && melee && !inSite(w, w.shelterSite[i], x[e], y[e])) e = NONE;
           if (e !== NONE) {
             // 人形单位先打敌兵：手头盯着的是建筑也换过去
             if (e !== tgt && (!melee || !w.lineBlocked(ux, uy, x[e], y[e], tm))) {
@@ -200,6 +220,12 @@ export function updateUnits(w: World): void {
             const b = findBuilding(w, i, ux, uy, tm, acqR > C.bldSeek ? acqR : C.bldSeek, d, bLeash);
             if (b >= 0) tgt = target[i] = -b - 2;
           }
+        }
+        // 近战守军不追出据点（追的是最近打过自己的人除外）
+        if (guard && melee && tgt >= 0 && tgt !== w.hitBy[i * 2] && tgt !== w.hitBy[i * 2 + 1] && !w.engaged[i]
+          && !inSite(w, w.shelterSite[i], x[tgt], y[tgt])) {
+          tgt = target[i] = NONE;
+          w.waitT[i] = 0;
         }
       }
 
@@ -270,7 +296,7 @@ export function updateUnits(w: World): void {
         } else if (ord === O_HOLD) {
           target[i] = tgt = NONE;
         } else if (ord === O_IDLE && !(st & S_CHARGE) && (tx - w.homeX[i]) ** 2 + (ty - w.homeY[i]) ** 2
-          > (w.sheltered[i] && d.range > 0 ? SITE.alarm * SITE.alarm : LEASH2) * 1.2) {
+          > (w.sheltered[i] && (d.range > 0 || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm * SITE.alarm : LEASH2) * 1.2) {
           // 待命：敌人离岗位太远就不追了
           target[i] = tgt = NONE;
           w.ignoreT[i] = 1.5;
@@ -572,4 +598,25 @@ export function updateUnits(w: World): void {
     }
     w.odo[i] += moved;
   }
+}
+
+const ONE = [0];
+
+/** 最近 ticks 帧内打过 i 的、还活着且看得见的敌方远程单位（据点里的近战守军据此出击） */
+function provoker(w: World, i: number, tm: number, ticks: number): number {
+  for (let k = 0; k < 2; k++) {
+    const o = i * 2 + k, a = w.hitBy[o];
+    if (a < 0 || !w.alive[a] || w.uid[a] !== w.hitByUid[o] || w.team[a] === tm) continue;
+    if (w.tickCount - w.hitByTick[o] > ticks || w.defs[w.type[a]].range <= 0 || !(w.seen[a] & (1 << tm))) continue;
+    return a;
+  }
+  return NONE;
+}
+
+/** 点是否在据点的圈内（大本营按休整半径） */
+function inSite(w: World, site: number, px: number, py: number): boolean {
+  const s = w.sites[site];
+  if (!s) return true;
+  const r = s.radius > 0 ? s.radius : RULES.site.hqRadius;
+  return (px - s.x) ** 2 + (py - s.y) ** 2 < r * r;
 }

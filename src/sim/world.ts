@@ -325,6 +325,12 @@ export class World {
   readonly builds: PendingBuild[] = [];
   /** 单位此刻是否在己方据点里（雪天有遮蔽；sites 系统填写） */
   readonly sheltered = new Uint8Array(MAX_UNITS);
+  /** 出击的守军（被远程射中后追出据点）与它原来的位置：打完回去 */
+  readonly sortie = new Uint8Array(MAX_UNITS);
+  readonly sortieX = new Float32Array(MAX_UNITS);
+  readonly sortieY = new Float32Array(MAX_UNITS);
+  /** 所在的自家据点（sheltered 时有效） */
+  readonly shelterSite = new Int16Array(MAX_UNITS);
 
   // ---- 士气统计格（morale 系统填写） ----
   readonly mw: number;
@@ -449,6 +455,7 @@ export class World {
     this.waits[i] = this.crowd[i] = 0;
     this.seen[i] = 0;
     this.sheltered[i] = 0;
+    this.sortie[i] = 0;
     this.hitBy[i * 2] = this.hitBy[i * 2 + 1] = NONE;
     this.teamCount[tm]++;
     this.upkeep[tm] += d.upkeep;

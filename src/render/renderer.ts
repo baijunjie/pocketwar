@@ -746,8 +746,10 @@ export class Renderer {
   private drawSiteTorches(S: Quads, G: Quads, fog: boolean): void {
     const w = this.world;
     const dark = 1 - w.env.light;
-    if (dark < 0.35) return;
-    const k = Math.min(1, (dark - 0.35) / 0.3);
+    // 雨雪天火把点不着（随雨雪渐大熄灭）
+    const wet = Math.min(1, Math.max(w.env.rain, w.env.snow) * 1.5);
+    if (dark < 0.35 || wet >= 1) return;
+    const k = Math.min(1, (dark - 0.35) / 0.3) * (1 - wet);
     const near = this.dist < 3200;
     for (const s of w.sites) {
       if (s.gone || s.disabled || !this.inView(s.x, s.y, 600)) continue;

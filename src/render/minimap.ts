@@ -35,17 +35,12 @@ export class Minimap {
   /** 小地图上的像素位置 → 世界坐标 */
   toWorld(mx: number, my: number): { x: number; y: number } {
     const S = this.size, h = S / 2;
-    const cs = Math.cos(this.yaw), sn = Math.sin(this.yaw), f = this.fit();
-    // 把 draw() 里的「绕中心转 yaw、再缩小到装得下」反过来
+    const cs = Math.cos(this.yaw), sn = Math.sin(this.yaw);
+    // 把 draw() 里的「绕中心转 yaw」反过来
     const px = mx - h, py = my - h;
-    const x = (px * cs + py * sn) / f + h, y = (-px * sn + py * cs) / f + h;
+    const x = px * cs + py * sn + h, y = -px * sn + py * cs + h;
     const w = this.world;
     return { x: Math.min(w.W, Math.max(0, (x / S) * w.W)), y: Math.min(w.H, Math.max(0, (y / S) * w.H)) };
-  }
-
-  /** 转过角度之后，整张图缩小到这个比例才不会被小地图的方框裁掉 */
-  private fit(): number {
-    return 1 / (Math.abs(Math.cos(this.yaw)) + Math.abs(Math.sin(this.yaw)));
   }
 
   /** @param view 屏幕四角落在地面上的位置 */
@@ -53,12 +48,16 @@ export class Minimap {
     const c = this.ctx, w = this.world, S = this.size;
     const k = S / w.W;
     c.imageSmoothingEnabled = true;
+    c.clearRect(0, 0, S, S);
+    c.save();
+    // 圆形的小地图：随镜头旋转时不用缩小，四角落在圆外的部分裁掉
+    c.beginPath();
+    c.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
+    c.clip();
     c.fillStyle = '#14110d';
     c.fillRect(0, 0, S, S);
-    c.save();
     c.translate(S / 2, S / 2);
     c.rotate(this.yaw);
-    c.scale(this.fit(), this.fit());
     c.translate(-S / 2, -S / 2);
     c.drawImage(this.base, 0, 0, S, S);
     // 建筑
@@ -136,9 +135,6 @@ export class Minimap {
     c.strokeStyle = '#fff';
     c.lineWidth = 1.2;
     c.save();
-    c.beginPath();
-    c.rect(0, 0, S, S);
-    c.clip();
     c.beginPath();
     view.forEach((p, i) => (i ? c.lineTo(p.x * k, p.y * k) : c.moveTo(p.x * k, p.y * k)));
     c.closePath();

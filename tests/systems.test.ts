@@ -482,10 +482,15 @@ describe('据点与建筑', () => {
     // 接到别的命令：先下墙，垛口腾出来
     w.orderMove([u], hq.x, hq.y + 80, false);
     expect(sl.unit).toBe(-1);
-    for (let t = 0; t < 30 * 40 && w.order[u] !== 0; t++) w.tick();
-    expect(w.pmode[u]).toBe(0);
-    expect(w.state[u] & S_WALL).toBe(0);
-    expect(Math.hypot(w.x[u] - hq.x, w.y[u] - (hq.y + 80))).toBeLessThan(30);
+    let down = false;
+    for (let t = 0; t < 30 * 40 && !down; t++) {
+      w.tick();
+      down = w.pmode[u] === 0 && !(w.state[u] & S_WALL);
+    }
+    expect(down).toBe(true);
+    // 走到地方、在自家城里待命：又自动登城
+    run(w, 20);
+    expect(w.pmode[u]).toBe(3);
   }, 30000);
 
   it('占领：肃清守军后在旗下读秒；敌人回来暂停，旗下没人清零；占领后修复废墟', () => {
@@ -891,31 +896,41 @@ describe('第六轮反馈', () => {
     expect(worst).toBeLessThanOrEqual(hp0 * 0.3);
   });
 
-  it('据点里的守军：敌人到了城外就全体警觉，远程的上前迎击，近战的留在原地', () => {
+  it('据点里的守军：远程自动登城；近战不出城，挨了敌方远程的打才出击', () => {
     const w = game();
     for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
     const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
     const bow = w.spawnUnit(idx('nu'), 1, hq.x - 20, hq.y + 80), sword = w.spawnUnit(idx('dao'), 1, hq.x + 20, hq.y + 80);
-    run(w, 2);
-    expect(w.sheltered[bow] && w.sheltered[sword]).toBe(1);
-    expect((w.state[bow] | w.state[sword]) & S_COMBAT).toBe(0);
-    // 敌人出现在南门外：离两人约 450，比平时的索敌距离远得多，但在据点的警戒范围里
+    run(w, 25);
+    // 待命的弩兵自己走上城墙站到垛口上
+    expect(w.pmode[bow]).toBe(3);
+    expect(w.state[bow] & S_WALL).toBe(S_WALL);
+    expect(w.sheltered[sword]).toBe(1);
+    // 敌人出现在南门外：近战守军警觉但不出城
     const gate = hq.buildings.map(id => w.buildings[id]).filter(b => b.gate).sort((a, b) => b.cy - a.cy)[0];
     const foe = w.spawnUnit(idx('samurai'), 2, gate.cx, gate.cy + 150);
     w.hp[foe] = w.maxHp[foe] = 1e6;
     w.order[foe] = 4;
-    const far = Math.hypot(w.x[foe] - w.x[bow], w.y[foe] - w.y[bow]);
-    expect(far).toBeGreaterThan(UNIT_BY_KEY.nu.acq + 100);
-    expect(far).toBeLessThan(RULES.site.alarm);
-    const by0 = w.y[bow], sx0 = w.x[sword], sy0 = w.y[sword];
+    const sx0 = w.x[sword], sy0 = w.y[sword];
     run(w, 6);
     expect(w.state[sword] & S_COMBAT).toBe(S_COMBAT);
     expect(w.target[sword]).toBe(-1);
     expect(Math.hypot(w.x[sword] - sx0, w.y[sword] - sy0)).toBeLessThan(12);
-    expect(w.target[bow]).toBe(foe);
-    expect(w.y[bow] - by0).toBeGreaterThan(40);
-    run(w, 30);
-    expect(1e6 - w.hp[foe]).toBeGreaterThan(0);
+    w.removeUnit(foe);
+    // 城外的敌方弓手射中了它：出击去打那个弓手
+    const archer = w.spawnUnit(idx('yumi'), 2, gate.cx, gate.cy + 200);
+    w.hp[archer] = w.maxHp[archer] = 1e6;
+    w.order[archer] = 4;
+    run(w, 1);
+    damageUnit(w, sword, 5, 1, 0, UNIT_BY_KEY.yumi.vs, 2, archer);
+    run(w, 3);
+    expect(w.target[sword]).toBe(archer);
+    run(w, 10);
+    expect(Math.hypot(w.x[sword] - w.x[archer], w.y[sword] - w.y[archer])).toBeLessThan(60);
+    // 打完回原位
+    w.removeUnit(archer);
+    run(w, 20);
+    expect(Math.hypot(w.x[sword] - sx0, w.y[sword] - sy0)).toBeLessThan(40);
   }, 30000);
 
   it('编队只在不打仗的时候排队：攻击移动遇敌后全队各自上前，打完以现在的位置重新整队', () => {
