@@ -2,13 +2,14 @@
 import type { World } from '../world';
 
 /**
- * 阵型站位：按各兵种的默认排次（UnitDef.row）分行，快的在前、远程居后、器械殿后。
+ * 阵型站位：按各兵种的默认排次（UnitDef.row）分行，近战在前、远程居后、器械殿后，同一档里快的在前。
+ * 返回值里的 fa / fl 是每个单位相对队列中心沿前进方向、沿横向的偏移（编队行军时用）。
  * @param pos 若提供（单位槽位），按现有位置就近分配以减少交叉
  */
 export function formation(w: World, defIdxs: number[], cx: number, cy: number, dx: number, dy: number, pos: number[] | null):
-  { sx: Float32Array; sy: Float32Array; radius: number } {
+  { sx: Float32Array; sy: Float32Array; fa: Float32Array; fl: Float32Array; radius: number } {
   const n = defIdxs.length;
-  const sx = new Float32Array(n), sy = new Float32Array(n);
+  const sx = new Float32Array(n), sy = new Float32Array(n), fa = new Float32Array(n), fl = new Float32Array(n);
   const dl = Math.hypot(dx, dy);
   if (dl < 1e-4) {
     dx = 0;
@@ -70,11 +71,13 @@ export function formation(w: World, defIdxs: number[], cx: number, cy: number, d
     for (const m of r) {
       const sp = defs[defIdxs[m]].radius * 2 + 3;
       const l = xo + sp / 2;
+      fa[m] = fwd;
+      fl[m] = l;
       sx[m] = cx + lx * l + dx * fwd;
       sy[m] = cy + ly * l + dy * fwd;
       xo += sp;
     }
     dAcc += rowDepth[ri];
   }
-  return { sx, sy, radius: Math.hypot(width, depth) / 2 };
+  return { sx, sy, fa, fl, radius: Math.hypot(width, depth) / 2 };
 }

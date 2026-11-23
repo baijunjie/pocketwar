@@ -266,21 +266,25 @@ export function generateMap(seed: number, size = 320): GameMap {
       put('tower', x0, y0, owner, si); put('tower', x1 - 1, y0, owner, si);
       put('tower', x0, y1 - 1, owner, si); put('tower', x1 - 1, y1 - 1, owner, si);
     }
-    put(gh, cx - 1, y0, owner, si); put(gh, cx - 1, y1, owner, si);
-    put(gv, x0, cy - 1, owner, si); put(gv, x1, cy - 1, owner, si);
-    for (let x = x0; x <= x1; x++) {
-      if (!occ[y0 * W + x]) put(wall, x, y0, owner, si);
-      if (!occ[y1 * W + x]) put(wall, x, y1, owner, si);
-    }
-    for (let y = y0; y <= y1; y++) {
-      if (!occ[y * W + x0]) put(wall, x0, y, owner, si);
-      if (!occ[y * W + x1]) put(wall, x1, y, owner, si);
+    // 石墙两格厚（门楼、角楼都是 2×2，正好嵌在墙里），木栅一格
+    const th = wood ? 1 : 2;
+    put(gh, cx - 1, y0, owner, si); put(gh, cx - 1, y1 - th + 1, owner, si);
+    put(gv, x0, cy - 1, owner, si); put(gv, x1 - th + 1, cy - 1, owner, si);
+    for (let k = 0; k < th; k++) {
+      for (let x = x0; x <= x1; x++) {
+        if (!occ[(y0 + k) * W + x]) put(wall, x, y0 + k, owner, si);
+        if (!occ[(y1 - k) * W + x]) put(wall, x, y1 - k, owner, si);
+      }
+      for (let y = y0; y <= y1; y++) {
+        if (!occ[y * W + x0 + k]) put(wall, x0 + k, y, owner, si);
+        if (!occ[y * W + x1 - k]) put(wall, x1 - k, y, owner, si);
+      }
     }
     // 十字街与环墙马道
-    reserve(cx - 1, y0 + 1, 2, y1 - y0 - 1);
-    reserve(x0 + 1, cy - 1, x1 - x0 - 1, 2);
-    reserve(x0 + 1, y0 + 1, x1 - x0 - 1, 1); reserve(x0 + 1, y1 - 1, x1 - x0 - 1, 1);
-    reserve(x0 + 1, y0 + 1, 1, y1 - y0 - 1); reserve(x1 - 1, y0 + 1, 1, y1 - y0 - 1);
+    reserve(cx - 1, y0 + th, 2, y1 - y0 + 1 - th * 2);
+    reserve(x0 + th, cy - 1, x1 - x0 + 1 - th * 2, 2);
+    reserve(x0 + th, y0 + th, x1 - x0 + 1 - th * 2, 1); reserve(x0 + th, y1 - th, x1 - x0 + 1 - th * 2, 1);
+    reserve(x0 + th, y0 + th, 1, y1 - y0 + 1 - th * 2); reserve(x1 - th, y0 + th, 1, y1 - y0 + 1 - th * 2);
     dirtRect(x0, y0, x1, y1, 255);
     dirtDisc(cx, cy, Math.max(hw, hh) + 5, 120);
   };
@@ -292,8 +296,8 @@ export function generateMap(seed: number, size = 320): GameMap {
     reserve(tx - 1, ty - 1, d.w + 2, d.h + 2);
   };
   const fill = (si: number, cx: number, cy: number, hw: number, hh: number, defs: string[], density: number, owner: number): void => {
-    for (let gy = cy - hh + 2; gy + 1 <= cy + hh - 3; gy += 3) {
-      for (let gx = cx - hw + 2; gx + 1 <= cx + hw - 3; gx += 3) {
+    for (let gy = cy - hh + 3; gy + 1 <= cy + hh - 4; gy += 3) {
+      for (let gx = cx - hw + 3; gx + 1 <= cx + hw - 4; gx += 3) {
         if (rng.next() > density) continue;
         const def = rng.pick(defs);
         const d = BUILDINGS[def];

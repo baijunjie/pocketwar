@@ -5,8 +5,12 @@ import { MAX_UNITS, S_ROUT, World } from './sim/world';
 import { Minimap } from './render/minimap';
 import { Renderer } from './render/renderer';
 import { Hud } from './ui/hud';
+import { Sound } from './audio/sound';
 
 type Mode = '' | 'amove' | 'rally';
+
+/** 离屏幕边缘多少像素以内开始卷屏 */
+const EDGE_ZONE = 36;
 
 export class GameApp {
   readonly world: World;
@@ -14,6 +18,7 @@ export class GameApp {
   private readonly game: Game;
   private readonly hud: Hud;
   private readonly minimap: Minimap;
+  private readonly sound = new Sound();
   private readonly box: HTMLDivElement;
   private readonly sel = new Uint8Array(MAX_UNITS);
   private selList: number[] = [];
@@ -29,6 +34,9 @@ export class GameApp {
   private mouse = { x: 0, y: 0, inside: false };
   private drag: { x: number; y: number; active: boolean } | null = null;
   private pan: { x: number; y: number; rotate: boolean } | null = null;
+  /** 右键按下的位置：拖出一段距离就是在指定队列朝向 */
+  private rdrag: { sx: number; sy: number; x: number; y: number; active: boolean } | null = null;
+  private readonly cam0 = { yaw: 0, pitch: 0.8 };
   private lastClick = { t: 0, type: -1 };
   private lastGroup = { t: 0, g: -1 };
   private uiTimer = 0;
@@ -49,6 +57,8 @@ export class GameApp {
       setSpeed: s => this.setSpeed(s),
       focus: (x, y) => this.focus(x, y),
       exit: () => this.onExit(),
+      toggleSound: () => this.sound.toggle(),
+      soundOn: () => this.sound.enabled,
     });
     this.minimap = new Minimap(this.hud.minimap, w, this.renderer.terrain.miniColors,
       rgb.map(c => `rgb(${c[0]},${c[1]},${c[2]})`));
@@ -78,6 +88,7 @@ export class GameApp {
     cancelAnimationFrame(this.raf);
     for (const f of this.cleanup) f();
     this.hud.destroy();
+    this.sound.dispose();
     this.box.remove();
   }
 
@@ -91,12 +102,15 @@ export class GameApp {
   private bind(): void {
     const cv = this.canvas;
     this.on(cv, 'contextmenu', e => e.preventDefault());
+    // 浏览器要有用户操作才允许出声
+    this.on(window, 'pointerdown', () => this.sound.unlock());
     this.on(cv, 'pointerdown', e => {
       cv.focus();
       if (this.hud.helpOpen) return;
       const p = this.local(e);
       if (e.button === 1) {
-        this.pan = { x: p.x, y: p.y, rotate: e.altKey || e.shiftKey };
+        // 中键拖动旋转镜头；按住 Shift 改为平移
+        this.pan = { x: p.x, y: p.y, rotate: !e.shiftKey };
         cv.setPointerCapture(e.pointerId);
         e.preventDefault();
       } else if (e.button === 0) {
@@ -108,7 +122,11 @@ export class GameApp {
         cv.setPointerCapture(e.pointerId);
       } else if (e.button === 2) {
         if (this.mode) this.setMode('');
-        else this.rightClick(p.x, p.y, e.ctrlKey || e.metaKey);
+        else if (this.world.humanTeam && this.selList.length) {
+          const wp = this.renderer.screenToWorld(p.x, p.y);
+          this.rdrag = { sx: p.x, sy: p.y, x: wp.x, y: wp.y, active: false };
+          cv.setPointerCapture(e.pointerId);
+        }
       }
     });
     this.on(cv, 'pointermove', e => {
@@ -131,6 +149,14 @@ export class GameApp {
         this.pan.y = p.y;
         this.renderer.clampCam();
       }
+      const rd = this.rdrag;
+      if (rd) {
+        if (!rd.active && Math.hypot(p.x - rd.sx, p.y - rd.sy) > 14) rd.active = true;
+        if (rd.active) {
+          const wp = this.renderer.screenToWorld(p.x, p.y);
+          this.renderer.arrow = { x0: rd.x, y0: rd.y, x1: wp.x, y1: wp.y };
+        }
+      }
       const d = this.drag;
       if (d) {
         if (!d.active && Math.hypot(p.x - d.x, p.y - d.y) > 5) d.active = true;
@@ -147,6 +173,16 @@ export class GameApp {
     this.on(cv, 'pointerup', e => {
       const p = this.local(e);
       if (this.pan && (e.button === 1 || e.button === 0)) this.pan = null;
+      const rd = this.rdrag;
+      if (rd && e.button === 2) {
+        this.rdrag = null;
+        this.renderer.arrow = null;
+        if (rd.active) {
+          // 拖动：在按下的位置列阵，面朝拖动的方向
+          const wp = this.renderer.screenToWorld(p.x, p.y);
+          this.issueMove(rd.x, rd.y, false, wp.x - rd.x, wp.y - rd.y);
+        } else this.rightClick(rd.sx, rd.sy, e.ctrlKey || e.metaKey);
+      }
       const d = this.drag;
       if (d && e.button === 0) {
         this.drag = null;
@@ -155,7 +191,14 @@ export class GameApp {
         else this.clickSelect(p.x, p.y, e.shiftKey);
       }
     });
-    this.on(cv, 'pointerleave', () => {
+    // 鼠标位置在整个窗口上跟踪：停在界面面板上时也能靠屏幕边缘卷屏
+    this.on(window, 'pointermove', e => {
+      const p = this.local(e);
+      this.mouse.x = p.x;
+      this.mouse.y = p.y;
+      this.mouse.inside = p.x >= 0 && p.y >= 0 && p.x <= this.renderer.viewW && p.y <= this.renderer.viewH;
+    });
+    this.on(document.documentElement, 'pointerleave', () => {
       this.mouse.inside = false;
     });
     this.on(cv, 'wheel', e => {
@@ -204,6 +247,7 @@ export class GameApp {
       if (e.target instanceof HTMLInputElement) return;
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       this.keys.add(k);
+      this.sound.unlock();
       if (e.repeat) return;
       const human = this.world.humanTeam;
       if (k.startsWith('Arrow') || k === ' ') e.preventDefault();
@@ -217,6 +261,7 @@ export class GameApp {
       } else if (k === ' ' || k === 'p') this.setSpeed(this.speed ? 0 : this.lastSpeed);
       else if (k === '=' || k === '+') this.setSpeed(Math.min(4, Math.max(1, this.speed * 2)));
       else if (k === '-') this.setSpeed(Math.max(1, this.speed / 2));
+      else if (k === 'm') this.hud.setSound(this.sound.toggle());
       else if (!human) return;
       else if (k === 'a' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -226,6 +271,11 @@ export class GameApp {
       else if (k === 'h') this.command('hold');
       else if (k === 'r') this.command('rally');
       else if (k === 't') this.command('torch');
+      else if (k === 'Home' || k === 'Backspace') {
+        // 镜头转回正北、恢复默认俯角
+        this.renderer.cam.yaw = this.cam0.yaw;
+        this.renderer.cam.pitch = this.cam0.pitch;
+      }
       else if (e.code.startsWith('Digit')) {
         // 用物理键位判断：Mac 上 Option+数字 输出的是特殊字符，Cmd+数字 又会被浏览器拿去切标签页
         const g = Number(e.code.slice(5));
@@ -233,6 +283,20 @@ export class GameApp {
           e.preventDefault();
           this.groups[g] = { slots: this.selList.slice(), uids: this.selUid.slice() };
           this.hud.message(`已编为第 ${g} 队（${this.selList.length} 人）`, 'info');
+        } else if (e.shiftKey) {
+          // 追加编队：把当前选中的并入该队，并选中合并后的整队
+          const w = this.world;
+          const old = this.groups[g];
+          const slots = old ? old.slots.filter((s, i) => w.controllable(s) && w.uid[s] === old.uids[i]) : [];
+          const have = new Set(slots);
+          let added = 0;
+          for (const s of this.selList) if (!have.has(s)) {
+            slots.push(s);
+            added++;
+          }
+          this.groups[g] = { slots, uids: slots.map(s => w.uid[s]) };
+          this.setSelection(slots.slice());
+          this.hud.message(`第 ${g} 队追加 ${added} 人，共 ${slots.length} 人`, 'info');
         } else {
           const grp = this.groups[g];
           if (!grp) return;
@@ -258,6 +322,9 @@ export class GameApp {
     this.on(window, 'blur', () => {
       this.keys.clear();
       this.pan = null;
+      this.rdrag = null;
+      this.renderer.arrow = null;
+      this.mouse.inside = false;
     });
   }
 
@@ -426,9 +493,10 @@ export class GameApp {
     this.setMode('');
   }
 
-  private issueMove(x: number, y: number, amove: boolean): void {
+  private issueMove(x: number, y: number, amove: boolean, fx = 0, fy = 0): void {
     if (!this.selList.length) return;
-    this.world.orderMove(this.selList, x, y, amove);
+    this.world.orderMove(this.selList, x, y, amove, fx, fy);
+    this.sound.ui(amove ? 'attack' : 'order');
     if (amove) this.renderer.addMarker(x, y, 1, 0.45, 0.25);
     else this.renderer.addMarker(x, y, 0.4, 1, 0.45);
   }
@@ -441,6 +509,7 @@ export class GameApp {
     const enemy = this.unitAt(sx, sy, 3 - human, true);
     if (enemy >= 0) {
       w.orderAttackUnit(this.selList, enemy);
+      this.sound.ui('attack');
       this.renderer.addMarker(w.x[enemy], w.y[enemy], 1, 0.25, 0.2);
       return;
     }
@@ -451,9 +520,11 @@ export class GameApp {
         if (b.alive && b.owner !== human && (b.owner !== 0 || force) && (!w.fog || w.isExplored(b.cx, b.cy))) {
           if (b.def.fort && !this.selList.some(s => w.defs[w.type[s]].siege)) {
             this.hud.message(`${b.def.name}只有器械和战象能破坏`, 'info');
+            this.sound.ui('deny');
             return;
           }
           w.orderAttackBuilding(this.selList, b);
+          this.sound.ui('attack');
           this.renderer.addMarker(b.cx, b.cy, 1, 0.25, 0.2);
           return;
         }
@@ -487,6 +558,14 @@ export class GameApp {
     }
     this.updateCamera(real);
     this.prune();
+    // 音效要赶在渲染器取走特效事件之前读
+    if (running) {
+      const rd = this.renderer, cam = rd.cam;
+      this.sound.update(w, cam.x, cam.y, 900 / cam.zoom + 250, cam.zoom, (x, y) => {
+        const p = rd.worldToScreen(x, y);
+        return p ? Math.max(-0.8, Math.min(0.8, (p.x / rd.viewW) * 2 - 1)) : 0;
+      });
+    }
     this.drainEvents();
 
     this.renderer.render(Math.min(1, this.acc / DT), running ? real * Math.min(this.speed, 2) : 0, this.sel, this.selList.length <= 40);
@@ -511,13 +590,12 @@ export class GameApp {
     if (k.has('ArrowRight')) dx += 1;
     if (k.has('ArrowUp')) dy -= 1;
     if (k.has('ArrowDown')) dy += 1;
-    // 全屏时启用屏幕边缘滚动
-    if (document.fullscreenElement && this.mouse.inside && !this.drag && !this.pan) {
-      const m = 14;
-      if (this.mouse.x < m) dx -= 1;
-      else if (this.mouse.x > this.renderer.viewW - m) dx += 1;
-      if (this.mouse.y < m) dy -= 1;
-      else if (this.mouse.y > this.renderer.viewH - m) dy += 1;
+    // 鼠标移到屏幕边缘卷屏：越靠近边缘越快
+    if (this.mouse.inside && !this.drag && !this.pan && !this.rdrag?.active && !this.hud.helpOpen && document.hasFocus()) {
+      const m = EDGE_ZONE, vw = this.renderer.viewW, vh = this.renderer.viewH;
+      const edge = (v: number): number => (v >= m ? 0 : 0.25 + 0.75 * (1 - Math.max(0, v) / m) ** 2);
+      dx += edge(vw - this.mouse.x) - edge(this.mouse.x);
+      dy += edge(vh - this.mouse.y) - edge(this.mouse.y);
     }
     if (dx || dy) {
       const sp = (1100 / cam.zoom) * dt;

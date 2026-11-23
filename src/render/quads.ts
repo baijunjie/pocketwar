@@ -116,7 +116,8 @@ export class Quads {
   readonly uniforms: { uTex: THREE.IUniform; uView: THREE.IUniform<THREE.Vector2> };
 
   /** @param ground 贴地层：在不透明队列里紧跟地形绘制，不做深度测试 */
-  constructor(tex: THREE.Texture, opts: { ground?: boolean; overlay?: boolean } = {}, cap = 1024) {
+  /** @param opts.lift 贴在桥面、墙顶这类模型表面上的标记：做深度测试，并用深度偏移避免与表面打架 */
+  constructor(tex: THREE.Texture, opts: { ground?: boolean; overlay?: boolean; lift?: boolean } = {}, cap = 1024) {
     this.cap = cap;
     this.data = new Float32Array(cap * STRIDE);
     this.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]), 3));
@@ -131,10 +132,15 @@ export class Quads {
       blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
       blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
     });
+    if (opts.lift) {
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = -4;
+      mat.polygonOffsetUnits = -8;
+    }
     this.mesh = new THREE.Mesh(this.geo, mat);
     this.mesh.frustumCulled = false;
     this.mesh.matrixAutoUpdate = false;
-    this.mesh.renderOrder = opts.ground ? -1 : opts.overlay ? 20 : 10;
+    this.mesh.renderOrder = opts.ground ? -1 : opts.overlay ? 20 : opts.lift ? 9 : 10;
   }
 
   private bindBuffer(): THREE.InstancedInterleavedBuffer {

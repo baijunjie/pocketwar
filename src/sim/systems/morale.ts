@@ -76,7 +76,7 @@ export function updateMorale(w: World): void {
   for (let i = 0; i < n; i++) {
     if (!alive[i]) continue;
     if (w.steadyT[i] > 0) w.steadyT[i] -= dtS;
-    if (state[i] & S_ROUT) continue;
+    const fleeing = (state[i] & S_ROUT) !== 0;
     const tm = team[i], en = 3 - tm;
     const d = defs[type[i]];
     const ux = w.x[i], uy = w.y[i];
@@ -115,6 +115,11 @@ export function updateMorale(w: World): void {
     else m = Math.max(target, m - M.fall * dtS);
     m = m < 0 ? 0 : m > 100 ? 100 : m;
     w.morale[i] = m;
+    if (fleeing) {
+      // 溃兵的士气照常实时计算：逃到己方大部队身边、形势好转，士气回到阈值以上一截就当场恢复指挥
+      if (m >= d.lvRout[lv] + M.recover) rallyUnit(w, i, false);
+      continue;
+    }
     sum[tm] += m;
     cnt[tm]++;
     if (m < d.lvRout[lv] && w.steadyT[i] <= 0) {
@@ -157,7 +162,7 @@ function pickRefuge(w: World, i: number): void {
   w.destX[i] = tx;
   w.destY[i] = ty;
   w.destCell[i] = cell;
-  w.field[i] = w.lineBlocked(ux, uy, tx, ty, w.nav.block[tm]) ? w.nav.getField(tm, cell, w.tickCount) : null;
+  w.field[i] = w.lineBlocked(ux, uy, tx, ty, tm) ? w.nav.getField(tm, cell, w.tickCount) : null;
 }
 
 export function startRout(w: World, i: number): void {
@@ -168,18 +173,21 @@ export function startRout(w: World, i: number): void {
   w.target[i] = w.otarget[i] = NONE;
   w.chargeT[i] = w.braceT[i] = w.shieldT[i] = w.waitT[i] = 0;
   w.grpSpeed[i] = 0;
+  w.grp[i] = -1;
   w.stuck[i] = 0;
   pickRefuge(w, i);
 }
 
 /** 逃到己方据点：重整旗鼓，恢复控制 */
-export function rallyUnit(w: World, i: number): void {
+/** @param atSite 逃回据点重整的士气直接回到 rally；半路被友军稳住的保持当前士气，稳定期也短一些 */
+export function rallyUnit(w: World, i: number, atSite = true): void {
   const tm = w.team[i];
   w.state[i] = 0;
   w.routing[tm]--;
-  w.morale[i] = Math.max(w.morale[i], RULES.morale.rally);
-  w.steadyT[i] = RULES.morale.steady;
+  if (atSite) w.morale[i] = Math.max(w.morale[i], RULES.morale.rally);
+  w.steadyT[i] = atSite ? RULES.morale.steady : RULES.morale.steadyField;
   w.order[i] = O_IDLE;
+  w.faceA[i] = w.dir[i];
   w.homeX[i] = w.x[i];
   w.homeY[i] = w.y[i];
   w.field[i] = null;

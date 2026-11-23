@@ -14,7 +14,7 @@ defineSize({ key: 'huge', name: '巨型', radius: 15, speedMul: 0.7, upkeep: 4, 
 export const HP_SCALE = 2.2;
 
 export const LEVELS: LevelRules = {
-  thresholds: [0, 40, 110, 240, 480],
+  thresholds: [0, 30, 80, 160, 300],
   names: ['新兵', '老兵', '精锐', '悍卒', '宿将'],
   hp: 0.12,
   dmg: 0.08,
@@ -52,6 +52,19 @@ export const RULES = {
     braceRadius: 190,
     braceHold: 1.4,
     shieldHold: 4,
+    /** 站定出手的单位只有被挤到重叠超过这个比例（两者半径和的占比）才会让位 */
+    plantGive: 0.7,
+  },
+  march: {
+    /** 编队行军：部队离各自的队列位置平均不超过 lagFull 时全速前进，超过 lagStop 时领队原地等待 */
+    lagFull: 30,
+    lagStop: 110,
+    /** 领队转向的角速度（弧度/秒） */
+    turn: 1.4,
+    /** 下令时部队散得太开（离重心的均方根距离超过这个值）就不编队，各走各的 */
+    maxSpread: 520,
+    /** 攻击移动时，交手的成员超过这个比例领队就停下 */
+    holdFight: 0.15,
   },
   morale: {
     base: 70,
@@ -92,21 +105,35 @@ export const RULES = {
     steady: 25,
     /** 溃兵离己方据点多近算「逃回去了」 */
     rallyRadius: 110,
+    /** 溃逃途中士气回升到「溃逃阈值 + recover」即当场恢复指挥，之后 steadyField 秒内不会再次溃逃 */
+    recover: 12,
+    steadyField: 10,
+    /** 溃兵丢盔弃甲：护甲不算，受到的伤害再乘这个倍率 */
+    routDamage: 1.6,
   },
   siege: {
     /** 人形单位打建筑时投掷火把：距离、伤害、间隔 */
     torchRange: 60,
     torchDmg: 16,
     torchCd: 2.2,
-    /** 火把对木质建筑、石质建筑、石城门的伤害倍率（石墙与石箭楼完全烧不动） */
+    /** 火把对木质建筑、石质建筑、门楼与角楼的伤害倍率（石墙完全烧不动） */
     wood: 1.5,
     stone: 0.5,
     gate: 0.3,
     /** 站在城墙上：射程倍率、所受远程伤害倍率 */
     wallRange: 1.15,
     wallCover: 0.6,
-    /** 己方单位上墙的寻路代价（越大越倾向走城门） */
+    /** 己方单位上墙的寻路代价（越大越倾向走城门）；只能从城内一侧上下 */
     climbCost: 60,
+  },
+  site: {
+    /** 己方据点内、不在战斗中的单位每秒恢复的生命比例 */
+    unitRegen: 0.012,
+    /** 大本营没有占领圈：离中心这么近就算在据点里 */
+    hqRadius: 400,
+    /** 据点建筑多少秒没挨打后开始自行修复，以及每秒修复的比例 */
+    bldCalm: 15,
+    bldRegen: 0.006,
   },
   capture: {
     /** 旗帜区半径：进攻方要有人站在这里面 */

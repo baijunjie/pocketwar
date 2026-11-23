@@ -70,6 +70,7 @@ export function createGame(opts: GameOptions): Game {
     site.buildings.push(b.id);
     if (spec.main) site.main = b.id;
   }
+  world.sealWalls();
 
   const aiSizeMult = [0.8, 1, 1.2][opts.difficulty];
   const ais: Commander[] = [];

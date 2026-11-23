@@ -1,7 +1,7 @@
 /** 游戏内界面：顶栏、据点与援军、选中面板、指令按钮、战报、帮助与结算 */
 import { CLASS_NAMES, FactionDef, LEVELS, RULES, SITE_CATEGORY_NAMES, SITE_INFO, SIZES, UNITS, UnitDef } from '../sim/defs';
 import { teamMoraleFactors } from '../sim/systems/morale';
-import { World } from '../sim/world';
+import { S_BRACE, S_CHARGE, S_COMBAT, S_SHIELD, S_TORCH, S_WALL, World } from '../sim/world';
 import { unitPortrait } from '../render/portrait';
 
 export interface HudCallbacks {
@@ -10,6 +10,8 @@ export interface HudCallbacks {
   setSpeed(s: number): void;
   focus(x: number, y: number): void;
   exit(): void;
+  toggleSound(): boolean;
+  soundOn(): boolean;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''): HTMLElementTagNameMap[K] {
@@ -50,6 +52,7 @@ export class Hud {
   private readonly help: HTMLDivElement;
   private readonly over: HTMLDivElement;
   private readonly speedBtns: HTMLButtonElement[] = [];
+  private soundBtn!: HTMLButtonElement;
   private readonly portraits = new Map<number, string>();
   private selKey = '?';
   private readonly dbg: HTMLSpanElement;
@@ -87,11 +90,15 @@ export class Hud {
       if (document.fullscreenElement) void document.exitFullscreen();
       else void document.documentElement.requestFullscreen();
     };
+    this.soundBtn = el('button', '', '');
+    this.soundBtn.title = '开 / 关音效（M）';
+    this.soundBtn.onclick = () => this.setSound(cb.toggleSound());
+    this.setSound(cb.soundOn());
     const hb = el('button', '', '帮助');
     hb.onclick = () => this.toggleHelp();
     const xb = el('button', '', '退出');
     xb.onclick = () => cb.exit();
-    ctl.append(fs, hb, xb);
+    ctl.append(fs, this.soundBtn, hb, xb);
     root.appendChild(ctl);
 
     // ---- 据点与援军 ----
@@ -145,20 +152,23 @@ export class Hud {
         <h2>操作说明</h2>
         <table>
           <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
-          <tr><td>右键地面</td><td>移动（自动列阵：近战在前、远程居后、器械殿后）</td></tr>
+          <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
+          <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
           <tr><td>右键敌军 / 敌方建筑</td><td>攻击（Ctrl+右键可强攻中立建筑）</td></tr>
           <tr><td>A + 左键</td><td>攻击移动：沿途遇敌即战，遇墙自动破城</td></tr>
           <tr><td>S / H</td><td>停止 / 坚守</td></tr>
           <tr><td>R + 左键</td><td>设置援军集结点</td></tr>
           <tr><td>T</td><td>点燃 / 熄灭所选部队的火把（夜间）</td></tr>
           <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
-          <tr><td>方向键、中键拖动、小地图</td><td>移动镜头；滚轮缩放</td></tr>
-          <tr><td>空格 / + −</td><td>暂停 / 调整速度</td></tr>
+          <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
+          <tr><td>鼠标移到屏幕边缘、方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
+          <tr><td>中键拖动、Q / E</td><td>旋转镜头（上下拖动调俯角）；Shift+中键拖动平移；Home 复位</td></tr>
+          <tr><td>空格 / + −　M</td><td>暂停 / 调整速度　开关音效</td></tr>
         </table>
         <p><b>目标：</b>摧毁敌方大本营的主堡。<b>占领据点：</b>先肃清圈内守军，再派人站到中央旗帜下读秒；敌人回到圈内读秒暂停，旗下没人则清零。占领后援军定时从己方后方入场，被毁的建筑也会修好。</p>
-        <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙和箭楼只有器械与战象能破（城门可以慢慢烧开）。己方单位可以走上自家城墙驻守，射得更远、挨箭更轻。</p>
+        <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙只有器械与战象能破（门楼、角楼可以慢慢烧毁，它们和营寨的望楼都会放箭）。己方单位可以从城内一侧走上自家城墙和角楼驻守，射得更远、挨箭更轻。</p>
         <p>高地上的远程部队射程与伤害更高；森林减免远程伤害并拖慢骑兵；浅滩可涉水但行动迟缓。</p>
-        <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会变白溃逃，逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
+        <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会溃逃（头顶一面小白旗，防御大减），逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
         <p><b>粮草：</b>据点产粮、部队吃粮，只靠大本营养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。</p>
         <button class="primary">开始指挥</button>
       </div>`);
@@ -178,6 +188,11 @@ export class Hud {
 
   toggleHelp(): void {
     this.help.hidden = !this.help.hidden;
+  }
+
+  setSound(on: boolean): void {
+    this.soundBtn.textContent = on ? '音效：开' : '音效：关';
+    this.soundBtn.classList.toggle('on', on);
   }
 
   setSpeed(s: number): void {
@@ -271,8 +286,69 @@ export class Hud {
     return url;
   }
 
+  /** 只选中一个单位时：列出它此刻的全部数值（含等级加成）与状态 */
+  private unitDetail(s: number): void {
+    const w = this.world;
+    const d = UNITS[w.type[s]];
+    const lv = w.level[s], max = LEVELS.thresholds.length;
+    const st = w.state[s];
+    const key = `one:${s}:${w.uid[s]}:${lv}:${Math.round(w.hp[s])}:${Math.round(w.xp[s])}:${Math.round(w.morale[s])}:${st}`;
+    if (key === this.selKey) return;
+    this.selKey = key;
+    const pct = (v: number): string => (lv > 0 ? ` <i>+${Math.round(v * lv * 100)}%</i>` : '');
+    const num = (v: number): string => String(Math.round(v * 10) / 10);
+    const next = lv + 1 < max ? LEVELS.thresholds[lv + 1] : 0;
+    const base = LEVELS.thresholds[lv];
+    const xpPct = next ? Math.round(((w.xp[s] - base) / (next - base)) * 100) : 100;
+    const routAt = d.lvRout[lv];
+    const m = Math.round(w.morale[s]);
+    const flags: string[] = [st & S_COMBAT ? '战斗' : '行军'];
+    if (st & S_CHARGE) flags.push('冲锋');
+    if (st & S_BRACE) flags.push('立枪');
+    if (st & S_SHIELD) flags.push('举盾');
+    if (st & S_WALL) flags.push('城墙上');
+    if (st & S_TORCH) flags.push('火把');
+    const ab = d.abilities;
+    const perks: string[] = [];
+    if (ab.charge) perks.push(`冲锋 ${ab.charge.impact}`);
+    if (ab.brace) perks.push(`拒马 ${ab.brace.dmg}`);
+    if (ab.shield) perks.push(`举盾 −${Math.round(ab.shield.block * 100)}%`);
+    if (d.mobile) perks.push('可边走边打');
+    if (d.siege) perks.push('可破城墙');
+    if (d.aux) perks.push(`副武器 ${d.aux.dmg}/${d.aux.range}`);
+    this.selBox.innerHTML = `
+      <div class="udetail" title="${unitTip(d).replace(/"/g, '&quot;')}">
+        <div class="who">
+          <img src="${this.portrait(d.idx, w.humanTeam)}" draggable="false">
+          <b>${d.name}</b>
+          <span>${CLASS_NAMES[d.cls]} · ${SIZES[d.size].name}</span>
+        </div>
+        <div class="rows">
+          <div class="lvrow"><b>等级 ${lv + 1} / ${max}</b> ${LEVELS.names[lv]}
+            <span class="pips">${'◆'.repeat(lv + 1)}<i>${'◇'.repeat(max - lv - 1)}</i></span>
+            <span class="xp" title="击杀得全额经验，助攻得 ${Math.round(RULES.xp.assist * 100)}%"><u style="width:${xpPct}%"></u></span>
+            <span class="dim">${next ? `经验 ${Math.round(w.xp[s])} / ${next}` : '已满级'}</span></div>
+          <div class="grid">
+            <span>生命</span><b>${Math.round(w.hp[s])} / ${Math.round(w.maxHp[s])}${pct(LEVELS.hp)}</b>
+            <span>攻击</span><b>${num(d.lvDmg[lv])}${d.splash ? '（范围）' : ''}${pct(LEVELS.dmg)}</b>
+            <span>间隔</span><b>${num(d.lvCd[lv])} 秒${lv > 0 ? ` <i>−${Math.round(LEVELS.cd * lv * 100)}%</i>` : ''}</b>
+            <span>射程</span><b>${d.range ? d.range : '近战'}</b>
+            <span>护甲</span><b>近 ${num(d.lvArmM[lv])} · 远 ${num(d.lvArmP[lv])}${lv > 0 ? ` <i>+${num(LEVELS.armor * lv)}</i>` : ''}</b>
+            <span>速度</span><b>行军 ${d.walk} · 奔跑 ${d.speed}</b>
+            <span>士气</span><b class="${routAt >= 0 && m < routAt + 12 ? 'bad' : m < 55 ? 'warn' : ''}">${m} <i>${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}</i></b>
+            <span>状态</span><b>${flags.join(' · ')}</b>
+          </div>
+          ${perks.length ? `<div class="dim">${perks.join('　')}</div>` : ''}
+        </div>
+      </div>`;
+  }
+
   updateSelection(sel: number[]): void {
     const w = this.world;
+    if (sel.length === 1 && w.alive[sel[0]]) {
+      this.unitDetail(sel[0]);
+      return;
+    }
     const count = new Map<number, { n: number; hp: number; lv: number; top: number; morale: number }>();
     let moraleSum = 0;
     for (const s of sel) {
@@ -306,10 +382,10 @@ export class Hud {
         <img src="${this.portrait(t, w.humanTeam)}" draggable="false">
         <span class="n">${e.n}</span>
         <span class="nm">${d.name}</span>
-        ${e.top > 0 ? `<span class="lv">${'◆'.repeat(Math.max(1, Math.round(e.lv / e.n)))}</span>` : ''}
+        <span class="lv" title="平均等级（最高 ${LEVELS.thresholds.length} 级）">Lv${Math.round(e.lv / e.n) + 1}</span>
         <span class="hp"><u style="width:${Math.round((e.hp / e.n) * 100)}%"></u></span>`);
       const routAt = d.lvRout[Math.round(e.lv / e.n)];
-      card.title = `${unitTip(d)}\n—\n平均等级 ${LEVELS.names[Math.round(e.lv / e.n)]}（最高 ${LEVELS.names[e.top]}）　士气 ${Math.round(e.morale / e.n)}`
+      card.title = `${unitTip(d)}\n—\n平均等级 ${Math.round(e.lv / e.n) + 1}（${LEVELS.names[Math.round(e.lv / e.n)]}），最高 ${e.top + 1} 级，满级 ${LEVELS.thresholds.length} 级　士气 ${Math.round(e.morale / e.n)}`
         + `　${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}`;
       card.onclick = ev => this.cb.selectType(t, ev.shiftKey || ev.ctrlKey || ev.metaKey);
       this.selBox.appendChild(card);

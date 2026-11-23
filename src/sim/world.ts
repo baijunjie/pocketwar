@@ -3,6 +3,7 @@
  * 这里只放数据和最基础的增删查；所有玩法算法在 systems/ 下，由 tick() 按管线依次调用。
  */
 import { BK_GATE, BuildingDef, DT, FactionDef, LEVELS, RULES, TILE, UNITS } from './content';
+import type { March } from './systems/march';
 import { GameMap } from './map';
 import { Field, Nav } from './nav';
 import { RNG } from './rng';
@@ -158,6 +159,15 @@ export class World {
   readonly combatT = new Float32Array(MAX_UNITS);
   /** 编队行军速度上限（0 = 不限），由移动指令统一成队里最慢的 */
   readonly grpSpeed = new Float32Array(MAX_UNITS);
+  /** 所属的行军编队（marches 下标，-1 = 没有），以及在队列里的位置：沿前进方向、沿横向的偏移 */
+  readonly grp = new Int16Array(MAX_UNITS).fill(-1);
+  readonly offA = new Float32Array(MAX_UNITS);
+  readonly offL = new Float32Array(MAX_UNITS);
+  /** 到位后面朝的方向（弧度） */
+  readonly faceA = new Float32Array(MAX_UNITS);
+  /** 正站定出手（不会被挤动） */
+  readonly planted = new Uint8Array(MAX_UNITS);
+  readonly marches: March[] = [];
   readonly level = new Uint8Array(MAX_UNITS);
   readonly xp = new Float32Array(MAX_UNITS);
   readonly morale = new Float32Array(MAX_UNITS);
@@ -371,6 +381,9 @@ export class World {
     this.field[i] = null;
     this.state[i] = 0;
     this.combatT[i] = this.grpSpeed[i] = 0;
+    this.grp[i] = -1;
+    this.faceA[i] = this.dir[i];
+    this.planted[i] = 0;
     this.morale[i] = RULES.morale.base + d.discipline + level * RULES.morale.perLevel;
     this.steadyT[i] = 0;
     this.routSite[i] = -1;
@@ -394,6 +407,8 @@ export class World {
     this.upkeep[tm] -= this.defs[this.type[j]].upkeep;
     if (this.state[j] & S_ROUT) this.routing[tm]--;
     this.state[j] = 0;
+    this.grp[j] = -1;
+    this.planted[j] = 0;
     this.field[j] = null;
     this.free[this.freeN++] = j;
   }
@@ -424,8 +439,9 @@ export class World {
   // =====================================================================
   // 指令（算法在 systems/orders.ts）
   // =====================================================================
-  orderMove(units: number[], tx: number, ty: number, amove: boolean): void {
-    orders.orderMove(this, units, tx, ty, amove);
+  /** @param fx, fy 到位后队列面朝的方向；都为 0 时取行进方向 */
+  orderMove(units: number[], tx: number, ty: number, amove: boolean, fx = 0, fy = 0): void {
+    orders.orderMove(this, units, tx, ty, amove, fx, fy);
   }
   orderAttackUnit(units: number[], tgt: number): void {
     orders.orderAttackUnit(this, units, tgt);
@@ -445,17 +461,46 @@ export class World {
     return this.alive[i] === 1 && !(this.state[i] & S_ROUT);
   }
 
-  /** 两点之间是否被本队不可通行的格子挡住 */
-  lineBlocked(ax: number, ay: number, bx: number, by: number, blk: Uint8Array): boolean {
+  /** 两点之间是否走不通：被本队不可通行的格子挡住，或者要从城外一侧翻上 / 翻下墙顶 */
+  lineBlocked(ax: number, ay: number, bx: number, by: number, tm: number): boolean {
     const dx = bx - ax, dy = by - ay;
     const len = Math.hypot(dx, dy);
-    const steps = Math.ceil(len / 20);
+    const steps = Math.ceil(len / 16);
     const w = this.map.w;
+    const blk = this.nav.block[tm], dk = this.nav.deck[tm], inner = this.nav.inner;
+    let prev = ((ay / TILE) | 0) * w + ((ax / TILE) | 0);
     for (let k = 1; k <= steps; k++) {
       const t = k / steps;
-      if (blk[(((ay + dy * t) / TILE) | 0) * w + (((ax + dx * t) / TILE) | 0)]) return true;
+      const c = (((ay + dy * t) / TILE) | 0) * w + (((ax + dx * t) / TILE) | 0);
+      if (c === prev) continue;
+      if (blk[c] || (dk[c] !== dk[prev] && !inner[dk[c] ? prev : c])) return true;
+      prev = c;
     }
     return false;
+  }
+
+  /**
+   * 圈出各据点城墙以内的地面（开局摆完建筑后调用一次）：单位只能从这些格子上下墙顶，城外一侧上不去。
+   */
+  sealWalls(): void {
+    const nav = this.nav, mw = this.map.w;
+    for (const s of this.sites) {
+      let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+      for (const id of s.buildings) {
+        const b = this.buildings[id];
+        if (b.def.top <= 0) continue;
+        x0 = Math.min(x0, b.tx);
+        y0 = Math.min(y0, b.ty);
+        x1 = Math.max(x1, b.tx + b.w - 1);
+        y1 = Math.max(y1, b.ty + b.h - 1);
+      }
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const id = nav.bld[y * mw + x];
+        const b = id >= 0 ? this.buildings[id] : null;
+        if (!b || (b.def.top <= 0 && !b.gate)) nav.inner[y * mw + x] = 1;
+      }
+    }
+    nav.version++;
   }
 
   // =====================================================================

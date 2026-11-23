@@ -6,6 +6,7 @@ import type { World } from '../world';
 import { updateProjectiles, updateTowers } from './combat';
 import { updateEnvironment } from './environment';
 import { buildGrid } from './grid';
+import { updateMarches } from './march';
 import { MORALE_EVERY, updateMorale } from './morale';
 import { updateSites } from './sites';
 import { updateSupply } from './supply';
@@ -26,6 +27,7 @@ export function defaultSystems(): System[] {
   return [
     { name: 'environment', every: ENV_EVERY, phase: 0, run: updateEnvironment },
     { name: 'grid', every: 1, phase: 0, run: buildGrid },
+    { name: 'march', every: 1, phase: 0, run: updateMarches },
     { name: 'units', every: 1, phase: 0, run: updateUnits },
     { name: 'projectiles', every: 1, phase: 0, run: updateProjectiles },
     { name: 'towers', every: 1, phase: 0, run: updateTowers },

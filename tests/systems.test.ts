@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LEVELS, RULES, SITE_CAMP, SITE_HQ, SITE_INFO, SITE_TOWN, SIZES, TILE, UNITS, UNIT_BY_KEY } from '../src/sim/defs';
+import { BUILDINGS, LEVELS, RULES, SITE_CAMP, SITE_HQ, SITE_INFO, SITE_TOWN, SIZES, TILE, UNITS, UNIT_BY_KEY } from '../src/sim/defs';
 import { createGame } from '../src/sim/setup';
 import { damageUnit } from '../src/sim/systems/combat';
 import { lightAt } from '../src/sim/systems/environment';
@@ -205,7 +205,11 @@ describe('士气与溃逃', () => {
     expect(w.routSite[u]).toBeGreaterThanOrEqual(0);
     const refuge = w.sites[w.routSite[u]];
     expect(refuge.owner).toBe(1);
-    for (let t = 0; t < 30 * 120 && w.state[u] & S_ROUT; t++) w.tick();
+    // 士气一直起不来（比如断粮）的溃兵才会一路逃回据点；途中士气回升会当场恢复，见「第四轮反馈」
+    for (let t = 0; t < 30 * 120 && w.state[u] & S_ROUT; t++) {
+      w.morale[u] = 0;
+      w.tick();
+    }
     expect(w.alive[u]).toBe(1);
     expect(w.state[u] & S_ROUT).toBe(0);
     expect(w.controllable(u)).toBe(true);
@@ -216,7 +220,10 @@ describe('士气与溃逃', () => {
     const v = f.spawnGroup(1, [idx('dao')], 300, C, 1, 0)[0];
     startRout(f, v);
     expect(f.routSite[v]).toBe(-1);
-    for (let t = 0; t < 30 * 60 && f.alive[v]; t++) f.tick();
+    for (let t = 0; t < 30 * 60 && f.alive[v]; t++) {
+      f.morale[v] = 0;
+      f.tick();
+    }
     expect(f.alive[v]).toBe(0);
     expect(f.deserted[1]).toBe(1);
     expect(f.kills[2]).toBe(0);
@@ -350,7 +357,8 @@ describe('战斗寻敌', () => {
   it('目标被围满时改打旁边还有空位的敌人', () => {
     const w = flatWorld();
     const a = w.spawnGroup(1, Array(30).fill(idx('dao')), C - 120, C, 1, 0);
-    const b = w.spawnGroup(2, Array(6).fill(idx('samurai')), C + 40, C, -1, 0);
+    // 敌人排成一列横队（站定出手后挤不动，后排本来就够不着）
+    const b = [0, 1, 2, 3, 4, 5].map(k => w.spawnUnit(idx('samurai'), 2, C + 40, C - 50 + k * 20));
     for (const s of b) w.hp[s] = w.maxHp[s] = 1e6;
     w.orderStop(b, true);
     w.orderMove(a, C + 40, C, true);
@@ -516,4 +524,222 @@ describe('据点与建筑', () => {
     expect(main.hp).toBe(main.def.hp);
     expect(w.events.some(e => e.kind === 'captured' && e.team === 2 && e.repaired)).toBe(true);
   }, 30000);
+});
+
+describe('城墙与守御', () => {
+  const game = (): World => createGame({
+    seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false, supply: false,
+  }).world;
+
+  it('城墙两格厚、分内外：只能从城内一侧上墙，墙外上不去；角楼顶也能站人', () => {
+    const w = game();
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const blds = hq.buildings.map(id => w.buildings[id]);
+    const walls = blds.filter(b => b.def.key === 'wall');
+    // 北墙：最靠北的两排各有一圈
+    const north = walls.filter(b => Math.abs(b.cx - (hq.x - 112)) < 10).sort((a, b) => a.cy - b.cy);
+    const outerW = north[0], innerW = north[1];
+    expect(innerW.ty - outerW.ty).toBe(1);
+    const mw = w.map.w;
+    const cOut = outerW.ty * mw + outerW.tx, cIn = innerW.ty * mw + innerW.tx;
+    expect(w.nav.deck[1][cOut] && w.nav.deck[1][cIn]).toBe(1);
+    // 墙外的格子不是城内，墙里的是
+    expect(w.nav.inner[cOut - mw]).toBe(0);
+    expect(w.nav.inner[cIn + mw]).toBe(1);
+    expect(w.nav.canStep(1, cOut - mw, cOut)).toBe(false);
+    expect(w.nav.canStep(1, cIn + mw, cIn)).toBe(true);
+    // 墙外的人接到上墙的命令：不会直接翻上去（得绕城门从里面上）
+    const u = w.spawnUnit(idx('nu'), 1, outerW.cx, outerW.cy - 70);
+    w.orderMove([u], outerW.cx, outerW.cy, false);
+    let climbedFromOutside = false;
+    for (let t = 0; t < 30 * 6; t++) {
+      const wasOut = w.y[u] < outerW.y0 && Math.abs(w.x[u] - outerW.cx) < 40;
+      w.tick();
+      if (wasOut && w.state[u] & S_WALL) climbedFromOutside = true;
+    }
+    expect(climbedFromOutside).toBe(false);
+    expect(w.state[u] & S_WALL).toBe(0);
+    // 城里的人直接上墙，并且能走上角楼
+    const tower = blds.filter(b => b.def.key === 'tower').sort((a, b) => a.cx + a.cy - b.cx - b.cy)[0];
+    expect(tower.def.top).toBeGreaterThan(0);
+    const v = w.spawnUnit(idx('nu'), 1, innerW.cx, innerW.cy + 50);
+    w.orderMove([v], tower.cx, tower.cy, false);
+    for (let t = 0; t < 30 * 40 && w.order[v] !== 0; t++) w.tick();
+    expect(Math.hypot(w.x[v] - tower.cx, w.y[v] - tower.cy)).toBeLessThan(30);
+    expect(w.state[v] & S_WALL).toBe(S_WALL);
+    // 从墙上往墙外走：出不去
+    w.orderMove([v], tower.cx - 200, tower.cy - 200, false);
+    let jumped = false;
+    for (let t = 0; t < 30 * 5; t++) {
+      const on = (w.state[v] & S_WALL) !== 0;
+      w.tick();
+      const c = w.cellAt(w.x[v], w.y[v]);
+      if (on && !w.nav.deck[1][c] && !w.nav.inner[c]) jumped = true;
+    }
+    expect(jumped).toBe(false);
+  }, 30000);
+
+  it('门楼、角楼、望楼都会放箭；门楼和角楼烧得掉，石墙烧不动', () => {
+    for (const k of ['gate_h', 'gate_v', 'tower', 'watchtower']) expect(BUILDINGS[k].tower, k).not.toBeNull();
+    expect(BUILDINGS.gate_h.fort || BUILDINGS.tower.fort).toBe(false);
+    expect(BUILDINGS.wall.fort).toBe(true);
+    const w = game();
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const gate = hq.buildings.map(id => w.buildings[id]).find(b => b.gate)!;
+    const tower = hq.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
+    for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
+    const out = gate.cy < hq.y ? -1 : gate.cy > hq.y + 100 ? 1 : 0;
+    const foe = w.spawnUnit(idx('samurai'), 2, gate.cx + (out === 0 ? (gate.cx < hq.x ? -120 : 120) : 0), gate.cy + out * 120);
+    w.hp[foe] = w.maxHp[foe] = 1e5;
+    w.order[foe] = 4;
+    run(w, 5);
+    expect(1e5 - w.hp[foe]).toBeGreaterThan(0);
+    // 火把（非工程类）对门楼、角楼有效
+    w.damageBuilding(gate, 100, 3, 1, 2, false);
+    w.damageBuilding(tower, 100, 3, 1, 2, false);
+    expect(gate.hp).toBeCloseTo(gate.def.hp - 100 * RULES.siege.gate, 3);
+    expect(tower.hp).toBeCloseTo(tower.def.hp - 100 * RULES.siege.gate, 3);
+  }, 30000);
+
+  it('在自家据点里休整：单位慢慢回血，建筑一段时间没挨打后自行修复', () => {
+    const w = game();
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
+    const inside = w.spawnUnit(idx('dao'), 1, hq.x, hq.y + 60);
+    const outside = w.spawnUnit(idx('dao'), 1, hq.x + 900, hq.y - 900);
+    w.hp[inside] = w.hp[outside] = 50;
+    const main = w.buildings[hq.main];
+    main.hp = main.def.hp * 0.5;
+    main.hitTick = w.tickCount;
+    const house = hq.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'house')!;
+    house.hp = house.def.hp * 0.5;
+    house.hitTick = -99999;
+    run(w, 10);
+    expect(w.hp[inside]).toBeCloseTo(50 + w.maxHp[inside] * RULES.site.unitRegen * 10, 0);
+    expect(w.hp[outside]).toBe(50);
+    // 刚挨过打的还不修，早就没人打的在修
+    expect(main.hp).toBe(main.def.hp * 0.5);
+    expect(house.hp).toBeGreaterThan(house.def.hp * 0.5);
+    run(w, RULES.site.bldCalm);
+    expect(main.hp).toBeGreaterThan(main.def.hp * 0.5);
+  }, 30000);
+});
+
+describe('队列与站位', () => {
+  it('编队行军：途中保持队列，落后的跑步归队；到位后按指定方向列阵，远程排在近战后面', () => {
+    const w = flatWorld();
+    const kinds = [...Array(20).fill(idx('dao')), ...Array(12).fill(idx('nu')), ...Array(8).fill(idx('tieqi')), idx('asvaran'), idx('asvaran')];
+    const g = w.spawnGroup(1, kinds, C - 700, C, 1, 0);
+    // 朝东行军，到位后面朝南列阵
+    w.orderMove(g, C + 500, C, false, 0, 1);
+    expect(w.grp[g[0]]).toBeGreaterThanOrEqual(0);
+    const m = w.marches[w.grp[g[0]]];
+    run(w, 12);
+    // 行军途中：每个人都在自己的队列位置附近，整队以最慢者的行军速度前进
+    let lag = 0;
+    for (const s of g) {
+      const px = m.x + m.hx * w.offA[s] - m.hy * w.offL[s], py = m.y + m.hy * w.offA[s] + m.hx * w.offL[s];
+      lag = Math.max(lag, Math.hypot(px - w.x[s], py - w.y[s]));
+    }
+    expect(lag).toBeLessThan(20);
+    expect(m.x).toBeGreaterThan(C - 700 + 100);
+    for (let t = 0; t < 30 * 90 && g.some(s => w.order[s] !== 0); t++) w.tick();
+    expect(g.every(s => w.order[s] === 0)).toBe(true);
+    const avgY = (k: string): number => {
+      const l = g.filter(s => w.defs[w.type[s]].key === k);
+      return l.reduce((a, s) => a + w.y[s], 0) / l.length;
+    };
+    // 面朝南（+Y）：骑兵最前，刀盾其次，骑射在步弓之前，但所有远程都在近战之后
+    expect(avgY('tieqi')).toBeGreaterThan(avgY('dao'));
+    expect(avgY('dao')).toBeGreaterThan(avgY('asvaran'));
+    expect(avgY('asvaran')).toBeGreaterThan(avgY('nu'));
+    run(w, 2);
+    // 到位后转向指定的方向
+    for (const s of g) expect(Math.abs(w.dir[s] - Math.PI / 2)).toBeLessThan(0.3);
+  }, 30000);
+
+  it('站定出手：非骑兵交手时脚下不动，也挤不动；只有骑兵能边走边打', () => {
+    expect(UNIT_BY_KEY.tieqi.mobile && UNIT_BY_KEY.asvaran.mobile).toBe(true);
+    expect(UNIT_BY_KEY.dao.mobile || UNIT_BY_KEY.nu.mobile || UNIT_BY_KEY.elephant.mobile || UNIT_BY_KEY.pili.mobile).toBe(false);
+    const w = flatWorld();
+    const a = w.spawnGroup(1, Array(60).fill(idx('dao')), C - 150, C, 1, 0);
+    const b = w.spawnGroup(2, Array(60).fill(idx('yari')), C + 150, C, -1, 0);
+    for (const s of [...a, ...b]) w.hp[s] = w.maxHp[s] = 1e6;
+    w.orderMove(a, C + 150, C, true);
+    w.orderMove(b, C - 150, C, true);
+    run(w, 14);
+    const all = [...a, ...b];
+    let moved = 0, n = 0, atkMoving = 0;
+    for (let t = 0; t < 30 * 10; t++) {
+      const px = all.map(s => w.x[s]), py = all.map(s => w.y[s]), eng = all.map(s => w.engaged[s]);
+      w.tick();
+      all.forEach((s, k) => {
+        if (!eng[k] || !w.engaged[s]) return;
+        const d = Math.hypot(w.x[s] - px[k], w.y[s] - py[k]);
+        moved += d;
+        n++;
+        if (w.atkAnim[s] > 0 && d > 0.05) atkMoving++;
+      });
+    }
+    expect(n).toBeGreaterThan(3000);
+    // 交手中的人平均每秒位移不到四分之一像素
+    expect((moved / n) * 30).toBeLessThan(0.25);
+    expect(atkMoving / n).toBeLessThan(0.01);
+  }, 30000);
+
+  it('溃兵防御大减：护甲不算，受伤加重', () => {
+    const w = flatWorld();
+    const u = w.spawnUnit(idx('legion'), 1, C, C), v = w.spawnUnit(idx('legion'), 1, C + 200, C);
+    w.hp[u] = w.hp[v] = w.maxHp[u] = w.maxHp[v] = 1000;
+    startRout(w, v);
+    damageUnit(w, u, 30, 0, 0, UNIT_BY_KEY.dao.vs, 2, -1);
+    damageUnit(w, v, 30, 0, 0, UNIT_BY_KEY.dao.vs, 2, -1);
+    expect(1000 - w.hp[u]).toBeCloseTo(30 - UNIT_BY_KEY.legion.armM, 3);
+    expect(1000 - w.hp[v]).toBeCloseTo(30 * RULES.morale.routDamage, 3);
+  });
+});
+
+describe('第四轮反馈', () => {
+  it('攻击移动会自己打开挡路的城门，也会去烧放箭的门楼', () => {
+    const w = createGame({
+      seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false, supply: false,
+    }).world;
+    for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
+    // 敌方营地：木栅 + 营门
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 2)!;
+    const men = w.spawnGroup(1, Array(40).fill(idx('dao')), camp.x, camp.y + 420, 0, -1);
+    w.orderMove(men, camp.x, camp.y, true);
+    let inside = false;
+    for (let t = 0; t < 30 * 150 && !inside; t++) {
+      w.tick();
+      inside = men.some(s => w.alive[s] && Math.hypot(w.x[s] - camp.x, w.y[s] - camp.y) < 80);
+    }
+    expect(inside).toBe(true);
+    expect(camp.buildings.some(id => !w.buildings[id].alive)).toBe(true);
+    // 敌方大本营：石门楼
+    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!;
+    const gates = hq.buildings.map(id => w.buildings[id]).filter(b => b.gate);
+    const g0 = gates.sort((a, b) => b.cy - a.cy)[0];
+    const army = w.spawnGroup(1, Array(60).fill(idx('dao')), g0.cx, g0.cy + 400, 0, -1);
+    for (const s of army) w.hp[s] = w.maxHp[s] = 1e5;
+    w.orderMove(army, hq.x, hq.y + 40, true);
+    for (let t = 0; t < 30 * 120 && g0.alive; t++) w.tick();
+    expect(g0.hp).toBeLessThan(g0.def.hp * 0.6);
+  }, 60000);
+
+  it('溃兵的士气实时计算：逃到己方大部队身边就当场恢复指挥', () => {
+    const w = flatWorld();
+    const u = w.spawnUnit(idx('dao'), 1, C, C);
+    w.morale[u] = 5;
+    startRout(w, u);
+    expect(w.state[u] & S_ROUT).toBe(S_ROUT);
+    // 身边没有敌人、没有伤亡：士气自己回升，过了阈值 + recover 就恢复
+    w.spawnGroup(1, Array(40).fill(idx('dao')), C + 60, C, 1, 0);
+    let secs = 0;
+    for (; secs < 30 && w.alive[u] && w.state[u] & S_ROUT; secs++) run(w, 1);
+    expect(w.alive[u]).toBe(1);
+    expect(w.state[u] & S_ROUT).toBe(0);
+    expect(w.morale[u]).toBeGreaterThanOrEqual(UNIT_BY_KEY.dao.lvRout[0] + RULES.morale.recover);
+    expect(w.controllable(u)).toBe(true);
+  });
 });

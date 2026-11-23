@@ -148,8 +148,10 @@ export interface UnitSpec {
   discipline?: number;
   /** 人形单位（骑兵也算）：打建筑时改为投掷火把。缺省 true */
   humanoid?: boolean;
-  /** 工程类：能破坏城邦的石墙与箭楼。缺省 false */
+  /** 工程类：能破坏城邦的石墙。缺省 false */
   siege?: boolean;
+  /** 能边移动边攻击（骑兵）。其余单位出手时必须站定。缺省 false */
+  mobile?: boolean;
   /** 渲染层用哪个模型，缺省与兵种 key 相同 */
   model?: string;
 }
@@ -202,6 +204,7 @@ export interface UnitDef {
   discipline: number;
   humanoid: boolean;
   siege: boolean;
+  mobile: boolean;
   model: string;
   desc: string;
   // ---- 按等级展开的数值，下标为等级 0..N-1 ----
@@ -270,7 +273,8 @@ export function finalizeUnits(lv: LevelRules, hpScale: number): void {
     const d: UnitDef = {
       idx: UNITS.length, key: p.key, name: p.name, faction: p.faction, cls: ci, size,
       radius: m.radius ?? sz.radius,
-      row: m.row ?? (speed >= 85 ? 0 : speed < 45 ? 3 : range > 0 ? 2 : 1),
+      // 近战在前、远程在后，同一档里快的在前；器械殿后
+      row: m.row ?? (speed < 45 ? 4 : (range > 0 ? 2 : 0) + (speed >= 85 ? 0 : 1)),
       hp, pace, speed, walk: Math.round(speed * (m.marchMul ?? 0.65)), forestMul: sz.forestMul,
       dmg, atk: m.atk ?? (range > 0 ? A_PIERCE : A_MELEE), range, minRange: m.minRange ?? 0, cd,
       armM, armP, pen: m.pen ?? 0, splash, proj: m.proj ?? P_ARROW,
@@ -280,7 +284,7 @@ export function finalizeUnits(lv: LevelRules, hpScale: number): void {
       vision: Math.max(m.vision ?? 320, siege ? range : 0),
       alert: 0, acq: 0, lookK: range > 60 ? Math.min(14, Math.floor(range / TILE)) : 1,
       power, upkeep: sz.upkeep, xpValue: Math.round(power * 10),
-      discipline: m.discipline ?? 0, humanoid: m.humanoid ?? true, siege, model: m.model ?? p.key, desc: p.desc,
+      discipline: m.discipline ?? 0, humanoid: m.humanoid ?? true, siege, mobile: m.mobile ?? false, model: m.model ?? p.key, desc: p.desc,
       lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [], lvRout: lv.rout.slice(0, n),
     };
     d.acq = range > 0 ? range + (siege ? 0 : 40) : m.acq ?? 170;
@@ -338,9 +342,9 @@ export interface BuildingDef {
   /** 贴图在占地之上的高度（像素） */
   tall: number;
   wood: boolean;
-  /** 城防工事（石墙、石箭楼）：人形单位的火把烧不动，只有工程类单位能破坏 */
+  /** 城防工事（石墙）：人形单位的火把烧不动，只有工程类单位能破坏 */
   fort: boolean;
-  /** 墙顶可以站人：己方单位能走上去驻守，站立高度（像素）；0 表示不能 */
+  /** 顶上可以站人（石墙、角楼）：己方单位能从城内一侧走上去驻守，站立高度（像素）；0 表示不能 */
   top: number;
 }
 

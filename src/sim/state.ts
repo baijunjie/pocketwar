@@ -13,3 +13,5 @@ export const S_COMBAT = 1, S_CHARGE = 2, S_BRACE = 4, S_SHIELD = 8, S_TORCH = 16
 
 export const FX_HIT = 1, FX_EXPLODE = 2, FX_SMOKE = 3, FX_DEATH = 4, FX_COLLAPSE = 5, FX_ARROW_HIT = 6, FX_LEVEL = 7,
   FX_IMPACT = 8, FX_FIRE = 9;
+/** 远程出手（只用来出声，参数是投射物种类） */
+export const FX_SHOT = 10;

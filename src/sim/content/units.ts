@@ -18,10 +18,10 @@ defineClass('spear', '枪兵', {
 });
 defineClass('ranged', '远程', { vsBld: 0.3 });
 defineClass('cav', '骑兵', {
-  size: 'medium', marchMul: 0.55, vsBld: 0.6, vision: 380, alert: 420, acq: 230,
+  size: 'medium', marchMul: 0.55, mobile: true, vsBld: 0.6, vision: 380, alert: 420, acq: 230,
   vs: { ranged: 1.4, siege: 2, spear: 0.8 }, abilities: { torch: true },
 });
-defineClass('cavr', '骑射', { size: 'medium', marchMul: 0.55, vsBld: 0.3, vision: 400, alert: 380 });
+defineClass('cavr', '骑射', { size: 'medium', marchMul: 0.55, mobile: true, vsBld: 0.3, vision: 400, alert: 380 });
 defineClass('ele', '战象', { size: 'huge', marchMul: 0.8, vsBld: 3, humanoid: false, siege: true, vs: { cav: 1.5, cavr: 1.5, inf: 1.2 } });
 defineClass('siege', '器械', { size: 'large', marchMul: 1, atk: A_SIEGE, humanoid: false, siege: true });
 

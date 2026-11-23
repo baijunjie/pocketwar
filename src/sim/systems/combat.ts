@@ -1,9 +1,9 @@
 /** 战斗结算：出手、伤害、阵亡、经验与升级、投射物、箭楼 */
 import {
-  A_FIRE, A_MELEE, A_PIERCE, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_HQ, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
+  A_FIRE, A_MELEE, A_PIERCE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_HQ, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
   T_FOREST, T_HILL, UnitDef,
 } from '../content';
-import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE } from '../state';
+import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
 import type { Building, World } from '../world';
 
 /** 箭楼 / 主堡开火时使用的「攻击者」数据 */
@@ -39,6 +39,7 @@ export function attack(w: World, i: number, d: UnitDef, tgt: number, tt: number)
       ty = b.cy;
     }
     spawnProj(w, w.x[i], w.y[i], tgt, tx, ty, d.proj, base * dm, d.atk, d.splash, d.pen, d.idx, tm, i);
+    w.addFx(FX_SHOT, w.x[i], w.y[i], d.proj);
     if (d.proj === P_BULLET || d.proj === P_BALL || d.proj === P_ROCKET) {
       w.addFx(FX_SMOKE, w.x[i] + w.facing[i] * 8, w.y[i] - 10, d.proj === P_BULLET ? 1 : 2.2);
     }
@@ -57,7 +58,8 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
   const td = w.defs[w.type[j]];
   const lv = w.level[j];
   const arm = atk === A_MELEE ? td.lvArmM[lv] : atk === A_PIERCE ? td.lvArmP[lv] : 0;
-  let dmg = raw * vs[td.cls] - arm * (1 - pen);
+  const routed = (w.state[j] & S_ROUT) !== 0;
+  let dmg = routed ? raw * vs[td.cls] * RULES.morale.routDamage : raw * vs[td.cls] - arm * (1 - pen);
   if (atk === A_PIERCE) {
     if (td.traits & TR_TESTUDO) dmg *= 0.65;
     const sh = td.abilities.shield;
@@ -181,8 +183,8 @@ export function damageBuilding(w: World, b: Building, raw: number, atk: number, 
   if (def.fort && !canFort) return;
   const S = RULES.siege;
   const arm = atk === A_MELEE ? def.armM : atk === A_PIERCE ? def.armP : 0;
-  // 火把：木头一点就着，石头房子烧得慢，包铁的城门更慢
-  let dmg = atk === A_FIRE ? raw * (def.wood ? S.wood : b.gate ? S.gate : S.stone) : raw * vsBld - arm;
+  // 火把：木头一点就着，石头房子烧得慢，门楼与角楼更慢
+  let dmg = atk === A_FIRE ? raw * (def.wood ? S.wood : b.gate || def.kind === BK_TOWER ? S.gate : S.stone) : raw * vsBld - arm;
   const min = atk === A_PIERCE ? 0.5 : 1;
   if (dmg < min) dmg = min;
   b.hp -= dmg;
@@ -317,5 +319,6 @@ export function updateTowers(w: World): void {
     }
     b.cd = tw.cd;
     spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, e, w.x[e], w.y[e], 0, tw.dmg, A_PIERCE, 0, 0, -1, b.owner, NONE);
+    w.addFx(FX_SHOT, b.cx, b.cy, 0);
   }
 }

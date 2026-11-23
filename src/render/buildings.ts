@@ -51,8 +51,11 @@ function battlement(w: number, d: number, y: number, color: Col, n = 3, mh = 5):
   return out;
 }
 
-/** 城墙 / 木栅：按四邻连接情况生成（位掩码：1 北，2 东，4 南，8 西） */
-export function wallGeo(mask: number, wood: boolean): G {
+/**
+ * 城墙 / 木栅：按四邻连接情况生成（位掩码：1 北，2 东，4 南，8 西）。
+ * @param out 石墙朝城外的那几条边（同样的位掩码）：只有正面砌垛口，朝城内的一面敞开，士兵从那边上下
+ */
+export function wallGeo(mask: number, wood: boolean, out = 0): G {
   const parts: G[] = [];
   const half = TILE / 2;
   const dirs: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
@@ -69,22 +72,17 @@ export function wallGeo(mask: number, wood: boolean): G {
     });
     return join(...parts);
   }
-  // 墙体厚到墙顶能站人（驻守的单位就站在这个高度，见 BuildingDef.top）
-  const H = 26, T = 24;
-  const straight = mask === 5 || mask === 10;
-  if (!straight) {
-    parts.push(box(T + 3, H + 4, T + 3, STONE_D, 0, (H + 4) / 2, 0));
-    parts.push(...battlement(T + 3, T + 3, H + 4, STONE_L, 2, 4));
-  }
+  // 石墙：每格一整块，两圈拼成两格厚的墙体；墙顶就是驻守单位站的高度（BuildingDef.top）
+  const H = 26;
+  parts.push(box(TILE, H, TILE, STONE, 0, H / 2, 0), box(TILE, 1, TILE, STONE_D, 0, H - 0.4, 0));
   dirs.forEach(([dx, dz], k) => {
-    if (!(mask & (1 << k))) return;
-    const len = straight ? half : half - (T + 3) / 2;
-    const c = straight ? half / 2 : (T + 3) / 2 + len / 2;
-    parts.push(box(dx ? len : T, H, dz ? len : T, STONE, dx * c, H / 2, dz * c));
-    // 外沿垛口
-    for (const s of [-1, 1]) {
-      parts.push(box(dx ? 6 : 3, 4.5, dz ? 6 : 3, STONE_L, dx * c + (dz ? s * (T / 2 - 1.5) : 0), H + 2.25, dz * c + (dx ? s * (T / 2 - 1.5) : 0)));
-    }
+    if (!(out & (1 << k))) return;
+    const ex = dx * (half - 1.75), ez = dz * (half - 1.75);
+    // 女墙与垛口
+    parts.push(box(dx ? 3.5 : TILE, 3, dz ? 3.5 : TILE, STONE_L, ex, H + 1.5, ez));
+    for (const s of [-1, 1]) parts.push(box(dx ? 3.5 : 9, 4.5, dz ? 3.5 : 9, STONE_L, ex + (dz ? s * 8 : 0), H + 5.2, ez + (dx ? s * 8 : 0)));
+    // 墙脚收分
+    parts.push(box(dx ? 3 : TILE, 6, dz ? 3 : TILE, STONE_D, dx * (half + 0.6), 3, dz * (half + 0.6)));
   });
   return join(...parts);
 }
@@ -143,15 +141,20 @@ export function buildingGeo(key: string, style: string, variant: number): G {
         p.push(cyl(3.2, 3.6, 26, WOOD, -27, 13, 0, 6), cyl(3.2, 3.6, 26, WOOD, 27, 13, 0, 6), box(60, 3, 4, TIMBER, 0, 24, 0), box(50, 17, 2, 0x7a5a36, 0, 9, 0),
           box(50, 1.5, 2.6, TIMBER, 0, 14, 0), box(50, 1.5, 2.6, TIMBER, 0, 5, 0));
       } else {
-        p.push(box(15, 36, 22, STONE_D, -24.5, 18, 0), box(15, 36, 22, STONE_D, 24.5, 18, 0), box(64, 12, 20, STONE, 0, 30, 0), ...battlement(64, 22, 36, STONE_L, 6, 4.5),
-          box(34, 23, 3, 0x5a4028, 0, 11.5, 0), box(34, 2, 3.6, 0x3a3a40, 0, 16, 0), box(34, 2, 3.6, 0x3a3a40, 0, 6, 0), box(1.2, 23, 3.6, 0x3a3a40, 0, 11.5, 0));
+        // 门楼：占满两格见方，与两格厚的城墙齐平；门洞贯通，门扇在正中
+        const D = TILE * 2;
+        p.push(box(15, 40, D, STONE_D, -24.5, 20, 0), box(15, 40, D, STONE_D, 24.5, 20, 0), box(D, 14, D, STONE, 0, 33, 0), ...battlement(D, D, 40, STONE_L, 6, 4.5),
+          box(30, 12, 22, 0xb0483a, 0, 46, 0), hip(30, 22, 9, TILE_GREY, 52, 4),
+          box(34, 26, 3, 0x5a4028, 0, 13, 0), box(34, 2, 3.6, 0x3a3a40, 0, 18, 0), box(34, 2, 3.6, 0x3a3a40, 0, 7, 0), box(1.2, 26, 3.6, 0x3a3a40, 0, 13, 0));
       }
       const g = join(...p);
       return key.endsWith('_v') ? g.rotateY(Math.PI / 2) : g;
     }
     case 'tower':
-      p.push(xf(cyl(Math.SQRT1_2 * 0.9, Math.SQRT1_2, 1, STONE, 0, 0.5, 0, 4), { ry: Math.PI / 4, s: [52, 50, 52] }), box(54, 5, 54, STONE_D, 0, 52, 0), ...battlement(54, 54, 54.5, STONE_L, 4),
-        box(3, 7, 1, 0x2a2a2e, 0, 34, 24.4), box(1, 7, 3, 0x2a2a2e, 24.4, 34, 0), box(3, 7, 1, 0x2a2a2e, 0, 34, -24.4), box(1, 7, 3, 0x2a2a2e, -24.4, 34, 0));
+      // 角楼：占满两格见方、与城墙严丝合缝，平顶比墙高一截，墙上的人可以直接走上来
+      p.push(box(64, 37, 64, STONE, 0, 18.5, 0), box(67, 3, 67, STONE_D, 0, 38.5, 0), ...battlement(67, 67, 40, STONE_L, 5, 5),
+        box(66, 5, 66, STONE_D, 0, 2.5, 0),
+        box(3, 8, 1, 0x2a2a2e, 0, 24, 32.2), box(1, 8, 3, 0x2a2a2e, 32.2, 24, 0), box(3, 8, 1, 0x2a2a2e, 0, 24, -32.2), box(1, 8, 3, 0x2a2a2e, -32.2, 24, 0));
       break;
     case 'watchtower':
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(xf(cyl(1.5, 1.8, 34, TIMBER, 0, 17, 0, 5), { t: [sx * 9, 0, sz * 9] }));
@@ -234,7 +237,8 @@ export function flagHeight(key: string, style: string): number {
   switch (key) {
     case 'keep': return style === 'japan' ? 112 : style === 'china' ? 88 : style === 'rome' ? 70 : 92;
     case 'citadel': return 84;
-    case 'tower': return 60;
+    case 'tower': return 66;
+    case 'gate_h': case 'gate_v': return 80;
     case 'watchtower': return 48;
     case 'hall': return 60;
     case 'cmdtent': return 36;

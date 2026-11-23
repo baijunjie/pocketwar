@@ -11,7 +11,7 @@ import {
 } from '../sim/world';
 import { bridgeGeo, buildingGeo, flagHeight, propGeo, rubbleGeo, wallGeo } from './buildings';
 import { litMaterial, shared } from './materials';
-import { box, cyl, join } from './prims';
+import { box, cone, cyl, join } from './prims';
 import { Atlas, Q_AXIS, Q_BILLBOARD, Q_GROUND, Q_SCREEN, Quads, Sprite } from './quads';
 import { Terrain, WATER_Y } from './terrain';
 import { CLIP_FALLBACK, buildUnitModel } from './models/spec';
@@ -26,10 +26,24 @@ const DULL = new THREE.Color(0.42, 0.45, 0.48);
 export interface Marker {
   x: number;
   y: number;
+  /** 已存在的秒数 */
   t: number;
   r: number;
   g: number;
   b: number;
+}
+
+/** 令旗在落点停留的秒数 */
+const MARKER_LIFE = 2.4;
+const MAX_CMD_FLAGS = 24;
+
+/** 令旗：细杆 + 三角旗面（颜色随号令种类变化） */
+function pennantGeo(): THREE.BufferGeometry {
+  const tri = new THREE.BufferGeometry();
+  tri.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0.5, 24, 0, 0.5, 14, 0, 15, 19, 0]), 3));
+  tri.computeVertexNormals();
+  tri.setAttribute('color', new THREE.BufferAttribute(new Float32Array(9).fill(1), 3));
+  return join(cyl(0.45, 0.6, 25, 0x2e2620, 0, 12.5, 0, 4), cone(1, 2.4, 0xc9a227, 0, 26, 0, 4), tri);
 }
 
 interface InstGroup {
@@ -48,6 +62,8 @@ export class Renderer {
   readonly teamColor: [number, number, number][];
   readonly teamRgb: [number, number, number][];
   markers: Marker[] = [];
+  /** 正在拖动指定的队列朝向：从落点指向鼠标（世界坐标），没有则为 null */
+  arrow: { x0: number; y0: number; x1: number; y1: number } | null = null;
   drawn = 0;
 
   private readonly scene = new THREE.Scene();
@@ -60,6 +76,10 @@ export class Renderer {
   private readonly ground: Quads;
   private readonly sprites: Quads;
   private readonly overlay: Quads;
+  /** 贴在桥面、墙顶上的标记（要做深度测试，不然会被模型盖住） */
+  private readonly raised: Quads;
+  private readonly routIcon: Sprite;
+  private readonly cmdFlags: THREE.InstancedMesh;
   private readonly atlas = new Atlas(1024);
   private readonly white: Sprite;
   private readonly soft: Sprite;
@@ -73,6 +93,7 @@ export class Renderer {
   private readonly siteFlags: THREE.InstancedMesh;
   private readonly disposables: { dispose(): void }[] = [];
   private time = 0;
+  private readonly maxTop = Math.max(...Object.values(BUILDINGS).map(b => b.top));
   private readonly ray = new THREE.Raycaster();
   private readonly v = new THREE.Vector3();
   private readonly m4 = new THREE.Matrix4();
@@ -152,6 +173,31 @@ export class Renderer {
       c.fillStyle = 'rgba(255,255,255,0.07)';
       c.fill();
     });
+    // 溃逃标识：一面小白旗
+    this.routIcon = at.add(16, 16, 3, c => {
+      c.lineJoin = 'round';
+      c.strokeStyle = 'rgba(20,16,12,0.95)';
+      c.lineWidth = 2.6;
+      c.beginPath();
+      c.moveTo(4, 15);
+      c.lineTo(4, 2);
+      c.lineTo(14, 5);
+      c.lineTo(4, 9);
+      c.stroke();
+      c.fillStyle = '#fff';
+      c.beginPath();
+      c.moveTo(4, 2);
+      c.lineTo(14, 5);
+      c.lineTo(4, 9);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = '#fff';
+      c.lineWidth = 1.2;
+      c.beginPath();
+      c.moveTo(4, 15);
+      c.lineTo(4, 2);
+      c.stroke();
+    });
     for (const s of world.sites) {
       const w = s.name.length * 14 + 14;
       this.labels.push(at.add(w, 22, 2, c => {
@@ -170,8 +216,9 @@ export class Renderer {
     this.ground = new Quads(tex, { ground: true });
     this.sprites = new Quads(tex, {}, 4096);
     this.overlay = new Quads(tex, { overlay: true }, 128);
-    scene.add(this.ground.mesh, this.sprites.mesh, this.overlay.mesh);
-    this.disposables.push(tex, this.ground, this.sprites, this.overlay, this.terrain);
+    this.raised = new Quads(tex, { lift: true }, 256);
+    scene.add(this.ground.mesh, this.sprites.mesh, this.overlay.mesh, this.raised.mesh);
+    this.disposables.push(tex, this.ground, this.sprites, this.overlay, this.raised, this.terrain);
 
     // ---- 单位 ----
     for (let tm = 1; tm <= 2; tm++) {
@@ -206,8 +253,11 @@ export class Renderer {
       if (def.kind === BK_WALL) {
         const c = b.ty * mw + b.tx;
         const mask = wallLike(c - mw) | (wallLike(c + 1) << 1) | (wallLike(c + mw) << 2) | (wallLike(c - 1) << 3);
-        key = `${def.key}:${mask}`;
-        geo = () => wallGeo(mask, def.wood);
+        // 朝城外的边：隔壁既不是墙，也不是城内的地面
+        const outer = (c2: number): number => (!wallLike(c2) && !nav.inner[c2] ? 1 : 0);
+        const out = outer(c - mw) | (outer(c + 1) << 1) | (outer(c + mw) << 2) | (outer(c - 1) << 3);
+        key = `${def.key}:${mask}:${out}`;
+        geo = () => wallGeo(mask, def.wood, out);
       } else {
         const variants = def.key === 'house' || def.key === 'tent' ? 4 : def.key === 'farmhouse' ? 2 : 1;
         const v = b.variant % variants, st = def.kind === BK_KEEP ? b.style : '';
@@ -248,7 +298,13 @@ export class Renderer {
       f.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       scene.add(f);
     }
-    this.disposables.push(flagGeo, flagMat, this.flags, this.siteFlags);
+    const pg = pennantGeo();
+    this.cmdFlags = new THREE.InstancedMesh(pg, flagMat, MAX_CMD_FLAGS);
+    this.cmdFlags.frustumCulled = false;
+    this.cmdFlags.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.cmdFlags.count = 0;
+    scene.add(this.cmdFlags);
+    this.disposables.push(flagGeo, flagMat, this.flags, this.siteFlags, pg, this.cmdFlags);
 
     this.buildProps(mat);
     this.resize();
@@ -338,6 +394,32 @@ export class Renderer {
     return h < WATER_Y - 2.2 ? WATER_Y - 2.2 : h;
   }
 
+  /** 脚下是墙顶 / 楼顶时返回它的高度（世界 Y），否则返回 NaN */
+  deckY(x: number, z: number): number {
+    const w = this.world, map = w.map;
+    const tx = (x / TILE) | 0, tz = (z / TILE) | 0;
+    if (tx < 0 || tz < 0 || tx >= map.w || tz >= map.h) return NaN;
+    const id = w.nav.bld[tz * map.w + tx];
+    if (id < 0) return NaN;
+    const b = w.buildings[id];
+    return b.def.top > 0 ? this.terrain.heightAt(b.cx, b.cy) - 0.4 + b.def.top : NaN;
+  }
+
+  /** 能站人的表面高度：墙顶、桥面或地面 */
+  surfaceY(x: number, z: number): number {
+    const d = this.deckY(x, z);
+    return d === d ? d : this.groundY(x, z);
+  }
+
+  /** 贴地标记：在桥面、墙顶上改用做深度测试的那一层，免得被模型盖住 */
+  private flat(s: Sprite, x: number, y: number, z: number, w: number, h: number, r: number, g: number, b: number, a: number): void {
+    const map = this.world.map;
+    const tx = (x / TILE) | 0, tz = (z / TILE) | 0;
+    const c = tx >= 0 && tz >= 0 && tx < map.w && tz < map.h ? tz * map.w + tx : -1;
+    if (c >= 0 && (map.terrain[c] === T_BRIDGE || this.world.nav.bld[c] >= 0)) this.raised.add(Q_GROUND, s, x, y + 0.5, z, w, h, r, g, b, a);
+    else this.ground.add(Q_GROUND, s, x, y, z, w, h, r, g, b, a);
+  }
+
   private get dist(): number {
     return 1500 / this.cam.zoom;
   }
@@ -373,6 +455,18 @@ export class Renderer {
       x = o.x + dx * t;
       z = o.z + dz * t;
       gy = Math.max(WATER_Y, this.terrain.heightAt(x, z));
+    }
+    // 视线在落地之前先碰到墙顶 / 楼顶：落点算在墙上
+    const len = Math.hypot(dx, dy, dz);
+    if (dy < -1e-4) {
+      const tg = (gy - o.y) / dy;
+      const back = (this.maxTop + 8) / -dy;
+      const stepT = 6 / len;
+      for (let t = Math.max(0, tg - back); t < tg; t += stepT) {
+        const px = o.x + dx * t, pz = o.z + dz * t;
+        const top = this.deckY(px, pz);
+        if (top === top && o.y + dy * t <= top + 0.5) return { x: px, y: pz };
+      }
     }
     return { x, y: z };
   }
@@ -533,6 +627,7 @@ export class Renderer {
 
     const G = this.ground, S = this.sprites, O = this.overlay;
     G.begin();
+    this.raised.begin();
     S.begin();
     O.begin();
     const fog = w.fog && w.humanTeam !== 0;
@@ -680,7 +775,6 @@ export class Renderer {
     const showBars = d < 1900;
     const hbit = 1 << human;
     const dark = 1 - w.env.light;
-    const wallTop = BUILDINGS.wall.top;
     const n = w.n;
     let drawn = 0;
     for (let i = 0; i < n; i++) {
@@ -695,10 +789,12 @@ export class Renderer {
       const def = UNITS[w.type[i]];
       const st = w.state[i];
       // 站上城墙的单位抬到墙顶，上下墙时平滑过渡
-      const up = st & S_WALL ? wallTop : 0;
+      const g0 = gy(x, z);
+      const dky = st & S_WALL ? this.deckY(x, z) : NaN;
+      const up = dky === dky ? dky - g0 : 0;
       let lf = this.lift[i];
-      if (lf !== up) lf = this.lift[i] = Math.abs(up - lf) < 0.5 || lf > wallTop ? up : lf + (up - lf) * Math.min(1, (dt || 0.016) * 9);
-      const y = gy(x, z) + lf;
+      if (lf !== up) lf = this.lift[i] = Math.abs(up - lf) < 0.5 ? up : lf + (up - lf) * Math.min(1, (dt || 0.016) * 9);
+      const y = g0 + lf;
       const aa = w.atkAnim[i];
       const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
       let clip: Clip, ph: number;
@@ -717,8 +813,8 @@ export class Renderer {
         ph = (this.time * 0.4 + i * 0.37) % 1;
       }
       const torch = (st & S_TORCH) !== 0;
-      // 溃兵发白；夜里打火把的被火光照亮
-      b.add(x, y, z, w.dir[i], clip, ph, st & S_ROUT ? 0.42 : w.flash[i] > 0 ? 0.25 : 0, 1, torch ? 1 + dark * 0.9 : 1);
+      // 夜里打火把的被火光照亮
+      b.add(x, y, z, w.dir[i], clip, ph, w.flash[i] > 0 ? 0.25 : 0, 1, torch ? 1 + dark * 0.9 : 1);
       if (torch) {
         const fl = 4.5 + Math.sin(this.time * 17 + i) * 1.2;
         const fy = y + Math.min(b.model.height, 26) + 3;
@@ -734,9 +830,14 @@ export class Renderer {
         // 等级：头顶一排金色小点
         for (let k = 0; k < lv; k++) S.add(Q_BILLBOARD, white, x, y + top + 3.2, z, 1.7, 1.7, 1, 0.82, 0.25, 1, 0.5 - (k - (lv - 1) / 2) * 1.4, 0.5);
       }
+      if (st & S_ROUT) {
+        // 溃兵保持本队颜色，头顶插一面小白旗
+        const sz = Math.max(8, d * 0.0075);
+        S.add(Q_BILLBOARD, this.routIcon, x, y + top + 2, z, sz, sz, 1, 1, 1, 1, 0.5, 1);
+      }
       if (sel[i]) {
         const r = def.radius * 2.6 + 5;
-        G.add(Q_GROUND, ring, x, y, z, r, r, 0.35, 1, 0.4, 0.95);
+        this.flat(ring, x, y, z, r, r, 0.35, 1, 0.4, 0.95);
       }
       if (sel[i] && (fewSel || hr < 0.999)) {
         const bw = 10 + def.radius;
@@ -830,19 +931,56 @@ export class Renderer {
     }
 
     // ---------------- 指令标记 ----------------
+    // 每道号令的落点：一圈扩散的光环 + 一面令旗（停留片刻后收起）
+    let ncf = 0;
+    const real = dt || 0.016;
     for (let k = this.markers.length - 1; k >= 0; k--) {
       const mk = this.markers[k];
-      mk.t += dt * 2.2;
-      if (mk.t >= 1) {
+      mk.t += real;
+      if (mk.t >= MARKER_LIFE) {
         this.markers.splice(k, 1);
         continue;
       }
-      const sz = (18 + 26 * mk.t) * Math.max(0.8, d / 1500);
-      const y = gy(mk.x, mk.y);
-      G.add(Q_GROUND, ring, mk.x, y, mk.y, sz * 1.7, sz * 1.7, mk.r, mk.g, mk.b, 1 - mk.t);
-      G.add(Q_GROUND, ring, mk.x, y, mk.y, sz * 0.9, sz * 0.9, mk.r, mk.g, mk.b, (1 - mk.t) * 0.8);
+      const y = this.surfaceY(mk.x, mk.y);
+      const zoomK = Math.max(0.8, d / 1500);
+      const rt = mk.t / 0.5;
+      if (rt < 1) {
+        const sz = (18 + 26 * rt) * zoomK;
+        this.flat(ring, mk.x, y, mk.y, sz * 1.7, sz * 1.7, mk.r, mk.g, mk.b, 1 - rt);
+        this.flat(ring, mk.x, y, mk.y, sz * 0.9, sz * 0.9, mk.r, mk.g, mk.b, (1 - rt) * 0.8);
+      }
+      this.flat(ring, mk.x, y, mk.y, 16 * zoomK, 16 * zoomK, mk.r, mk.g, mk.b, 0.7 * Math.min(1, (MARKER_LIFE - mk.t) / 0.4));
+      if (ncf < MAX_CMD_FLAGS) {
+        // 插下去时弹一下，收起时缩回地里
+        const pop = mk.t < 0.18 ? mk.t / 0.18 * 1.15 : mk.t < 0.26 ? 1.15 - (mk.t - 0.18) / 0.08 * 0.15 : Math.min(1, (MARKER_LIFE - mk.t) / 0.3);
+        const sc = pop * zoomK * 1.25;
+        m.makeRotationY(cam.yaw + wave * 0.5).scale(this.v.set(sc, sc, sc)).setPosition(mk.x, y, mk.y);
+        this.cmdFlags.setMatrixAt(ncf, m);
+        this.cmdFlags.setColorAt(ncf++, this.col.setRGB(mk.r, mk.g, mk.b, THREE.SRGBColorSpace));
+      }
+    }
+    this.cmdFlags.count = ncf;
+    this.cmdFlags.instanceMatrix.needsUpdate = true;
+    if (this.cmdFlags.instanceColor) this.cmdFlags.instanceColor.needsUpdate = true;
+    // 拖动指定队列朝向时的箭头
+    const ar = this.arrow;
+    if (ar) {
+      const ax = ar.x1 - ar.x0, az = ar.y1 - ar.y0;
+      const al = Math.hypot(ax, az);
+      if (al > 4) {
+        const ux = ax / al, uz = az / al;
+        const y0 = this.surfaceY(ar.x0, ar.y0) + 2.5;
+        const wd = Math.max(2.4, d * 0.0022), hd = wd * 4.5;
+        S.add(Q_AXIS, white, ar.x0 + ax / 2, y0, ar.y0 + az / 2, al, wd, 1, 0.92, 0.45, 0.95, 0.5, 0.5, ax, 0, az);
+        for (const s of [-1, 1]) {
+          // 箭头两翼
+          const bx = -ux * 0.8 + -uz * s * 0.6, bz = -uz * 0.8 + ux * s * 0.6;
+          S.add(Q_AXIS, white, ar.x1 + bx * hd / 2, y0, ar.y1 + bz * hd / 2, hd, wd, 1, 0.92, 0.45, 0.95, 0.5, 0.5, bx, 0, bz);
+        }
+      }
     }
     this.drawRain(S);
+    this.raised.end(this.viewW, this.viewH);
     G.end(this.viewW, this.viewH);
     S.end(this.viewW, this.viewH);
     O.end(this.viewW, this.viewH);

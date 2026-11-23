@@ -1,5 +1,5 @@
 /** 小地图（Canvas 2D） */
-import { S_ROUT, World } from '../sim/world';
+import { World } from '../sim/world';
 
 export class Minimap {
   private readonly ctx: CanvasRenderingContext2D;
@@ -68,15 +68,8 @@ export class Minimap {
       for (let i = 0; i < w.n; i++) {
         if (!w.alive[i] || w.team[i] !== tm) continue;
         if (fog && tm !== human && !w.unitVisible(i)) continue;
-        if (w.state[i] & S_ROUT) continue;
         c.fillRect(w.x[i] * k - 1, w.y[i] * k - 1, 2, 2);
       }
-    }
-    // 溃兵画成白点
-    c.fillStyle = '#fff';
-    for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || !(w.state[i] & S_ROUT) || !w.unitVisible(i)) continue;
-      c.fillRect(w.x[i] * k - 1, w.y[i] * k - 1, 2, 2);
     }
     // 据点
     for (const s of w.sites) {

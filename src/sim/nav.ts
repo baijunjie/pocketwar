@@ -59,6 +59,10 @@ export class Nav {
   readonly cost: Uint16Array[];
   /** [队伍] 移动阻挡 */
   readonly block: Uint8Array[];
+  /** [队伍] 该格是本队能站上去的墙顶 / 楼顶 */
+  readonly deck: Uint8Array[];
+  /** 城墙圈内的地面：只有从这里才能上下墙顶 */
+  readonly inner: Uint8Array;
   version = 1;
   readonly fields = new Map<number, Field>();
   /** 统计：累计计算的流场数 */
@@ -76,6 +80,8 @@ export class Nav {
     this.bld = new Int32Array(n).fill(-1);
     this.cost = [new Uint16Array(0), new Uint16Array(n), new Uint16Array(n)];
     this.block = [new Uint8Array(0), new Uint8Array(n), new Uint8Array(n)];
+    this.deck = [new Uint8Array(0), new Uint8Array(n), new Uint8Array(n)];
+    this.inner = new Uint8Array(n);
     this.off = Int32Array.from(DIRX.map((dx, i) => dx + DIRY[i] * w));
     this.offX = Int32Array.from(DIRX);
     this.offY = Int32Array.from(DIRY.map(dy => dy * w));
@@ -112,6 +118,7 @@ export class Nav {
   private setCell(c: number, b: NavBuilding | null): void {
     const base = this.base[c];
     for (let t = 1; t <= 2; t++) {
+      this.deck[t][c] = b && base !== 0 && b.owner === t && b.climb > 0 && !b.gate ? 1 : 0;
       if (!b || base === 0) {
         this.cost[t][c] = base;
         this.block[t][c] = base === 0 ? 1 : 0;
@@ -142,6 +149,12 @@ export class Nav {
       }
     }
     this.version++;
+  }
+
+  /** 本队单位能否从 a 格直接走到相邻的 b 格：墙顶与地面之间只能在城内一侧上下 */
+  canStep(team: number, a: number, b: number): boolean {
+    const dk = this.deck[team];
+    return dk[a] === dk[b] || this.inner[dk[a] ? b : a] === 1;
   }
 
   /** 找到离给定格最近的可站立格 */
@@ -268,6 +281,7 @@ export class Nav {
   /** 推进一次搜索，返回剩余预算 */
   private step(job: Job, budget: number): number {
     const cost = this.cost[job.field.team], blk = this.block[job.field.team];
+    const dk = this.deck[job.field.team], inner = this.inner;
     const dist = job.dist, dirs = job.dirs;
     const off = this.off, offX = this.offX, offY = this.offY;
     let hd = job.hd, hc = job.hc, hs = job.hs;
@@ -301,8 +315,14 @@ export class Nav {
         if (dir & 1) {
           // 斜向：不允许擦着障碍角穿过
           if (cBlocked || blk[nc] || blk[c + offX[dir]] || blk[c + offY[dir]]) continue;
+          // 上下墙只能正着走，也不许擦着墙角斜穿
+          const k = dk[c];
+          if (dk[nc] !== k || dk[c + offX[dir]] !== k || dk[c + offY[dir]] !== k) continue;
           nd = d + cd;
-        } else nd = d + cc;
+        } else {
+          if (dk[c] !== dk[nc] && !inner[dk[c] ? nc : c]) continue;
+          nd = d + cc;
+        }
         if (nd < dist[nc]) {
           dist[nc] = nd;
           dirs[nc] = (dir + 4) & 7;
