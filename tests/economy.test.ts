@@ -479,7 +479,7 @@ describe('电脑会花资源', () => {
 });
 
 describe('第八轮：城防与占领', () => {
-  it('村庄有四个箭塔位；大本营每面三座角楼之外再加两座；石城门四格宽', () => {
+  it('村庄有四个箭塔位；石城门四格宽', () => {
     for (const seed of [5, 42, 1234]) {
       const m = generateMap(seed);
       const occupied = (tx: number, ty: number): boolean =>
@@ -489,7 +489,7 @@ describe('第八轮：城防与占领', () => {
           expect(s.slots!.length).toBe(4);
           for (const [tx, ty] of s.slots!) expect(occupied(tx, ty), `seed ${seed} ${s.name}`).toBe(false);
         }
-        if (s.type === SITE_HQ) expect(m.buildings.filter(b => b.site === si && b.def === 'tower').length).toBe(12);
+        if (s.type === SITE_HQ) expect(m.buildings.filter(b => b.site === si && b.def === 'tower').length).toBe(4);
         if (s.type === SITE_TOWN) expect(m.buildings.filter(b => b.site === si && b.def === 'tower').length).toBe(4);
       });
     }

@@ -285,8 +285,7 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
   };
 
-  /** @param mid 石墙每面在角楼与门楼之间再各加一座角楼（大本营城墙长） */
-  const walled = (si: number, cx: number, cy: number, hw: number, hh: number, wood: boolean, owner: number, mid = false): void => {
+  const walled = (si: number, cx: number, cy: number, hw: number, hh: number, wood: boolean, owner: number): void => {
     const x0 = cx - hw, x1 = cx + hw - 1, y0 = cy - hh, y1 = cy + hh - 1;
     const wall = wood ? 'palisade' : 'wall', gh = wood ? 'wgate_h' : 'gate_h', gv = wood ? 'wgate_v' : 'gate_v';
     if (wood) {
@@ -301,16 +300,6 @@ export function generateMap(seed: number, size = 320): GameMap {
     const gw = BUILDINGS[gh].w, gx = cx - (gw >> 1), gy = cy - (gw >> 1);
     put(gh, gx, y0, owner, si); put(gh, gx, y1 - th + 1, owner, si);
     put(gv, x0, gy, owner, si); put(gv, x1 - th + 1, gy, owner, si);
-    if (mid && !wood) {
-      // 角楼（占 2 格）与门楼之间那段墙的正中
-      const midOf = (a: number, b: number): number => a + ((b - a + 1 - 2) >> 1);
-      for (const tx of [midOf(x0 + 2, gx - 1), midOf(gx + gw, x1 - 2)]) {
-        put('tower', tx, y0, owner, si); put('tower', tx, y1 - 1, owner, si);
-      }
-      for (const ty of [midOf(y0 + 2, gy - 1), midOf(gy + gw, y1 - 2)]) {
-        put('tower', x0, ty, owner, si); put('tower', x1 - 1, ty, owner, si);
-      }
-    }
     for (let k = 0; k < th; k++) {
       for (let x = x0; x <= x1; x++) {
         if (!occ[(y0 + k) * W + x]) put(wall, x, y0 + k, owner, si);
@@ -383,7 +372,7 @@ export function generateMap(seed: number, size = 320): GameMap {
     const [hw, hh] = HALF[s.type];
     switch (s.type) {
       case SITE_HQ:
-        walled(si, cx, cy, hw, hh, false, s.owner, true);
+        walled(si, cx, cy, hw, hh, false, s.owner);
         mainAt('keep', cx - 2, cy - 6, s.owner, si);
         if (free(cx + 3, cy + 2, 3, 2)) put('barracks', cx + 3, cy + 2, s.owner, si);
         if (free(cx - 6, cy + 2, 3, 2)) put('barracks', cx - 6, cy + 2, s.owner, si);
