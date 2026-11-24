@@ -27,6 +27,10 @@
 - [memory/render-ui.md](memory/render-ui.md)：改渲染前读——three.js 版本锁定与升级时要核对的着色器补丁、渲染提速先从哪下手。
 - [memory/verification.md](memory/verification.md)：测性能、验画面或音效前读——怎么量帧率、背靠背比较、比模拟耗时要用打包后的代码测、动态效果与音效怎么验。
 
+## 开发计划（临时文档，做完即删）
+
+- TODO [plans/20261124-兵种数值建模/README.md](plans/20261124-兵种数值建模/README.md)：兵种数值建模——统一伤害公式、原型与标签、估值函数算点数、按比重加权的阵营预算与对战校准的方案总览，六个里程碑的清单与待定项。
+
 ## 专题
 
 - [art-assets.md](art-assets.md)：画风要求（写实、真人比例）与现成 CC0 模型素材的调研结论；找素材或换模型前读。
