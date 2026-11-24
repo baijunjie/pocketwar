@@ -10,6 +10,8 @@ import { Sound } from './audio/sound';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
 /** 界面上能交互的元素：鼠标停在这些上面时不边缘卷屏 */
+/** 镜头跟随的平滑程度：每秒把剩下的距离收拢多少（越大跟得越紧） */
+const FOLLOW_RATE = 4;
 const INTERACTIVE = 'button, canvas, input, select, a, .site, .chip, .ucard, .card, .unitbar, .detail';
 
 /** 离屏幕边缘多少像素以内开始卷屏 */
@@ -45,6 +47,8 @@ export class GameApp {
   private readonly cam0 = { yaw: 0, pitch: 0.8 };
   private lastClick = { t: 0, type: -1 };
   private lastGroup = { t: 0, g: -1 };
+  /** 镜头跟随的部队（按 C 开关）：镜头平滑地跟着他们的重心走，手动移动镜头即取消 */
+  private follow: { slots: number[]; uids: number[] } | null = null;
   private uiTimer = 0;
   private mmTimer = 0;
   private over = false;
@@ -150,6 +154,7 @@ export class GameApp {
         } else {
           // 让按住的那一点地面跟着鼠标走
           const a = this.renderer.screenToWorld(this.pan.x, this.pan.y), b = this.renderer.screenToWorld(p.x, p.y);
+          if (a.x !== b.x || a.y !== b.y) this.stopFollow();
           cam.x += a.x - b.x;
           cam.y += a.y - b.y;
         }
@@ -219,6 +224,8 @@ export class GameApp {
       const before = this.renderer.screenToWorld(p.x, p.y);
       cam.zoom *= Math.exp(-e.deltaY * 0.0015);
       this.renderer.clampCam();
+      // 跟随中只缩放，不往鼠标处挪（挪了也会被拉回来）
+      if (this.follow) return;
       const after = this.renderer.screenToWorld(p.x, p.y);
       cam.x += before.x - after.x;
       cam.y += before.y - after.y;
@@ -263,6 +270,8 @@ export class GameApp {
       if (e.repeat) return;
       const human = this.world.humanTeam;
       if (k.startsWith('Arrow') || k === ' ') e.preventDefault();
+      // 移动镜头的键一按下就取消跟随（卷屏是每帧轮询按住的键，点得太快可能一帧也没赶上）
+      if (k.startsWith('Arrow') || (!e.ctrlKey && !e.metaKey && (k === 'w' || k === 'a' || k === 's' || k === 'd'))) this.stopFollow();
       if (k === 'Escape') {
         if (this.hud.helpOpen) this.hud.toggleHelp();
         else if (this.mode) this.setMode('');
@@ -282,6 +291,7 @@ export class GameApp {
         e.preventDefault();
         this.command('all');
       } else if (k === 'f') this.command('amove');
+      else if (k === 'c') this.command('follow');
       else if (k === 'x') this.command('stop');
       else if (k === 'h') this.command('hold');
       else if (k === 'r' || k === 'R') this.command(e.shiftKey ? 'unrally' : 'rally');
@@ -363,6 +373,7 @@ export class GameApp {
   }
 
   private focus(x: number, y: number): void {
+    this.stopFollow();
     this.renderer.cam.x = x;
     this.renderer.cam.y = y;
     this.renderer.clampCam();
@@ -623,10 +634,18 @@ export class GameApp {
   }
 
   // ------------------------------------------------------------------ 指令
-  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost'): void {
+  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow'): void {
     const w = this.world;
     if (!w.humanTeam) return;
-    if (c === 'all') {
+    if (c === 'follow') {
+      if (this.follow) this.stopFollow();
+      else if (!this.selList.length) this.hud.message('先选中要跟随的部队', 'info');
+      else {
+        this.follow = { slots: this.selList.slice(), uids: this.selUid.slice() };
+        this.hud.following = true;
+        this.hud.message('镜头跟随所选部队（再按 C 或移动镜头即取消）', 'info');
+      }
+    } else if (c === 'all') {
       const list: number[] = [];
       for (let i = 0; i < w.n; i++) if (w.controllable(i) && w.team[i] === w.humanTeam) list.push(i);
       this.setSelection(list);
@@ -807,12 +826,48 @@ export class GameApp {
       dy += edge(vh - this.mouse.y) - edge(this.mouse.y);
     }
     if (dx || dy) {
+      this.stopFollow();
       const sp = (1100 / cam.zoom) * dt;
       this.renderer.moveCam(dx * sp, dy * sp);
     }
+    if (this.follow) this.followStep(dt);
     // Q / E 旋转镜头
     const rot = (k.has('q') ? 1 : 0) - (k.has('e') ? 1 : 0);
     if (rot) cam.yaw += rot * 1.5 * dt;
+  }
+
+  private stopFollow(): void {
+    if (!this.follow) return;
+    this.follow = null;
+    this.hud.following = false;
+    this.hud.message('已取消镜头跟随', 'info');
+  }
+
+  /**
+   * 镜头向跟随部队的重心靠拢。重心用和渲染同一个插值系数算（模拟 30 帧/秒，画面更快，直接取模拟坐标会一顿一顿），
+   * 再按指数平滑追过去：有人阵亡、掉队时重心会跳，镜头不跟着跳。
+   */
+  private followStep(dt: number): void {
+    const f = this.follow!, w = this.world;
+    const a = Math.min(1, this.acc / DT);
+    let cx = 0, cy = 0, n = 0;
+    for (let k = 0; k < f.slots.length; k++) {
+      const s = f.slots[k];
+      if (!w.alive[s] || w.uid[s] !== f.uids[k]) continue;
+      cx += w.px[s] + (w.x[s] - w.px[s]) * a;
+      cy += w.py[s] + (w.y[s] - w.py[s]) * a;
+      n++;
+    }
+    if (!n) {
+      this.follow = null;
+      this.hud.following = false;
+      this.hud.message('跟随的部队已全部阵亡', 'info');
+      return;
+    }
+    const cam = this.renderer.cam, t = 1 - Math.exp(-dt * FOLLOW_RATE);
+    cam.x += (cx / n - cam.x) * t;
+    cam.y += (cy / n - cam.y) * t;
+    this.renderer.clampCam();
   }
 
   private drainEvents(): void {

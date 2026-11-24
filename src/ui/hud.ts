@@ -21,7 +21,7 @@ export interface UpgradeOffers {
 export type UpgradeAction = 'sel' | 'all' | 'forts' | 'camps';
 
 export interface HudCallbacks {
-  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost'): void;
+  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow'): void;
   /** 点了某个升级按钮 */
   upgrade(act: UpgradeAction): void;
   /** 选中一个据点（-1 = 取消） */
@@ -87,6 +87,8 @@ export class Hud {
   /** 正在兵种栏里拖框（拖动期间不重建卡片） */
   private dragging = false;
   private readonly cmdBtns = new Map<string, HTMLButtonElement>();
+  /** 镜头正在跟随部队：「跟随」按钮高亮，没选部队时也能点它取消 */
+  following = false;
   private readonly feed: HTMLDivElement;
   private readonly modeTip: HTMLDivElement;
   private readonly help: HTMLDivElement;
@@ -209,6 +211,7 @@ export class Hud {
         btn('坚守', 'H', 'hold', '原地坚守，不追击'),
         btn('火把', 'T', 'torch', '点燃 / 熄灭所选部队的火把：点着看得远，也更容易被发现'),
         btn('扎营', 'B', 'outpost', `派所选部队到指定位置搭一座临时据点（木材 ${RULES.economy.outpostCost}，最多 ${RULES.economy.outpostMax} 座）：部队在里面休整回血，被毁不会重生`),
+        btn('跟随', 'C', 'follow', '镜头平滑地跟着所选部队走；再按一次、或手动移动镜头即取消'),
         btn('全军', 'Ctrl+A', 'all', '选中全图的全部部队'),
       );
       const reinf = el('div', 'cgrid');
@@ -256,6 +259,7 @@ export class Hud {
           <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
           <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
           <tr><td>鼠标移到屏幕边缘、W A S D / 方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
+          <tr><td>C</td><td>镜头跟随所选部队（平滑跟着部队走）；再按一次、或手动移动镜头即取消</td></tr>
           <tr><td>中键拖动、Q / E</td><td>旋转镜头（上下拖动调俯角）；Shift+中键拖动平移；Home 复位</td></tr>
           <tr><td>空格 / + −　M</td><td>暂停 / 调整速度　开关音效</td></tr>
         </table>
@@ -588,8 +592,10 @@ export class Hud {
     }
     // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
     for (const [cmd, b] of this.cmdBtns) {
-      const off = cmd === 'unrally' ? !w.rally[w.humanTeam] : cmd !== 'all' && cmd !== 'rally' && !sel.length;
+      const off = cmd === 'unrally' ? !w.rally[w.humanTeam] : cmd === 'follow' ? !sel.length && !this.following
+        : cmd !== 'all' && cmd !== 'rally' && !sel.length;
       if (b.disabled !== off) b.disabled = off;
+      if (cmd === 'follow') b.classList.toggle('on', this.following);
     }
     if (!this.dragging) this.renderRoster(sel, screen);
   }
