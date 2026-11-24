@@ -7,17 +7,6 @@
 文档与开发记忆的读写按 `agent-docs` skill，入口是总索引 [docs/README.md](docs/README.md)。
 开发、构建、测试命令与调试用法见 [README.md](README.md)「运行」一节。
 
-## 约定
-
-- 下载任何第三方文件（含 npm 包）前，先说明文件名、来源、授权、大小并得到用户明确同意；
-  只用 CC0 或同等宽松授权的素材，并记入 README 的「素材」一节。
-- 原创作品，不照搬任何现有游戏的名称、美术、文明设计。
-- `src/sim/` 是不依赖 DOM 的纯逻辑，除非确有需要不要为了画面去改它；阵营平衡在用户发话前不调。
-- `src/sim/content/` 只放数据，`src/sim/systems/` 只放算法：系统里不写死数字、不认具体兵种。
-- 提交用 Conventional Commits、中文、不留 AI 痕迹。在分支 + `.worktrees/<名字>` 工作树里开发，
-  交付前压成一个提交，快进合并到 main；合并、推送、开 PR 由用户决定。
-- 改了画面要在浏览器里实际看过再说完成：模型和动作先用 `/?view=units` 预览页，再进对局确认。
-
 <!-- setup-agent:subagents:begin -->
 
 ## 分派子代理
