@@ -1024,13 +1024,17 @@ export class Renderer {
       const y = g0 + lf;
       const aa = w.atkAnim[i];
       const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
+      // 被旁人挤动时自己没有迈步的速度，按这一帧实际挪了多远算，挪动的人照样迈腿，不原地平移
+      const mx = (w.x[i] - w.px[i]) / DT, mz = (w.y[i] - w.py[i]) / DT;
+      const mv2 = mx * mx + mz * mz;
+      const gait = sp2 > mv2 ? sp2 : mv2;
       let clip: Clip, ph: number;
       if (aa > 0) {
         clip = sp2 > 900 ? this.moveShot(i, cl) : cl.attack;
         ph = 1 - aa / 0.3;
-      } else if (sp2 > 30) {
+      } else if (gait > 30) {
         // 走还是跑看实际速度；步幅与行进距离挂钩，脚下不打滑
-        let name = sp2 > def.walk * def.walk * 1.3 ? 'run' : 'walk';
+        let name = gait > def.walk * def.walk * 1.3 ? 'run' : 'walk';
         if (st & S_CHARGE) name = 'charge';
         else if (st & S_SHIELD && !(st & S_ROUT)) name = 'guardWalk';
         clip = cl[name];

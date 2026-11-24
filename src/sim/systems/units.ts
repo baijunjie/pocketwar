@@ -466,10 +466,16 @@ export function updateUnits(w: World): void {
     if (posted) planted[i] = 1;
 
     // ---- 分离（单位互不重叠）与冲撞 ----
-    let pxs = 0, pys = 0;
+    // 推挤只负责把已经叠在一起的人分开；冲着目标去的人贴上自己人时，下面把速度里朝向对方、又快过对方让开的那部分去掉，
+    // 不再一边往前冲、一边被推回来（那样会原地来回跳，后排还会把前排一层层往里挤）
+    let pxs = 0, pys = 0, pen = 0, nc = 0;
+    const calm = (st & S_COMBAT) === 0, marching = calm && (order[i] === O_MOVE || order[i] === O_AMOVE);
     const gx = (ux / GRID) | 0, gy = (uy / GRID) | 0;
     const r = rad[i], r2 = r * r;
     const charging = (st & S_CHARGE) !== 0;
+    // 只约束正冲着目标去的人（挤战线的那批）；回原位、赶路、溃逃的照旧能把没站定的自己人挤开
+    const press = tgt !== NONE && !firm && !charging && !(st & S_ROUT);
+    const skin = C.contactSkin, passK = C.passPush;
     let braced = NONE;
     for (let cy = gy - 1; cy <= gy + 1; cy++) {
       if (cy < 0 || cy >= gh) continue;
@@ -495,19 +501,35 @@ export function updateUnits(w: World): void {
               if (!alive[j]) continue;
             }
           }
-          if (d2 >= rr * rr) continue;
+          const rs = rr + skin;
+          // 先按距离剔除：周围格子里的人大多离得远，别为他们去读别的数组
+          if (d2 >= rs * rs) continue;
+          const mate = team[j] === tm, pj = planted[j];
+          // 不打仗时自己人之间可以互相穿过
+          const pass = mate && calm && pj === 0 && !(state[j] & S_COMBAT) && (marching || order[j] === O_MOVE || order[j] === O_AMOVE);
           if (d2 < 0.01) {
             ox = ((i * 7919) % 13) - 6;
             oy = ((i * 104729) % 11) - 5;
             d2 = ox * ox + oy * oy + 0.01;
           }
           const dd = Math.sqrt(d2);
+          // 贴着（差一点就碰上）的自己人：记下方向和它离开的速度，下面让自己朝它走得不比它让得快
+          if (mate && press && !pass && nc < CN) {
+            const nx = -ox / dd, ny = -oy / dd;
+            const away = pj === 0 ? vx[j] * nx + vy[j] * ny : 0;
+            cnx[nc] = nx;
+            cny[nc] = ny;
+            cnv[nc++] = away > 0 ? away : 0;
+          }
+          if (dd >= rr) continue;
           // 站定的人只有被压得太狠才让一点；别人撞上站定的人，自己全让
-          if (firm && dd > rr * give && (plant || team[j] === tm)) continue;
-          const pj = planted[j];
-          const push = ((rr - dd) / dd) * (!firm && (pj === 1 || (pj === 2 && team[j] === tm)) ? 1 : (rj * rj) / (r2 + rj * rj));
-          pxs += ox * push;
-          pys += oy * push;
+          if (firm && dd > rr * give && (plant || mate)) continue;
+          let share = !firm && (pj === 1 || (pj === 2 && mate)) ? 1 : (rj * rj) / (r2 + rj * rj);
+          if (pass) share *= passK;
+          const ov = (rr - dd) * share;
+          if (ov > pen) pen = ov;
+          pxs += (ox / dd) * ov;
+          pys += (oy / dd) * ov;
         }
       }
     }
@@ -524,12 +546,40 @@ export function updateUnits(w: World): void {
       if (!alive[i]) continue;
     }
     const pm = pxs * pxs + pys * pys;
-    // 推挤上限要略高于自己一帧能走的距离，否则跑得快的会一点点挤进站定的人堆里
-    const pcap = firm || spd * DT < 2.5 ? 3 : spd * DT + 0.5;
+    // 推挤上限要略高于自己一帧能走的距离，否则跑得快的会一点点挤进站定的人堆里；
+    // 也不超过最深的那一处重叠，几处接触叠加起来不会把人推过头
+    let pcap = firm || spd * DT < 2.5 ? 3 : spd * DT + 0.5;
+    if (pen < pcap) pcap = pen;
     if (pm > pcap * pcap) {
       const k = pcap / Math.sqrt(pm);
       pxs *= k;
       pys *= k;
+    }
+
+    // 冲着目标去、正前方被自己人堵住：沿着他们的背后往一侧绕，找战线上的空位
+    const cwx = wx, cwy = wy;
+    let flank = false;
+    // 只有近战绕：「追不上」的计时到点后另找、排队只管近战，远程绕起来没有尽头，况且横挪时也一直在往前凑，很快就够得着
+    if (press && chasing && d.range === 0 && nc > 0) {
+      const wl = Math.sqrt(wx * wx + wy * wy);
+      if (wl > 0) {
+        const fx = wx / wl, fy = wy / wl;
+        let blocked = false, lat = 0;
+        for (let c = 0; c < nc; c++) {
+          // 正前方的人自己也在往前走、让得开的不算堵住
+          if (fx * cnx[c] + fy * cny[c] > C.flankCos && cnv[c] < wl * 0.5) blocked = true;
+          lat += fx * cny[c] - fy * cnx[c];
+        }
+        if (blocked) {
+          const sideK = C.flankSide, fwdK = Math.sqrt(1 - sideK * sideK);
+          // 已经在往哪边绕就接着往哪边（旁边的人跟着前一个走，不会对撞）；还没动的往贴着的人少的一边，一样多时按编号分两边
+          const vl = fx * vy[i] - fy * vx[i];
+          const side = vl > 3 ? 1 : vl < -3 ? -1 : lat > 0.3 ? -1 : lat < -0.3 ? 1 : i & 1 ? 1 : -1;
+          wx = (fx * fwdK - fy * side * sideK) * wl;
+          wy = (fy * fwdK + fx * side * sideK) * wl;
+          flank = true;
+        }
+      }
     }
 
     // ---- 积分与地形碰撞 ----
@@ -538,7 +588,16 @@ export function updateUnits(w: World): void {
       wx *= f;
       wy *= f;
     }
-    const nvx = vx[i] + (wx - vx[i]) * 0.3, nvy = vy[i] + (wy - vy[i]) * 0.3;
+    let nvx = vx[i] + (wx - vx[i]) * 0.3, nvy = vy[i] + (wy - vy[i]) * 0.3;
+    for (let sweep = 0; sweep < 2; sweep++) {
+      for (let c = 0; c < nc; c++) {
+        const into = nvx * cnx[c] + nvy * cny[c] - cnv[c];
+        if (into > 0) {
+          nvx -= cnx[c] * into;
+          nvy -= cny[c] * into;
+        }
+      }
+    }
     vx[i] = nvx;
     vy[i] = nvy;
     let nx = ux + nvx * DT + pxs, ny = uy + nvy * DT + pys;
@@ -573,10 +632,17 @@ export function updateUnits(w: World): void {
     y[i] = ny;
     const mvx = nx - ux, mvy = ny - uy;
     const moved = Math.sqrt(mvx * mvx + mvy * mvy);
-    const want = Math.sqrt(wx * wx + wy * wy);
-    // 追击时看的是有没有朝目标靠近：贴着人墙横着滑不算前进
-    if (want > 8 && (chasing ? mvx * wx + mvy * wy < want * want * DT * 0.3 : moved < want * DT * 0.3)) w.stuck[i] += DT;
-    else if (w.stuck[i] > 0) w.stuck[i] = Math.max(0, w.stuck[i] - DT * 2);
+    const want = Math.sqrt(cwx * cwx + cwy * cwy);
+    if (flank) {
+      // 绕向侧面找空位：不论有没有顺带往前蹭一点，都按比例记「追不上」，最多绕 blockedAfter ÷ flankStuck 秒
+      w.stuck[i] += moved > want * DT * 0.3 ? DT * C.flankStuck : DT;
+    } else if (want > 8 && (chasing ? mvx * cwx + mvy * cwy < want * want * DT * 0.3 : moved < want * DT * 0.3)) {
+      // 追击时看的是有没有朝目标靠近：贴着人墙横着滑不算前进
+      w.stuck[i] += DT;
+    } else if (w.stuck[i] > 0 && nc === 0) {
+      // 还贴着冲不过去的自己人时，往目标斜着凑近一点不算走通了，计时不回落，否则会沿着人墙左右来回绕
+      w.stuck[i] = Math.max(0, w.stuck[i] - DT * 2);
+    }
     if (chasing && d.range === 0 && w.stuck[i] > C.blockedAfter) {
       w.stuck[i] = 0;
       if (blockedByTerrain) {
@@ -606,7 +672,8 @@ export function updateUnits(w: World): void {
     if (!eng) {
       if (nvx > 6) w.facing[i] = 1;
       else if (nvx < -6) w.facing[i] = -1;
-      if (nvx * nvx + nvy * nvy > 64) aim = Math.atan2(nvy, nvx);
+      if (flank) aim = Math.atan2(cwy, cwx);
+      else if (nvx * nvx + nvy * nvy > 64) aim = Math.atan2(nvy, nvx);
     } else if (d.traits & TR_FIREMOVE && nvx * nvx + nvy * nvy > 400) {
       // 骑射边跑边射：马头始终朝着跑的方向，骑手回身放箭（转身由渲染层表现）
       aim = Math.atan2(nvy, nvx);
@@ -625,6 +692,9 @@ export function updateUnits(w: World): void {
 }
 
 const ONE = [0];
+/** 顶住的自己人的方向（单位向量），每帧最多记这么多处 */
+const CN = 6;
+const cnx = new Float64Array(CN), cny = new Float64Array(CN), cnv = new Float64Array(CN);
 
 /** 最近 ticks 帧内打过 i 的、还活着且看得见的敌方远程单位（据点里的近战守军据此出击） */
 function provoker(w: World, i: number, tm: number, ticks: number): number {

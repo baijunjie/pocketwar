@@ -9,8 +9,8 @@
 - [product/match.md](product/match.md)：对局整体——概述、主菜单设置、地图构成、开局部署、电脑对手难度与行为限制、胜负。
 - [product/factions.md](product/factions.md)：四阵营的特点与倍率，全部兵种数值表，开局编制，各类据点出的援军。
 - [product/units.md](product/units.md)：兵种通用规则——类别与克制、体型、等级与经验、高级形态、特殊动作、兵种特性。
-- [product/movement.md](product/movement.md)：行军——地形速度、行军与战斗状态、编队行军与纵队、默认队列、指定朝向。
-- [product/combat.md](product/combat.md)：战斗——伤害公式与倍率、高地与林地、寻敌、自动打建筑、守军、待命与坚守。
+- [product/movement.md](product/movement.md)：行军——地形速度、行军与战斗状态、人与人的推挤（自己人穿过、不往自己人身上挤）、编队行军与纵队、默认队列、指定朝向。
+- [product/combat.md](product/combat.md)：战斗——伤害公式与倍率、高地与林地、寻敌（挤不进战线时往两侧绕）、自动打建筑、守军、待命与坚守。
 - [product/morale.md](product/morale.md)：士气加减、溃逃阈值、溃兵恢复与逃散。
 - [product/environment.md](product/environment.md)：迷雾与视野、昼夜、火把、雨雪、风。
 - [product/economy.md](product/economy.md)：粮草产耗与断粮，木 / 石 / 金的产量与用处，电脑怎么花资源。
@@ -25,7 +25,7 @@
 ## 开发记忆（开工前按主题读）
 
 - [memory/render-ui.md](memory/render-ui.md)：改渲染前读——three.js 版本锁定与升级时要核对的着色器补丁、渲染提速先从哪下手。
-- [memory/verification.md](memory/verification.md)：测性能、验画面或音效前读——怎么量帧率、背靠背比较、动态效果与音效怎么验。
+- [memory/verification.md](memory/verification.md)：测性能、验画面或音效前读——怎么量帧率、背靠背比较、比模拟耗时要用打包后的代码测、动态效果与音效怎么验。
 
 ## 专题
 
