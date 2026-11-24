@@ -25,7 +25,7 @@
 ## 开发记忆（开工前按主题读）
 
 - [memory/render-ui.md](memory/render-ui.md)：改渲染前读——three.js 版本锁定与升级时要核对的着色器补丁、渲染提速先从哪下手。
-- [memory/verification.md](memory/verification.md)：测性能、验画面或音效前读——怎么量帧率、背靠背比较、比模拟耗时要用打包后的代码测、动态效果与音效怎么验。
+- [memory/verification.md](memory/verification.md)：测性能、复现或量化模拟层行为、验画面或音效前读——怎么量帧率、背靠背比较、比模拟耗时要用打包后的代码测、无头复现脚本怎么跑与看队形出图、动态效果与音效怎么验。
 
 ## 开发计划（临时文档，做完即删）
 
