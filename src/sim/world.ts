@@ -236,6 +236,17 @@ export class World {
   /** 挤不进战线时原地列队等待的倒计时，以及连续等待的次数 */
   readonly waitT = new Float32Array(MAX_UNITS);
   readonly waits = new Uint8Array(MAX_UNITS);
+  /** 绕向敌群外缘空位的剩余秒数（大于 0 即在绕行）、空位坐标、绕行圆的圆心（敌群重心）与半径 */
+  readonly detourT = new Float32Array(MAX_UNITS);
+  readonly detourX = new Float32Array(MAX_UNITS);
+  readonly detourY = new Float32Array(MAX_UNITS);
+  readonly detourCx = new Float32Array(MAX_UNITS);
+  readonly detourCy = new Float32Array(MAX_UNITS);
+  readonly detourR = new Float32Array(MAX_UNITS);
+  /** 绕行中已连续走不动的秒数 */
+  readonly detourStall = new Float32Array(MAX_UNITS);
+  /** 放弃绕行改列队等之后的这段时间里不当站定的人，让重叠的自己人把他推开 */
+  readonly detourLoose = new Float32Array(MAX_UNITS);
   /** 正有多少近战敌人以它为目标 */
   readonly crowd = new Uint8Array(MAX_UNITS);
   /** 被哪些队伍看见（位 1、2） */
@@ -478,6 +489,7 @@ export class World {
     this.torchOff[i] = 0;
     this.avoidT[i] = this.waitT[i] = 0;
     this.waits[i] = this.crowd[i] = 0;
+    this.detourT[i] = this.detourLoose[i] = 0;
     this.seen[i] = 0;
     this.sheltered[i] = 0;
     this.sortie[i] = 0;

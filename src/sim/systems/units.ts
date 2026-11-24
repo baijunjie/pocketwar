@@ -2,7 +2,7 @@
  * 单位每帧的行为：校验目标 → 索敌与状态切换 → 行军 / 追击 / 攻击 / 溃逃 → 分离 → 位移。
  * 这是整个模拟里最热的循环，所以写成一个大函数；具体的规则（选谁、打多少、何时溃逃）都在别的系统里。
  */
-import { A_MELEE, A_PIERCE, DT, RULES, SIZES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL } from '../content';
+import { A_MELEE, A_PIERCE, DT, RULES, SIZES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL, UnitDef } from '../content';
 import { DIRX, DIRY } from '../nav';
 import { FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
 import type { World } from '../world';
@@ -13,6 +13,7 @@ import { SLOT, marchSlot } from './march';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
 import { SCAN, findBuilding, scan } from './targeting';
+import { STEP, detourPasses, detourProgress, detourStep, startWait, tryDetour } from './detour';
 
 function arrive(w: World, i: number, atSlot: boolean): void {
   w.order[i] = O_IDLE;
@@ -34,7 +35,6 @@ export function updateUnits(w: World): void {
   const maxX = w.W - 6, maxY = w.H - 6;
   const bldAt = w.nav.bld, buildings = w.buildings;
   const C = RULES.combat, SG = RULES.siege, SITE = RULES.site;
-  const LEASH2 = C.leash * C.leash;
   const rainMul = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
   // 风：顺风快、顶风慢，按行进方向在风向上的投影算
   // 顺风时远程最远能射到射程的几倍（索敌按这个找，出手前再按实际方向核对）
@@ -42,7 +42,7 @@ export function updateUnits(w: World): void {
   const windK = w.env.wind * RULES.env.windSpeed, windX = Math.cos(w.env.windDir), windY = Math.sin(w.env.windDir);
   const canTorch = w.env.night && !w.env.raining && !w.env.snowing;
   const mc = RULES.morale.cell, mcw = w.mw, mch = w.mh;
-  const inner = w.nav.inner, marches = w.marches, planted = w.planted;
+  const nav = w.nav, marches = w.marches, planted = w.planted;
   const give = 1 - C.plantGive;
   const n = w.n;
 
@@ -62,7 +62,7 @@ export function updateUnits(w: World): void {
     const posted = w.pmode[i] === P_POSTED;
     const ab = d.abilities;
     const tm = team[i];
-    const blk = w.nav.block[tm], dk = w.nav.deck[tm];
+    const blk = nav.block[tm];
     const ux = x[i], uy = y[i];
     w.px[i] = ux;
     w.py[i] = uy;
@@ -81,6 +81,7 @@ export function updateUnits(w: World): void {
     if (w.shieldT[i] > 0) w.shieldT[i] -= DT;
     if (w.avoidT[i] > 0) w.avoidT[i] -= DT;
     if (w.waitT[i] > 0) w.waitT[i] -= DT;
+    if (w.detourLoose[i] > 0) w.detourLoose[i] -= DT;
     let st = state[i];
     let ord = order[i];
     let tgt = target[i];
@@ -88,7 +89,7 @@ export function updateUnits(w: World): void {
     let spd = d.speed * TERRAIN_SPEED[tt] * rainMul;
     if (tt === T_FOREST) spd *= d.forestMul;
     const run = spd;
-    let eng = 0, usePath = false, chasing = false, blockedByTerrain = false;
+    let eng = 0, usePath = false, chasing = false, blockedByTerrain = false, detouring = false;
     let aim = w.dir[i];
 
     if (st & S_ROUT) {
@@ -108,7 +109,7 @@ export function updateUnits(w: World): void {
         }
         if (tgt === NONE) {
           target[i] = NONE;
-          w.waitT[i] = 0;
+          w.waitT[i] = w.detourT[i] = 0;
           if (ord === O_ATTACK) {
             // 临时目标（挡路的建筑）清除后，恢复玩家指定的目标
             const ot = w.otarget[i];
@@ -183,7 +184,7 @@ export function updateUnits(w: World): void {
               w.chargeT[i] = cg.duration;
               w.chargeHits[i] = 0;
               w.chargeLast[i] = 0;
-              w.waitT[i] = 0;
+              w.waitT[i] = w.detourT[i] = 0;
               tgt = target[i] = ct;
               w.targetUid[i] = w.uid[ct];
               // 立刻告知目标附近的枪兵
@@ -212,7 +213,7 @@ export function updateUnits(w: World): void {
           w.sortieY[i] = hy;
           ord = order[i];
           tgt = target[i];
-        } else if (auto && (tgt === NONE || (tgt < 0 && !d.siege) || (tgt >= 0 && melee && !w.engaged[i] && w.waitT[i] <= 0))) {
+        } else if (auto && (tgt === NONE || (tgt < 0 && !d.siege) || (tgt >= 0 && melee && !w.engaged[i] && w.waitT[i] <= 0 && w.detourT[i] <= 0))) {
           let e = SCAN.pick;
           if (e !== NONE && guard && melee && !inSite(w, w.shelterSite[i], x[e], y[e])) e = NONE;
           if (e !== NONE) {
@@ -228,8 +229,7 @@ export function updateUnits(w: World): void {
           }
         }
         // 近战守军不追出据点（追的是最近打过自己的人除外）
-        if (guard && melee && tgt >= 0 && tgt !== w.hitBy[i * 2] && tgt !== w.hitBy[i * 2 + 1] && !w.engaged[i]
-          && !inSite(w, w.shelterSite[i], x[tgt], y[tgt])) {
+        if (guard && melee && tgt >= 0 && guardDrops(w, i, tgt) && !w.engaged[i]) {
           tgt = target[i] = NONE;
           w.waitT[i] = 0;
         }
@@ -283,7 +283,7 @@ export function updateUnits(w: World): void {
           } else {
             eng = 1;
             w.waits[i] = 0;
-            w.waitT[i] = 0;
+            w.waitT[i] = w.detourT[i] = 0;
             aim = Math.atan2(dy, dx);
             if (dx > 1) w.facing[i] = 1;
             else if (dx < -1) w.facing[i] = -1;
@@ -301,8 +301,7 @@ export function updateUnits(w: World): void {
           }
         } else if (ord === O_HOLD) {
           target[i] = tgt = NONE;
-        } else if (ord === O_IDLE && !(st & S_CHARGE) && (tx - w.homeX[i]) ** 2 + (ty - w.homeY[i]) ** 2
-          > (w.sheltered[i] && (d.range > 0 || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm * SITE.alarm : LEASH2) * 1.2) {
+        } else if (ord === O_IDLE && !(st & S_CHARGE) && (tx - w.homeX[i]) ** 2 + (ty - w.homeY[i]) ** 2 > idleLeash2(w, i, d, tgt)) {
           // 待命：敌人离岗位太远就不追了
           target[i] = tgt = NONE;
           w.ignoreT[i] = 1.5;
@@ -324,6 +323,11 @@ export function updateUnits(w: World): void {
             chasing = true;
             wx = (dx / dist) * spd;
             wy = (dy / dist) * spd;
+            if (w.detourT[i] > 0 && tgt >= 0 && detourStep(w, i, tgt, ord, spd, cell, ord === O_IDLE ? idleLeash2(w, i, d, tgt) : 0, guardKeep(w, i, d, ord))) {
+              wx = STEP.wx;
+              wy = STEP.wy;
+              detouring = true;
+            }
           }
         }
       }
@@ -452,12 +456,13 @@ export function updateUnits(w: World): void {
         }
       }
     }
+    if (!detouring) w.detourT[i] = 0;
     w.engaged[i] = eng;
     state[i] = st;
     // 站定出手：除了骑兵，出手的那一下（以及交手期间）脚下不动，也不会被旁人挤开
     const plant = !d.mobile && !(st & S_ROUT) && (eng === 1 || w.atkAnim[i] > 0);
     // 骑兵交手时脚下可以动，但不会被自己人挤出战位；在战线后面列队等待的也一样
-    const firm = plant || ((eng === 1 || (w.waitT[i] > 0 && wx === 0 && wy === 0)) && !(st & (S_CHARGE | S_ROUT)));
+    const firm = plant || ((eng === 1 || (w.waitT[i] > 0 && wx === 0 && wy === 0 && w.detourLoose[i] <= 0)) && !(st & (S_CHARGE | S_ROUT)));
     planted[i] = plant ? 1 : firm ? 2 : 0;
     if (plant || posted) {
       wx = wy = 0;
@@ -473,8 +478,9 @@ export function updateUnits(w: World): void {
     const gx = (ux / GRID) | 0, gy = (uy / GRID) | 0;
     const r = rad[i], r2 = r * r;
     const charging = (st & S_CHARGE) !== 0;
+    // 绕行的人不受这条约束：他在绕过人群去找空位，路上没在交手的自己人让他穿过去
     // 只约束正冲着目标去的人（挤战线的那批）；回原位、赶路、溃逃的照旧能把没站定的自己人挤开
-    const press = tgt !== NONE && !firm && !charging && !(st & S_ROUT);
+    const press = tgt !== NONE && !firm && !charging && !(st & S_ROUT) && !detouring;
     const skin = C.contactSkin, passK = C.passPush;
     let braced = NONE;
     for (let cy = gy - 1; cy <= gy + 1; cy++) {
@@ -506,7 +512,8 @@ export function updateUnits(w: World): void {
           if (d2 >= rs * rs) continue;
           const mate = team[j] === tm, pj = planted[j];
           // 不打仗时自己人之间可以互相穿过
-          const pass = mate && calm && pj === 0 && !(state[j] & S_COMBAT) && (marching || order[j] === O_MOVE || order[j] === O_AMOVE);
+          const pass = mate && ((calm && pj === 0 && !(state[j] & S_COMBAT) && (marching || order[j] === O_MOVE || order[j] === O_AMOVE))
+            || (detouring && detourPasses(w, i, j)));
           if (d2 < 0.01) {
             ox = ((i * 7919) % 13) - 6;
             oy = ((i * 104729) % 11) - 5;
@@ -560,7 +567,7 @@ export function updateUnits(w: World): void {
     const cwx = wx, cwy = wy;
     let flank = false;
     // 只有近战绕：「追不上」的计时到点后另找、排队只管近战，远程绕起来没有尽头，况且横挪时也一直在往前凑，很快就够得着
-    if (press && chasing && d.range === 0 && nc > 0) {
+    if (press && chasing && !detouring && d.range === 0 && nc > 0) {
       const wl = Math.sqrt(wx * wx + wy * wy);
       if (wl > 0) {
         const fx = wx / wl, fy = wy / wl;
@@ -616,13 +623,13 @@ export function updateUnits(w: World): void {
     if (!blk[cell]) {
       // 进不去的格子：地形与敌方建筑；地面上不了墙顶，墙顶只能往城内一侧下
       const c1 = ((uy / TILE) | 0) * mw + ((nx / TILE) | 0);
-      if (c1 !== cell && (blk[c1] || (dk[c1] !== dk[cell] && !(dk[cell] && inner[c1])))) {
+      if (c1 !== cell && (blk[c1] || !nav.canStep(tm, cell, c1))) {
         nx = ux;
         vx[i] = 0;
         blockedByTerrain = true;
       }
       const c2 = ((ny / TILE) | 0) * mw + ((nx / TILE) | 0);
-      if (c2 !== cell && (blk[c2] || (dk[c2] !== dk[cell] && !(dk[cell] && inner[c2])))) {
+      if (c2 !== cell && (blk[c2] || !nav.canStep(tm, cell, c2))) {
         ny = uy;
         vy[i] = 0;
         blockedByTerrain = true;
@@ -642,6 +649,11 @@ export function updateUnits(w: World): void {
     } else if (w.stuck[i] > 0 && nc === 0) {
       // 还贴着冲不过去的自己人时，往目标斜着凑近一点不算走通了，计时不回落，否则会沿着人墙左右来回绕
       w.stuck[i] = Math.max(0, w.stuck[i] - DT * 2);
+    }
+    if (detouring) {
+      w.stuck[i] = 0;
+      // 绕行走不动（被正在交手的自己人堵在人堆里）就尽早放弃，改列队等
+      detourProgress(w, i, ux, uy, nx, ny, want);
     }
     if (chasing && d.range === 0 && w.stuck[i] > C.blockedAfter) {
       w.stuck[i] = 0;
@@ -663,9 +675,9 @@ export function updateUnits(w: World): void {
         if (alt !== NONE) {
           target[i] = alt;
           w.targetUid[i] = w.uid[alt];
-        } else {
-          w.waitT[i] = Math.min(C.waitMax, C.waitBase + w.waits[i] * 0.8);
-          if (w.waits[i] < 200) w.waits[i]++;
+        } else if (!(tgt >= 0 && tryDetour(w, i, tgt, st, ord, spd, ord === O_IDLE ? idleLeash2(w, i, d, tgt) : 0, guardKeep(w, i, d, ord)))) {
+          // 没有别的敌人可换、也绕不成：原地列队等
+          startWait(w, i);
         }
       }
     }
@@ -692,6 +704,23 @@ export function updateUnits(w: World): void {
 }
 
 const ONE = [0];
+
+/** 待命的单位追敌：敌人离岗位超过这个距离（的平方）就不追。据点里的守军（远程，或追打过自己的人）按据点警戒距离算 */
+function idleLeash2(w: World, i: number, d: UnitDef, tgt: number): number {
+  const C = RULES.combat, SITE = RULES.site;
+  const r = w.sheltered[i] && (d.range > 0 || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm : C.leash;
+  return r * r * 1.2;
+}
+/** 据点里的近战守军不追出据点：目标在据点外、又不是最近打过自己的人，就该丢掉 */
+function guardDrops(w: World, i: number, tgt: number): boolean {
+  return tgt !== w.hitBy[i * 2] && tgt !== w.hitBy[i * 2 + 1] && !inSite(w, w.shelterSite[i], w.x[tgt], w.y[tgt]);
+}
+
+/** 绕行时空位所属的敌兵要满足的条件：据点里的近战守军只留不会被 guardDrops 丢掉的；其余没有限制（undefined） */
+function guardKeep(w: World, i: number, d: UnitDef, ord: number): ((foe: number) => boolean) | undefined {
+  return ord === O_IDLE && w.sheltered[i] === 1 && d.range === 0 ? foe => !guardDrops(w, i, foe) : undefined;
+}
+
 /** 顶住的自己人的方向（单位向量），每帧最多记这么多处 */
 const CN = 6;
 const cnx = new Float64Array(CN), cny = new Float64Array(CN), cnv = new Float64Array(CN);

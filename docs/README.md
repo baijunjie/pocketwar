@@ -10,7 +10,7 @@
 - [product/factions.md](product/factions.md)：四阵营的特点与倍率，全部兵种数值表，开局编制，各类据点出的援军。
 - [product/units.md](product/units.md)：兵种通用规则——类别与克制、体型、等级与经验、高级形态、特殊动作、兵种特性。
 - [product/movement.md](product/movement.md)：行军——地形速度、行军与战斗状态、人与人的推挤（自己人穿过、不往自己人身上挤）、编队行军与纵队、默认队列、指定朝向。
-- [product/combat.md](product/combat.md)：战斗——伤害公式与倍率、高地与林地、寻敌（挤不进战线时往两侧绕）、自动打建筑、守军、待命与坚守。
+- [product/combat.md](product/combat.md)：战斗——伤害公式与倍率、高地与林地、寻敌（挤不进战线时往两侧绕、绕到敌群外缘的空位）、自动打建筑、守军、待命与坚守。
 - [product/morale.md](product/morale.md)：士气加减、溃逃阈值、溃兵恢复与逃散。
 - [product/environment.md](product/environment.md)：迷雾与视野、昼夜、火把、雨雪、风。
 - [product/economy.md](product/economy.md)：粮草产耗与断粮，木 / 石 / 金的产量与用处，电脑怎么花资源。

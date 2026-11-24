@@ -23,6 +23,7 @@ function reset(w: World, s: number): void {
   w.ignoreT[s] = 0;
   w.waitT[s] = 0;
   w.waits[s] = 0;
+  w.detourT[s] = 0;
   w.avoidT[s] = 0;
 }
 

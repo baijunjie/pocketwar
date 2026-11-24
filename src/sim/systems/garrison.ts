@@ -169,7 +169,7 @@ function sendToSlot(w: World, i: number, id: number): void {
   w.destY[i] = sl.ey;
   w.destCell[i] = cell;
   w.seekR[i] = 0;
-  w.stuck[i] = w.ignoreT[i] = w.waitT[i] = w.noGain[i] = 0;
+  w.stuck[i] = w.ignoreT[i] = w.waitT[i] = w.detourT[i] = w.noGain[i] = 0;
   w.bestD[i] = 1e9;
   w.field[i] = w.lineBlocked(w.x[i], w.y[i], sl.ex, sl.ey, tm) ? w.nav.getField(tm, cell, w.tickCount) : null;
 }

@@ -172,7 +172,7 @@ export function startRout(w: World, i: number): void {
   w.routing[w.team[i]]++;
   w.order[i] = O_MOVE;
   w.target[i] = w.otarget[i] = NONE;
-  w.chargeT[i] = w.braceT[i] = w.shieldT[i] = w.waitT[i] = 0;
+  w.chargeT[i] = w.braceT[i] = w.shieldT[i] = w.waitT[i] = w.detourT[i] = 0;
   w.grpSpeed[i] = 0;
   w.grp[i] = -1;
   w.stuck[i] = 0;
