@@ -92,6 +92,7 @@ export class Hud {
   private readonly feed: HTMLDivElement;
   private readonly modeTip: HTMLDivElement;
   private readonly help: HTMLDivElement;
+  private readonly helpContent: HTMLDivElement;
   private readonly over: HTMLDivElement;
   private readonly speedBtns: HTMLButtonElement[] = [];
   private soundBtn!: HTMLButtonElement;
@@ -241,44 +242,62 @@ export class Hud {
 
     // ---- 帮助 ----
     this.help = el('div', 'overlay help', `
-      <div class="panel card">
-        <h2>操作说明</h2>
-        <table>
-          <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
-          <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；在卡片上拖框：一次选几个兵种（框住全部即选中屏幕内所有部队）；Shift 加选 / 去掉；双击：选中全图的这个兵种。选中的兵种卡片会上前一步</td></tr>
-          <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
-          <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
-          <tr><td>右键敌军 / 敌方建筑</td><td>攻击（Ctrl+右键可强攻中立建筑；带着器械时，中立的城墙、门楼、角楼直接右键就砸）</td></tr>
-          <tr><td>F + 左键</td><td>攻击移动：沿途遇敌即战、见敌方建筑就打，遇墙自动破城；点在敌方建筑上则直接攻打它</td></tr>
-          <tr><td>X / H</td><td>停止 / 坚守</td></tr>
-          <tr><td>R + 左键</td><td>设置援军集结点（只对之后新出的援军有效）</td></tr>
-          <tr><td>Shift + R</td><td>取消集结点：新出的援军留在各自的据点</td></tr>
-          <tr><td>T</td><td>点燃 / 熄灭所选部队的火把（夜间）</td></tr>
-          <tr><td>B + 左键</td><td>扎营：派所选部队去搭一座临时据点（耗木材）</td></tr>
-          <tr><td>左键点据点</td><td>选中据点：升级，或给资源点、村庄建箭塔</td></tr>
-          <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
-          <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
-          <tr><td>鼠标移到屏幕边缘、W A S D / 方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
-          <tr><td>C</td><td>镜头跟随所选部队（平滑跟着部队走）；再按一次、或手动移动镜头即取消</td></tr>
-          <tr><td>中键拖动、Q / E</td><td>旋转镜头（上下拖动调俯角）；Shift+中键拖动平移；Home 复位</td></tr>
-          <tr><td>空格 / + −　M</td><td>暂停 / 调整速度　开关音效</td></tr>
-        </table>
-        <p><b>目标：</b>摧毁敌方大本营的主堡。<b>占领据点：</b>敌占的城邦、营寨要先拆毁主建筑；再肃清圈内守军，派人站到中央旗帜下读秒；敌人回到圈内读秒暂停，旗下没人则清零。占领后据点定时出援军（设了集结点就开赴集结点，没设就留在据点里），被毁的建筑也会修好。</p>
-        <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙只有器械与战象能破（门楼、角楼可以慢慢烧毁，它们和营寨的望楼都会放箭）。在自家城邦里待命的远程步兵会自动登城驻守（每格墙顶三人），看到射程外的敌人会沿墙顶挪过去；在墙上射得更远、挨箭更轻（下别的命令即下墙）；别的兵种上不了墙，据点里的近战守军不出城，挨了敌方远程的打才出击。</p>
-        <p>高地上的远程部队射程与伤害更高；森林减免远程伤害并拖慢骑兵；浅滩可涉水但行动迟缓。</p>
-        <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会溃逃（头顶一面小白旗，防御大减），逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
-        <p><b>粮草：</b>据点产粮、部队吃粮，只靠大本营养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。偶尔下雪：走得更慢、看得更近，据点外的部队防御下降。</p>
-        <p><b>资源点：</b>农庄、伐木场、采石场、金矿，站到旗下几秒就占领，之后自动采集。<b>黄金</b>把部队升为重甲的高级形态（指令面板的「升级」一栏，老兵优先）；<b>石料</b>升级城邦、<b>木材</b>升级营寨（选中据点后点升级），手里有料时建筑也修得更快；木材还能给资源点和村庄建箭塔（最多 4 座，敌人得先拆光才能占领）、让部队扎营。</p>
+      <div class="panel card" role="dialog" aria-labelledby="help-title">
+        <div class="help-content" tabindex="0">
+          <h2 id="help-title">快速上手</h2>
+          <p class="help-goal">摧毁敌方大本营的主堡即可获胜。</p>
+          <table aria-label="基本操作">
+            <tr><th scope="row">左键点击 / 拖框</th><td>选择部队</td></tr>
+            <tr><th scope="row">右键点地面</th><td>命令部队移动</td></tr>
+            <tr><th scope="row">右键点敌军或敌方建筑</th><td>命令部队攻击</td></tr>
+            <tr><th scope="row">WASD / 滚轮</th><td>移动镜头 / 缩放</td></tr>
+          </table>
+          <details>
+            <summary>详细操作与规则</summary>
+            <table>
+              <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
+              <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；在卡片上拖框：一次选几个兵种（框住全部即选中屏幕内所有部队）；Shift 加选 / 去掉；双击：选中全图的这个兵种。选中的兵种卡片会上前一步</td></tr>
+              <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
+              <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
+              <tr><td>右键敌军 / 敌方建筑</td><td>攻击（Ctrl+右键可强攻中立建筑；带着器械时，中立的城墙、门楼、角楼直接右键就砸）</td></tr>
+              <tr><td>F + 左键</td><td>攻击移动：沿途遇敌即战、见敌方建筑就打，遇墙自动破城；点在敌方建筑上则直接攻打它</td></tr>
+              <tr><td>X / H</td><td>停止 / 坚守</td></tr>
+              <tr><td>R + 左键</td><td>设置援军集结点（只对之后新出的援军有效）</td></tr>
+              <tr><td>Shift + R</td><td>取消集结点：新出的援军留在各自的据点</td></tr>
+              <tr><td>T</td><td>点燃 / 熄灭所选部队的火把（夜间）</td></tr>
+              <tr><td>B + 左键</td><td>扎营：派所选部队去搭一座临时据点（耗木材）</td></tr>
+              <tr><td>左键点据点</td><td>选中据点：升级，或给资源点、村庄建箭塔</td></tr>
+              <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
+              <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
+              <tr><td>鼠标移到屏幕边缘、W A S D / 方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
+              <tr><td>C</td><td>镜头跟随所选部队（平滑跟着部队走）；再按一次、或手动移动镜头即取消</td></tr>
+              <tr><td>中键拖动、Q / E</td><td>旋转镜头（上下拖动调俯角）；Shift+中键拖动平移；Home 复位</td></tr>
+              <tr><td>空格 / + −　M</td><td>暂停 / 调整速度　开关音效</td></tr>
+            </table>
+            <p><b>占领据点：</b>敌占的城邦、营寨要先拆毁主建筑；再肃清圈内守军，派人站到中央旗帜下读秒；敌人回到圈内读秒暂停，旗下没人则清零。占领后据点定时出援军（设了集结点就开赴集结点，没设就留在据点里），被毁的建筑也会修好。</p>
+            <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙只有器械与战象能破（门楼、角楼可以慢慢烧毁，它们和营寨的望楼都会放箭）。在自家城邦里待命的远程步兵会自动登城驻守（每格墙顶三人），看到射程外的敌人会沿墙顶挪过去；在墙上射得更远、挨箭更轻（下别的命令即下墙）；别的兵种上不了墙，据点里的近战守军不出城，挨了敌方远程的打才出击。</p>
+            <p>高地上的远程部队射程与伤害更高；森林减免远程伤害并拖慢骑兵；浅滩可涉水但行动迟缓。</p>
+            <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会溃逃（头顶一面小白旗，防御大减），逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
+            <p><b>粮草：</b>据点产粮、部队吃粮，只靠大本营养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。偶尔下雪：走得更慢、看得更近，据点外的部队防御下降。</p>
+            <p><b>资源点：</b>农庄、伐木场、采石场、金矿，站到旗下几秒就占领，之后自动采集。<b>黄金</b>把部队升为重甲的高级形态（指令面板的「升级」一栏，老兵优先）；<b>石料</b>升级城邦、<b>木材</b>升级营寨（选中据点后点升级），手里有料时建筑也修得更快；木材还能给资源点和村庄建箭塔（最多 4 座，敌人得先拆光才能占领）、让部队扎营。</p>
+          </details>
+        </div>
         <button class="primary">开始指挥</button>
       </div>`);
-    this.help.querySelector('button')!.onclick = () => this.toggleHelp();
+    this.helpContent = this.help.querySelector<HTMLDivElement>('.help-content')!;
+    const start = this.help.querySelector('button')!;
+    start.onclick = () => this.toggleHelp();
+    this.help.onkeydown = e => {
+      if (e.key.startsWith('Arrow') || e.key === ' ' || e.key === 'Home') e.stopPropagation();
+    };
     this.help.onclick = e => {
       if (e.target === this.help) this.toggleHelp();
     };
     this.over = el('div', 'overlay over');
     this.over.hidden = true;
     root.append(this.help, this.over);
-    if (!human) this.help.hidden = true;
+    this.help.hidden = true;
+    if (human) this.toggleHelp();
   }
 
   get helpOpen(): boolean {
@@ -287,6 +306,7 @@ export class Hud {
 
   toggleHelp(): void {
     this.help.hidden = !this.help.hidden;
+    if (this.helpOpen) this.helpContent.focus({ preventScroll: true });
   }
 
   setSound(on: boolean): void {
