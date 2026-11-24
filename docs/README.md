@@ -18,11 +18,14 @@
 - [product/siege.md](product/siege.md)：攻城与城防——防御建筑放箭、火把与器械打建筑、驻守城墙、全部建筑数值表。
 - [product/controls.md](product/controls.md)：操作与界面——选择、指令、编队、镜头与跟随、各面板、小地图、场景标记、音效、观战与结算。
 
+## 编码规范
+
+- [coding-standards.md](coding-standards.md)：写代码、审查改动时对照——模拟层与渲染界面的分层、content / systems 分工、几处要同改的规则、材质与插值、可点元素、测试断言。
+
 ## 开发记忆（开工前按主题读）
 
-- [memory/sim.md](memory/sim.md)：改 `src/sim/` 前读——循环引用、Float32 舍入、几处要同改的规则、派单位与读建筑数据的约定。
-- [memory/render-ui.md](memory/render-ui.md)：改渲染、材质、界面前读——迷雾与积雪的材质、three.js 版本锁定、插值位置、可点元素。
-- [memory/verification.md](memory/verification.md)：测性能、验画面或音效、写测试前读——怎么量帧率、背靠背比较、动态效果与音效怎么验。
+- [memory/render-ui.md](memory/render-ui.md)：改渲染前读——three.js 版本锁定与升级时要核对的着色器补丁、渲染提速先从哪下手。
+- [memory/verification.md](memory/verification.md)：测性能、验画面或音效前读——怎么量帧率、背靠背比较、动态效果与音效怎么验。
 
 ## 专题
 
