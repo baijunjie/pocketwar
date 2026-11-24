@@ -2,7 +2,10 @@ import { T_GRASS } from '../src/sim/defs';
 import { GameMap } from '../src/sim/map';
 import { World } from '../src/sim/world';
 
-/** 一块空旷平地，没有据点和建筑；默认关掉昼夜天气，需要时自己打开。paint 可以在建世界之前改地形 */
+/**
+ * 一块空旷平地，没有据点和建筑；默认关掉昼夜天气，需要时自己打开。paint 可以在建世界之前改地形。
+ * 测试自己摆城墙时，摆完要调 w.sealWalls() 才有城内格、围墙范围和垛口。
+ */
 export function flatWorld(n = 120, seed = 7, paint?: (terrain: Uint8Array, n: number) => void): World {
   const terrain = new Uint8Array(n * n).fill(T_GRASS);
   paint?.(terrain, n);
@@ -24,7 +27,10 @@ export function run(w: World, secs: number): void {
   }
 }
 
-/** 没在交手的单位：平均每秒转过多少弧度、白跑了多少路（路程减去净位移） */
+/**
+ * 没在交手的单位：平均每秒转过多少弧度、白跑了多少路（路程减去净位移）。
+ * 用血量无限的靶子时，靶子会被人群推着走，围着它的人跟着漂，这部分也算进白跑。
+ */
 export function spinStats(w: World, slots: number[], secs: number): { turn: number; wander: number; idle: number } {
   const n = slots.length;
   const turn = new Float64Array(n), path = new Float64Array(n), x0 = new Float64Array(n), y0 = new Float64Array(n);

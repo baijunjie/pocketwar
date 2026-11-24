@@ -55,6 +55,7 @@ export class Puppet {
       if (o !== this.scene) this.rest.push({ o, p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() });
     });
     for (const clip of src.animations) {
+      // 名字带「|」的是带 AnimalArmature| 前缀的重复动画
       if (clip.name.includes('|') || this.tracks.has(clip.name)) continue;
       const list = [];
       for (const tr of clip.tracks) {
@@ -231,7 +232,7 @@ export class RigBuilder {
   }
 }
 
-/** 骨骼模型在当前姿势下的世界包围盒（按每个顶点的主骨骼估算） */
+/** 骨骼模型在当前姿势下的世界包围盒（按每个顶点的主骨骼估算）。马的 glTF 骨架与网格节点各带 100 倍缩放，直接取包围盒不可信 */
 export function skinnedBox(scene: THREE.Object3D): THREE.Box3 {
   scene.updateMatrixWorld(true);
   const bx = new THREE.Box3();

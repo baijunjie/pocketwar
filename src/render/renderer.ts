@@ -490,7 +490,6 @@ export class Renderer {
     return d === d ? d : this.groundY(x, z);
   }
 
-  /** 贴地标记：在桥面、墙顶上改用做深度测试的那一层，免得被模型盖住 */
   /** 边跑边打的动作：骑射手按目标在马头的哪一侧挑骑手扭身的角度（模型绕 +Y 转 a = 模拟里的方位角减 a） */
   private moveShot(i: number, cl: Record<string, Clip>): Clip {
     const w = this.world, t = w.target[i];
@@ -512,6 +511,7 @@ export class Renderer {
     return best;
   }
 
+  /** 贴地标记：在桥面、墙顶上改用做深度测试的那一层，免得被模型盖住 */
   private flat(s: Sprite, x: number, y: number, z: number, w: number, h: number, r: number, g: number, b: number, a: number): void {
     const map = this.world.map;
     const tx = (x / TILE) | 0, tz = (z / TILE) | 0;

@@ -9,7 +9,7 @@ import { fightState } from '../sim/systems/sites';
 import { S_BRACE, S_CHARGE, S_COMBAT, S_SHIELD, S_TORCH, S_WALL, Site, World } from '../sim/world';
 import { unitPortrait } from '../render/portrait';
 
-/** 此刻可以点的升级：所选部队、屏幕内全部部队、屏幕内全部城邦 / 营寨（null = 不显示这个按钮） */
+/** 此刻可以点的升级：所选部队、全图全部部队、全图全部城邦 / 营寨（null = 不显示这个按钮） */
 export interface UpgradeOffers {
   /** 所选部队：黄金够升其中几人、要花多少 */
   sel: { count: number; cost: number; total: number } | null;
@@ -268,7 +268,7 @@ export class Hud {
         <p>高地上的远程部队射程与伤害更高；森林减免远程伤害并拖慢骑兵；浅滩可涉水但行动迟缓。</p>
         <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会溃逃（头顶一面小白旗，防御大减），逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
         <p><b>粮草：</b>据点产粮、部队吃粮，只靠大本营养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。偶尔下雪：走得更慢、看得更近，据点外的部队防御下降。</p>
-        <p><b>资源点：</b>农庄、伐木场、采石场、金矿，站到旗下几秒就占领，之后自动采集。<b>黄金</b>把部队升为重甲的高级形态（选中面板旁的升级按钮，老兵优先）；<b>石料</b>升级城邦、<b>木材</b>升级营寨（选中据点后点升级），手里有料时建筑也修得更快；木材还能给资源点和村庄建箭塔（最多 4 座，敌人得先拆光才能占领）、让部队扎营。</p>
+        <p><b>资源点：</b>农庄、伐木场、采石场、金矿，站到旗下几秒就占领，之后自动采集。<b>黄金</b>把部队升为重甲的高级形态（指令面板的「升级」一栏，老兵优先）；<b>石料</b>升级城邦、<b>木材</b>升级营寨（选中据点后点升级），手里有料时建筑也修得更快；木材还能给资源点和村庄建箭塔（最多 4 座，敌人得先拆光才能占领）、让部队扎营。</p>
         <button class="primary">开始指挥</button>
       </div>`);
     this.help.querySelector('button')!.onclick = () => this.toggleHelp();
@@ -319,7 +319,6 @@ export class Hud {
     setTimeout(() => m.remove(), 7200);
   }
 
-  /** 低频刷新（约 4 次/秒） */
   /** 每帧：把风向换算到屏幕上（镜头转了 yaw，世界方位角 a 在屏幕上是 a + yaw） */
   setWindView(yaw: number): void {
     const deg = Math.round(((this.world.env.windDir + yaw) * 180) / Math.PI);
@@ -328,6 +327,7 @@ export class Hud {
     this.windArrow.style.transform = `rotate(${deg}deg)`;
   }
 
+  /** 低频刷新（约 4 次/秒） */
   update(): void {
     const w = this.world;
     const f = w.factions as FactionDef[];

@@ -28,11 +28,15 @@ npm test         # 无头模拟测试
 需要支持 WebGL2 的桌面浏览器。
 
 开发用预览页：`/?view=units` 查看全部兵种模型与动作（`&k=legion` 只看某个兵种及其高级形态，
-`&cmp=1` 把每个兵种的初级、高级形态并排站着对比）；
+`&cmp=1` 把每个兵种的初级、高级形态并排站着对比，`&clip=<动作名>` 固定播放某个动作）；
 `/?view=gltf&gltf=quaternius/horse.glb` 预览任意 glTF 模型经通用流程烘焙后的样子。
 
 调试用直达参数：`/?f=china&e=japan&size=600&seed=42&fog=0&spectate=1`
 （`f`/`e` 取 `china`、`japan`、`rome`、`persia`；`d` 为难度 0–2）。
+
+开发模式下控制台里 `window.game` 是当前对局（`game.world`、`game.renderer` 可直接读写），预览页里是 `window.viewer`。
+看夜晚：`R = (await import('/src/sim/content/rules.ts')).RULES` 后改 `R.env.startClock`
+（时刻 = startClock + 已过秒数 ÷ `dayLength` 取小数，0.9 是深夜）；立刻换天气：`game.world.env.nextWeather = game.world.time`。
 
 ## 操作
 
@@ -50,7 +54,7 @@ npm test         # 无头模拟测试
 | T | 点燃 / 熄灭所选部队的火把（夜间） |
 | B + 左键 | 扎营：派所选部队到指定位置搭一座临时据点（耗木材） |
 | 左键点据点（建筑或旗帜圈） | 选中据点：底部面板里升级，或给资源点、村庄建箭塔；右侧据点列表也能点 |
-| 选中面板右侧的升级按钮 | 「升级所选部队」；黄金 / 石料 / 木材足够时出现「部队 / 城邦 / 营寨全部升级」（范围是屏幕内） |
+| 指令面板的「升级」一栏 | 「升级所选部队」；黄金 / 石料 / 木材足够时出现「部队 / 城邦 / 营寨全部升级」（范围是全图） |
 | Ctrl 或 Alt+数字 / 数字 | 编队 / 选中编队（连按两次跳转镜头） |
 | Shift+数字 | 追加编队：把当前选中的部队并入该队 |
 | Ctrl+A | 选中全军 |
@@ -62,7 +66,7 @@ npm test         # 无头模拟测试
 
 ## 规则摘要
 
-完整规则与全部数值见 [docs/gameplay.md](docs/gameplay.md)。
+完整规则与全部数值见 [docs/product/](docs/product/) 下按功能分篇的文档，清单在 [docs/README.md](docs/README.md)。
 
 - **胜负**：摧毁敌方大本营的主堡。
 - **据点**：敌占的城邦、营寨要先拆毁主建筑；再肃清占领圈内的守军，派人站到中央旗帜下读秒；敌人回来读秒暂停，旗下没人则清零。
@@ -126,7 +130,7 @@ tests/            无头测试；VITE_BALANCE=1 npx vitest run -t 平衡 可跑�
 - **换模型**：改 `catalog.ts` 里那一项。用现成的 glTF 模型时写成
   `{ kind: 'gltf', src: '路径.glb', height: 1.8, clips: { idle: 'Idle', walk: 'Walk', run: 'Run', attack: 'Attack', die: 'Death' } }`，
   文件放进 `public/assets/`。缺的动作会自动退到相近的；先用 `/?view=gltf&gltf=路径.glb` 看效果。
-- **调规则**：数值都在 `src/sim/content/rules.ts`，改完同步改 `docs/gameplay.md`。
+- **调规则**：数值都在 `src/sim/content/rules.ts`，改完同步改 `docs/product/` 下对应的文档。
 
 ## 素材
 

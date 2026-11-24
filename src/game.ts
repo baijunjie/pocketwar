@@ -9,9 +9,9 @@ import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
-/** 界面上能交互的元素：鼠标停在这些上面时不边缘卷屏 */
 /** 镜头跟随的平滑程度：每秒把剩下的距离收拢多少（越大跟得越紧） */
 const FOLLOW_RATE = 4;
+/** 界面上能交互的元素：鼠标停在这些上面时不边缘卷屏 */
 const INTERACTIVE = 'button, canvas, input, select, a, .site, .chip, .ucard, .card, .unitbar, .detail';
 
 /** 离屏幕边缘多少像素以内开始卷屏 */

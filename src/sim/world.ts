@@ -272,7 +272,7 @@ export class World {
   readonly armed: Building[] = [];
   readonly sites: Site[] = [];
 
-  // ---- 投射物 ----
+  // ---- 投射物 ----（删除时由末尾元素补位、逐字段拷贝，新增字段要在补位处一并拷）
   pn = 0;
   readonly pType = new Uint8Array(MAX_PROJ);
   readonly pSx = new Float32Array(MAX_PROJ);

@@ -4,6 +4,7 @@
  * 渲染器只认 UnitModel 上的「标准动作名」，不关心模型是代码拼的还是 glTF 读的：
  *   idle 待命　walk 行军　run 奔跑　attack 攻击　die 阵亡（这五个建议都有）
  *   attackMove 边跑边打　charge 冲锋　brace 立枪　guard 举盾站立　guardWalk 举盾行进（可选）
+ * attack 在命中之后才播放、只有 0.3 秒，动作要一开头就快速出手、后面慢慢收势（glTF 素材同样）。
  * 缺少的动作按 CLIP_FALLBACK 退到相近的动作，所以新素材只要有待命、移动、攻击、阵亡就能用。
  */
 import * as THREE from 'three';

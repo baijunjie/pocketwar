@@ -1,6 +1,6 @@
 /**
  * 规则数值：各系统的可调参数集中在这里，系统代码里不写死数字。
- * 每一项的玩法含义见 docs/gameplay.md；改了这里要同步改那份文档。
+ * 每一项的玩法含义见 docs/product/ 下按功能分篇的产品文档；改了这里要同步改对应的那份。
  */
 import { EliteRules, LevelRules, TowerDef, defineSize } from './types';
 
