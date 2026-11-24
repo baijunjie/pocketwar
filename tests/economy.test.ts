@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BUILDINGS, ELITE, RULES, SITE_CAMP, SITE_FARM, SITE_HQ, SITE_INFO, SITE_LUMBER, SITE_MINE, SITE_OUTPOST, SITE_QUARRY, SITE_TOWN, SITE_VILLAGE,
-  TILE, UNITS, UNIT_BY_KEY,
+  ARCHETYPES, BR_MILITARY, BUILDINGS, ELITE, FACTIONS, RULES, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_INFO, SITE_LUMBER, SITE_MINE, SITE_OUTPOST, SITE_QUARRY, SITE_TOWN,
+  TILE, UNITS, UNIT_BY_KEY, P_ARROW, P_BALL, A_SIEGE, forceList, reinforceMult,
 } from '../src/sim/defs';
 import { generateMap } from '../src/sim/map';
 import { createGame } from '../src/sim/setup';
 import { damageUnit, spawnProj, updateTowers, windRangeMul } from '../src/sim/systems/combat';
-import { outpostCount, towerCount, unitUpgradeCost, upgradeAllCost, upgradeQueue } from '../src/sim/systems/economy';
-import { O_AMOVE, O_IDLE, S_TORCH, Site, World } from '../src/sim/world';
+import { outpostCount, setSiteLevel, siteUpgradeCost, towerCount, unitUpgradeCost, upgradeAllCost, upgradeQueue } from '../src/sim/systems/economy';
+import { Building, O_AMOVE, O_IDLE, S_TORCH, Site, World } from '../src/sim/world';
 import { flatWorld, run } from './helpers';
 
 const C = (120 * TILE) / 2;
@@ -110,19 +110,19 @@ describe('高级形态', () => {
 });
 
 describe('资源点', () => {
-  it('地图上每方后方各有粮、木、石、金，另有金矿靠近中线；每处四个箭塔位', () => {
+  it('地图上每方后方各有粮、木、石、金，另有金矿靠近中线；每处四个哨塔位', () => {
     for (const seed of [5, 42, 1234]) {
       const m = generateMap(seed);
       const n = (t: number): number => m.sites.filter(s => s.type === t).length;
       expect([n(SITE_FARM), n(SITE_LUMBER), n(SITE_QUARRY), n(SITE_MINE)]).toEqual([2, 2, 2, 4]);
       // 城池仍然排在最后（道路生成按这个找它）
-      expect(m.sites[m.sites.length - 1].type).toBe(1);
+      expect(m.sites[m.sites.length - 1].type).toBe(SITE_CITY);
       for (const s of m.sites) {
         if (SITE_INFO[s.type].category !== 'resource') continue;
         expect(s.owner).toBe(0);
         expect(s.slots!.length).toBe(4);
         for (const [tx, ty] of s.slots!) {
-          // 箭塔位上没有别的建筑
+          // 哨塔位上没有别的建筑
           expect(m.buildings.some(b => tx >= b.tx && ty >= b.ty && tx < b.tx + BUILDINGS[b.def].w && ty < b.ty + BUILDINGS[b.def].h),
             `seed ${seed} ${s.name}`).toBe(false);
         }
@@ -164,7 +164,7 @@ describe('资源点', () => {
     expect(w.events.some(e => e.kind === 'reinforce' && w.sites[e.site].type >= SITE_FARM)).toBe(false);
   }, 30000);
 
-  it('木材建箭塔：位置固定、最多四座；敌人要先摧毁全部箭塔才能占领，被毁的箭塔不会随易主复原', () => {
+  it('木材建哨塔：位置固定、最多四座；敌人要先摧毁全部哨塔才能占领，被毁的哨塔不会随易主复原', () => {
     const w = game();
     clear(w);
     const s = w.sites.find(x => x.type === SITE_LUMBER)!;
@@ -182,7 +182,7 @@ describe('资源点', () => {
       expect(b.owner).toBe(1);
       expect(b.tower).toBeTruthy();
     });
-    // 敌军站到旗下：箭塔还在就不读秒，还会挨箭
+    // 敌军站到旗下：哨塔还在就不读秒，还会挨箭
     const foes = garrison(w, s, 2, 4, 'yari');
     for (const f of foes) w.hp[f] = w.maxHp[f] = 1e6;
     run(w, 10);
@@ -205,7 +205,7 @@ describe('资源点', () => {
     expect(w.buildings.filter(b => b.def.key === RULES.economy.towerKey).length).toBe(4);
   }, 30000);
 
-  it('待命的部队被箭塔射中会上去拆塔', () => {
+  it('待命的部队被哨塔射中会上去拆塔', () => {
     const w = game();
     clear(w);
     const s = w.sites.find(x => x.type === SITE_QUARRY)!;
@@ -220,7 +220,7 @@ describe('资源点', () => {
     expect(t.hp).toBeLessThan(t.maxHp);
   }, 30000);
 
-  it('箭塔、塔楼的视野比普通建筑远得多', () => {
+  it('哨塔、塔楼的视野比普通建筑远得多', () => {
     const w = game();
     clear(w);
     w.fog = true;
@@ -242,69 +242,231 @@ describe('资源点', () => {
 });
 
 describe('据点升级', () => {
-  it('城邦花石料、营寨花木材；升级后建筑更结实、箭塔更狠，主建筑也会放箭；易主后降回', () => {
+  const blds = (w: World, s: Site, key: string): Building[] => s.buildings.map(id => w.buildings[id]).filter(b => b.def.key === key);
+
+  it('升级花费：升到 2 级沿用各据点的升级花费，升到 3 级是它的 1.5 倍；资源点不能升级', () => {
+    const w = game();
+    clear(w);
+    const want: [number, number, number][] = [
+      [SITE_CITY, 320, 480], [SITE_TOWN, 220, 330], [SITE_CAMP, 127, 191],
+    ];
+    for (const [type, c2, c3] of want) {
+      const s = w.sites.find(x => x.type === type)!;
+      give(w, s, 1);
+      setSiteLevel(w, s, 1);
+      expect(siteUpgradeCost(s), SITE_INFO[type].label).toBe(c2);
+      setSiteLevel(w, s, 2);
+      expect(siteUpgradeCost(s), SITE_INFO[type].label).toBe(c3);
+      setSiteLevel(w, s, 3);
+      expect(siteUpgradeCost(s), SITE_INFO[type].label).toBe(0);
+    }
+    for (const type of [SITE_FARM, SITE_LUMBER, SITE_QUARRY, SITE_MINE]) {
+      const s = w.sites.find(x => x.type === type)!;
+      give(w, s, 1);
+      expect(siteUpgradeCost(s)).toBe(0);
+      expect(w.upgradeSite(s)).toBe(false);
+    }
+  });
+
+  it('城池逐级升：花石料，每级按表加生命、护甲、箭矢伤害与射程，3 级角楼加炮弹、主堡加两发；易主后降回 1 级', () => {
     const w = game();
     clear(w);
     const town = w.sites.find(s => s.type === SITE_TOWN)!;
-    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 1)!;
     give(w, town, 1);
+    expect(town.level).toBe(1);
     expect(SITE_INFO[SITE_TOWN].material).toBe('stone');
     expect(SITE_INFO[SITE_CAMP].material).toBe('wood');
-    // 木材升不了城邦
+    // 木材升不了城池
     w.stock.wood[1] = 9999;
     expect(w.upgradeSite(town)).toBe(false);
-    w.stock.stone[1] = SITE_INFO[SITE_TOWN].upgradeCost + 5;
+    const L = RULES.economy.siteLevels;
     const hall = w.buildings[town.main];
-    const tower = town.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
+    const tower = blds(w, town, 'tower')[0], gate = blds(w, town, 'gate_h')[0] ?? blds(w, town, 'gate_v')[0];
+    expect(hall.def.key).toBe('keep_town');
     hall.hp = hall.def.hp * 0.5;
     hall.hitTick = w.tickCount;
-    expect(hall.tower).toBeNull();
+    expect([hall.lv, hall.armor, hall.tower]).toEqual([1, 0, hall.def.tower]);
+    // 2 级
+    w.stock.stone[1] = 220 + 5;
     expect(w.upgradeSite(town)).toBe(true);
     expect(w.stock.stone[1]).toBeCloseTo(5, 5);
-    expect(town.level).toBe(1);
-    expect(w.upgradeSite(town)).toBe(false);
-    expect(hall.maxHp).toBe(Math.round(hall.def.hp * RULES.economy.siteHp));
+    expect(town.level).toBe(2);
+    expect(hall.maxHp).toBe(Math.round(hall.def.hp * L[1].hp));
     // 新增的那部分生命补上，旧伤还在
     expect(hall.hp).toBeCloseTo(hall.maxHp - hall.def.hp * 0.5, 3);
-    expect(hall.lv).toBe(1);
-    expect(tower.tower!.dmg).toBeCloseTo(tower.def.tower!.dmg * RULES.economy.towerDmg, 5);
-    expect(tower.tower!.range).toBeGreaterThan(tower.def.tower!.range);
-    expect(hall.tower).toEqual({ ...RULES.economy.mainTower, arrows: RULES.economy.mainTower.arrows * RULES.economy.towerArrows });
-    // 护甲加成：同样一击，升级后的建筑掉血更少
-    const wallA = town.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'wall')!;
-    const wallB = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'wall')!;
+    expect([hall.lv, tower.lv, hall.armor]).toEqual([2, 2, L[1].armor]);
+    expect(tower.tower!.dmg).toBeCloseTo(tower.def.tower!.dmg * L[1].dmg, 5);
+    expect(tower.tower!.range).toBeCloseTo(tower.def.tower!.range * L[1].range, 5);
+    // 箭数不翻倍，2 级也没有炮弹
+    expect(tower.tower!.arrows).toBe(tower.def.tower!.arrows);
+    expect(hall.tower!.arrows).toBe(hall.def.tower!.arrows);
+    expect(tower.tower!.shells ?? 0).toBe(0);
+    expect(gate.tower).toBeNull();
+    // 钱不够升 3 级
+    expect(w.upgradeSite(town)).toBe(false);
+    expect(town.level).toBe(2);
+    // 3 级
+    w.stock.stone[1] = 330 + 5;
+    expect(w.upgradeSite(town)).toBe(true);
+    expect(w.stock.stone[1]).toBeCloseTo(5, 5);
+    expect(town.level).toBe(3);
+    expect(hall.maxHp).toBe(Math.round(hall.def.hp * L[2].hp));
+    expect([hall.lv, hall.armor]).toEqual([3, L[2].armor]);
+    expect(tower.tower).toEqual({ range: tower.def.tower!.range * L[2].range, dmg: tower.def.tower!.dmg * L[2].dmg, cd: tower.def.tower!.cd, arrows: 2, shells: 1 });
+    expect(hall.tower).toEqual({ range: hall.def.tower!.range * L[2].range, dmg: hall.def.tower!.dmg * L[2].dmg, cd: hall.def.tower!.cd, arrows: 4, shells: 2 });
+    expect(gate.tower).toBeNull();
+    // 满级不能再升
+    w.stock.stone[1] = 1e5;
+    expect(w.upgradeSite(town)).toBe(false);
+    // 护甲加成：同样一击，3 级的城墙比 1 级的掉血少
+    const wallA = blds(w, town, 'wall')[0];
+    const wallB = blds(w, w.sites.find(s => s.type === SITE_CITY && s.owner === 2)!, 'wall')[0];
     w.damageBuilding(wallA, 30, 0, 1, 2);
     w.damageBuilding(wallB, 30, 0, 1, 1);
     expect(wallA.maxHp - wallA.hp).toBeLessThan(wallB.maxHp - wallB.hp);
-    // 升级后的镇公所会放箭
-    const foe = w.spawnUnit(idx('yari'), 2, hall.cx, hall.y1 + 60);
-    w.order[foe] = 4;
-    w.hp[foe] = w.maxHp[foe] = 1e6;
-    run(w, 6);
-    expect(w.hp[foe]).toBeLessThan(1e6);
-    w.removeUnit(foe);
-    // 营寨用木材
-    w.stock.wood[1] = SITE_INFO[SITE_CAMP].upgradeCost;
-    expect(w.upgradeSite(camp)).toBe(true);
-    expect(w.stock.wood[1]).toBeCloseTo(0, 5);
-    // 敌人拆了镇公所再夺走城镇：等级降回，要重新升级
-    w.damageBuilding(hall, 1e9, 0, 1, 2);
+    // 敌人拆光军事建筑再夺走城镇：等级降回 1 级，要重新升级
+    for (const id of town.buildings) if (w.buildings[id].def.role === BR_MILITARY) w.damageBuilding(w.buildings[id], 1e9, 0, 1, 2);
     for (const u of garrison(w, town, 2, 3, 'yumi')) w.hp[u] = w.maxHp[u] = 1e6;
     run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
     expect(town.owner).toBe(2);
-    expect(town.level).toBe(0);
+    expect(town.level).toBe(1);
     expect(hall.maxHp).toBe(hall.def.hp);
     expect(hall.hp).toBeLessThanOrEqual(hall.maxHp);
-    expect(hall.tower).toBeNull();
+    expect(hall.tower).toBe(hall.def.tower);
     expect(tower.tower).toBe(tower.def.tower);
-    expect(hall.lv).toBe(0);
+    expect([hall.lv, tower.lv, hall.armor]).toEqual([1, 1, 0]);
   }, 30000);
+
+  it('营寨逐级升：花木材，3 级哨塔变连弩哨塔、中军帐箭矢 ×3，没有炮弹；资源点自建的哨塔不随升级变化', () => {
+    const w = game();
+    clear(w);
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 1)!;
+    const post = blds(w, camp, 'watchtower')[0], tent = w.buildings[camp.main];
+    expect(tent.def.key).toBe('cmdtent');
+    expect([post.def.tower!.arrows, tent.def.tower!.arrows]).toEqual([1, 2]);
+    w.stock.wood[1] = SITE_INFO[SITE_CAMP].upgradeCost;
+    expect(w.upgradeSite(camp)).toBe(true);
+    expect(w.stock.wood[1]).toBeCloseTo(0, 5);
+    expect([camp.level, post.tower!.arrows, tent.tower!.arrows]).toEqual([2, 1, 2]);
+    expect(w.upgradeSite(camp)).toBe(false);
+    w.stock.wood[1] = siteUpgradeCost(camp);
+    expect(w.upgradeSite(camp)).toBe(true);
+    expect(w.stock.wood[1]).toBeCloseTo(0, 5);
+    expect(camp.level).toBe(3);
+    const L3 = RULES.economy.siteLevels[2];
+    expect(post.tower).toEqual({ range: post.def.tower!.range * L3.range, dmg: post.def.tower!.dmg * L3.dmg, cd: post.def.tower!.cd, arrows: 3, shells: 0 });
+    expect(tent.tower).toEqual({ range: tent.def.tower!.range * L3.range, dmg: tent.def.tower!.dmg * L3.dmg, cd: tent.def.tower!.cd, arrows: 6, shells: 0 });
+    // 资源点的哨塔是后来搭的，设成几级都不变
+    const farm = w.sites.find(s => s.type === SITE_FARM)!;
+    give(w, farm, 1);
+    w.stock.wood[1] = 1e4;
+    expect(w.buildTower(farm)).toBe(true);
+    const mine = farm.buildings.map(id => w.buildings[id]).find(b => b.extra)!;
+    setSiteLevel(w, farm, 3);
+    expect(mine.tower).toBe(mine.def.tower);
+    expect([mine.lv, mine.armor, mine.maxHp]).toEqual([1, 0, mine.def.hp]);
+  });
+
+  it('3 级的炮楼与主堡放炮弹：每轮的发数按建筑、单发伤害 36 与半径 20 不随等级变；2 级与营寨没有炮弹', () => {
+    const w = game();
+    clear(w);
+    w.env.wind = 0;
+    const city = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
+    const tower = blds(w, city, 'tower')[0], keep = w.buildings[city.main];
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 1)!;
+    const post = blds(w, camp, 'watchtower')[0];
+    const foe = (b: Building): number => {
+      const f = w.spawnUnit(idx('dao'), 2, b.cx + 60, b.cy + 60);
+      w.hp[f] = w.maxHp[f] = 1e6;
+      return f;
+    };
+    // 一轮炮弹：{发数，每发伤害，半径，种类}
+    const salvo = (b: Building): { n: number; dmg: number[]; splash: number[]; atk: number[] } => {
+      w.tick();
+      w.pn = 0;
+      b.cd = 0;
+      updateTowers(w);
+      const o = { n: 0, dmg: [] as number[], splash: [] as number[], atk: [] as number[] };
+      for (let p = 0; p < w.pn; p++) if (w.pSrc[p] === -b.id - 2 && w.pType[p] === P_BALL) {
+        o.n++;
+        o.dmg.push(w.pDmg[p]);
+        o.splash.push(w.pSplash[p]);
+        o.atk.push(w.pAtk[p]);
+      }
+      return o;
+    };
+    for (const b of [tower, keep, post]) foe(b);
+    w.refreshVision();
+    w.stock.stone[1] = w.stock.wood[1] = 1e5;
+    for (const lv of [1, 2]) {
+      for (const b of [tower, keep]) expect(salvo(b).n, `${b.def.key} ${lv}`).toBe(0);
+      w.upgradeSite(city);
+    }
+    expect(city.level).toBe(3);
+    const t = salvo(tower), k = salvo(keep);
+    expect([t.n, k.n]).toEqual([1, 2]);
+    for (const o of [t, k]) {
+      expect(o.dmg.every(d => d === RULES.economy.shell.dmg)).toBe(true);
+      expect(o.splash.every(d => d === RULES.economy.shell.splash)).toBe(true);
+      expect(o.atk.every(a => a === A_SIEGE)).toBe(true);
+    }
+    // 营寨升到 3 级也只加箭矢，不放炮弹
+    for (let i = 0; i < 2; i++) w.upgradeSite(camp);
+    expect(camp.level).toBe(3);
+    expect(salvo(post).n).toBe(0);
+  }, 30000);
+
+  it('炮弹是范围伤害：一发炮弹落下，挤在一起的几个敌人都挨炸', () => {
+    const w = game();
+    clear(w);
+    w.env.wind = 0;
+    const city = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
+    const tower = blds(w, city, 'tower')[0];
+    setSiteLevel(w, city, 3);
+    // 三个敌人挤在一起，一轮炮弹打最近的那个，旁边两个也挨到
+    const cx = tower.cx + 100, cy = tower.cy + 100;
+    const ids = [0, 7, 14].map(dx => w.spawnUnit(idx('dao'), 2, cx + dx, cy));
+    for (const f of ids) w.hp[f] = w.maxHp[f] = 1e6;
+    w.refreshVision();
+    w.tick();
+    w.pn = 0;
+    tower.cd = 0;
+    // 只留炮弹：先射出一轮，再把箭清掉
+    updateTowers(w);
+    let shells = 0;
+    for (let p = w.pn - 1; p >= 0; p--) {
+      if (w.pType[p] === P_BALL) { shells++; continue; }
+      w.pType[p] = P_ARROW;
+      w.pDmg[p] = 0;
+    }
+    expect(shells).toBe(1);
+    for (let t = 0; t < 60; t++) w.tick();
+    const lost = ids.map(f => 1e6 - w.hp[f]);
+    expect(lost.filter(l => l > 0).length).toBeGreaterThanOrEqual(2);
+  }, 30000);
+
+  it('电脑逐级升级据点：手里有料就先把各据点升到 2 级、再升 3 级', () => {
+    const g = createGame({ seed: 7, factions: ['china', 'japan'], armySize: 60, difficulty: 2, fog: false, spectate: false, environment: false, supply: false });
+    const w = g.world;
+    const seen = new Set<number>();
+    for (let t = 0; t < 30 * 240; t++) {
+      if (t % 30 === 0) {
+        w.stock.stone[2] = w.stock.wood[2] = 1e5;
+        for (const s of w.sites) if (s.owner === 2) seen.add(s.level);
+      }
+      w.tick();
+      for (const ai of g.ais) ai.update();
+      w.fxN = 0;
+    }
+    for (const s of w.sites) if (s.owner === 2) seen.add(s.level);
+    expect([...seen].sort()).toEqual([1, 2, 3]);
+  }, 120000);
 
   it('手里有石料 / 木材时建筑修得快得多，同时少量消耗', () => {
     const fix = (stone: number): { gain: number; used: number } => {
       const w = game();
       clear(w);
-      const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+      const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
       const main = w.buildings[hq.main];
       main.hp = main.maxHp * 0.5;
       main.hitTick = -99999;
@@ -439,7 +601,7 @@ describe('雪天', () => {
   it('雪天在据点之外防御下降，在自家据点里不受影响', () => {
     const w = game();
     clear(w);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const inside = w.spawnUnit(idx('dao'), 1, hq.x, hq.y + 60);
     const outside = w.spawnUnit(idx('dao'), 1, hq.x + 900, hq.y - 900);
     run(w, 1);
@@ -451,10 +613,13 @@ describe('雪天', () => {
       return before - w.hp[u];
     };
     const arm = UNIT_BY_KEY.dao.armM;
-    expect(hit(outside)).toBeCloseTo(10 - arm, 5);
+    // 伤害 = d² ÷ (d + 2 × 护甲)；雪天据点外护甲减半
+    const dmg = (a: number): number => 100 / (10 + RULES.combat.armorScale * a);
+    expect(hit(outside)).toBeCloseTo(dmg(arm), 5);
     snowy(w);
-    expect(hit(outside)).toBeCloseTo(10 - arm * RULES.env.snowArmor, 5);
-    expect(hit(inside)).toBeCloseTo(10 - arm, 5);
+    expect(hit(outside)).toBeCloseTo(dmg(arm * RULES.env.snowArmor), 5);
+    expect(hit(inside)).toBeCloseTo(dmg(arm), 5);
+    expect(hit(outside)).toBeGreaterThan(hit(inside));
   }, 30000);
 });
 
@@ -471,7 +636,7 @@ describe('电脑会花资源', () => {
     expect(res).toBeGreaterThan(2);
     let elite = 0;
     for (let i = 0; i < w.n; i++) if (w.alive[i] && w.defs[w.type[i]].tier === 1) elite++;
-    const upgraded = w.sites.filter(s => s.level === 1).length;
+    const upgraded = w.sites.filter(s => s.level > 1).length;
     const towers = w.buildings.filter(b => b.def.key === RULES.economy.towerKey).length;
     if (import.meta.env.VITE_DUMP) console.log({ res, elite, upgraded, towers, stock: w.stock });
     expect(elite + upgraded + towers).toBeGreaterThan(0);
@@ -479,59 +644,87 @@ describe('电脑会花资源', () => {
 });
 
 describe('第八轮：城防与占领', () => {
-  it('村庄有四个箭塔位；石城门四格宽', () => {
+  it('据点构成：城池 4 角楼 4 门楼加主堡，营寨 4 哨塔 4 营门加中军帐，资源点没有塔；石城门四格宽', () => {
     for (const seed of [5, 42, 1234]) {
       const m = generateMap(seed);
       const occupied = (tx: number, ty: number): boolean =>
         m.buildings.some(b => tx >= b.tx && ty >= b.ty && tx < b.tx + BUILDINGS[b.def].w && ty < b.ty + BUILDINGS[b.def].h);
       m.sites.forEach((s, si) => {
-        if (s.type === SITE_VILLAGE) {
+        const mine = m.buildings.filter(b => b.site === si);
+        const count = (...keys: string[]): number => mine.filter(b => keys.includes(b.def)).length;
+        const main = mine.filter(b => b.main).map(b => b.def);
+        const cat = SITE_INFO[s.type].category;
+        if (cat === 'city') {
+          expect([count('tower'), count('gate_h', 'gate_v'), count('watchtower', 'wgate_h', 'wgate_v')], `seed ${seed} ${s.name}`).toEqual([4, 4, 0]);
+          expect(main).toEqual([s.type === SITE_CITY ? 'keep' : 'keep_town']);
+        } else if (cat === 'camp') {
+          expect([count('watchtower'), count('wgate_h', 'wgate_v'), count('tower', 'gate_h', 'gate_v')], `seed ${seed} ${s.name}`).toEqual([4, 4, 0]);
+          expect(main).toEqual(['cmdtent']);
+          expect(s.slots).toBeUndefined();
+        } else if (cat === 'resource') {
+          expect(count('tower', 'watchtower', 'arrowtower'), `seed ${seed} ${s.name}`).toBe(0);
           expect(s.slots!.length).toBe(4);
           for (const [tx, ty] of s.slots!) expect(occupied(tx, ty), `seed ${seed} ${s.name}`).toBe(false);
         }
-        if (s.type === SITE_HQ) expect(m.buildings.filter(b => b.site === si && b.def === 'tower').length).toBe(4);
-        if (s.type === SITE_TOWN) expect(m.buildings.filter(b => b.site === si && b.def === 'tower').length).toBe(4);
       });
+      // 所有营寨的构成与寨墙尺寸都相同：寨内只有营帐，没有别的建筑
+      const camps = m.sites.map((s, si) => ({ s, si })).filter(x => x.s.type === SITE_CAMP);
+      expect(camps.length).toBe(12);
+      const span = (si: number): number[] => {
+        const ws = m.buildings.filter(b => b.site === si && b.def === 'palisade');
+        return [Math.max(...ws.map(b => b.tx)) - Math.min(...ws.map(b => b.tx)), Math.max(...ws.map(b => b.ty)) - Math.min(...ws.map(b => b.ty))];
+      };
+      for (const { si } of camps) {
+        expect(span(si)).toEqual(span(camps[0].si));
+        const kinds = new Set(m.buildings.filter(b => b.site === si).map(b => b.def));
+        expect([...kinds].sort(), `seed ${seed}`).toEqual(['cmdtent', 'palisade', 'tent', 'watchtower', 'wgate_h', 'wgate_v'].filter(k => kinds.has(k)));
+        expect(kinds.has('granary') || kinds.has('stable') || kinds.has('workshop') || kinds.has('farmhouse')).toBe(false);
+      }
     }
     expect(BUILDINGS.gate_h.w).toBe(4);
     expect(BUILDINGS.gate_v.h).toBe(4);
-    // 村庄能花木材建箭塔
+    // 资源点能花木材建哨塔；营寨已有固定的哨塔，没有自建的位置
     const w = game();
     clear(w);
-    const v = w.sites.find(s => s.type === SITE_VILLAGE)!;
+    const v = w.sites.find(s => s.type === SITE_FARM)!;
     give(w, v, 1);
-    w.stock.wood[1] = RULES.economy.towerCost * 4;
+    w.stock.wood[1] = RULES.economy.towerCost * 5;
     for (let k = 0; k < 4; k++) expect(w.buildTower(v)).toBe(true);
     expect(towerCount(w, v)).toBe(4);
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 0)!;
+    give(w, camp, 1);
+    expect(camp.slots.length).toBe(0);
+    expect(w.buildTower(camp)).toBe(false);
   }, 30000);
 
-  it('敌占的城邦、营寨要先拆毁主建筑才能读秒；中立的不用', () => {
+  it('敌占的城池、营寨要先拆光军事建筑才能读秒；只拆中央建筑不够，城防与普通建筑不用拆', () => {
     const w = game();
     clear(w);
     const town = w.sites.find(s => s.type === SITE_TOWN)!;
     give(w, town, 1);
-    for (const id of town.buildings) w.buildings[id].tower = null;
-    const hall = w.buildings[town.main];
     for (const u of garrison(w, town, 2, 3, 'yari')) w.hp[u] = w.maxHp[u] = 1e6;
+    const military = town.buildings.map(id => w.buildings[id]).filter(b => b.def.role === BR_MILITARY);
+    expect(military.length).toBeGreaterThan(1);
     run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
     expect(town.owner).toBe(1);
     expect(town.cap).toBe(0);
-    w.damageBuilding(hall, 1e9, 0, 1, 2);
-    expect(town.disabled).toBe(true);
+    // 拆掉中央建筑，角楼还立着：照样不能读秒，据点也没易主
+    w.damageBuilding(w.buildings[town.main], 1e9, 0, 1, 2);
+    run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
+    expect(town.owner).toBe(1);
+    expect(town.cap).toBe(0);
+    // 全部拆光（城墙、门楼、民居都立着）：读秒，走完易主
+    for (const b of military) w.damageBuilding(b, 1e9, 0, 1, 2);
+    expect(town.buildings.some(id => w.buildings[id].alive && w.buildings[id].def.role !== BR_MILITARY)).toBe(true);
     run(w, SITE_INFO[SITE_TOWN].captureTime + 3);
     expect(town.owner).toBe(2);
-    expect(hall.alive && hall.hp === hall.maxHp).toBe(true);
-    // 中立营地：主建筑立着也照常占领
-    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 0) ?? w.sites.find(s => s.type === SITE_VILLAGE && s.owner === 0)!;
-    for (const u of garrison(w, camp, 1, 3, 'yari')) w.hp[u] = w.maxHp[u] = 1e6;
-    run(w, SITE_INFO[camp.type].captureTime + 3);
-    expect(camp.owner).toBe(1);
+    expect(military.every(b => b.alive && b.hp === b.maxHp)).toBe(true);
   }, 30000);
 
   it('倒塌的角楼在据点脱离战斗后自行重建，修满之前不放箭；交战时停修', () => {
     const w = game();
     clear(w);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const tower = hq.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
     w.damageBuilding(tower, 1e9, 0, 1, 2);
     expect(tower.alive).toBe(false);
@@ -679,7 +872,7 @@ describe('倒塌重建与站在废墟上的人', () => {
   it('自家人站在城门废墟上不耽误重建；站在城墙废墟上的被挪到空地', () => {
     const w = game();
     clear(w);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const blds = hq.buildings.map(id => w.buildings[id]);
     const gate = blds.find(b => b.gate)!, wall = blds.find(b => b.def.key === 'wall')!;
     w.stock.stone[1] = 1e6;
@@ -706,15 +899,21 @@ describe('第十二轮：箭数、集结点', () => {
     b.cd = 0;
     updateTowers(w);
     const out: number[] = [];
-    for (let p = 0; p < w.pn; p++) if (w.pSrc[p] === -b.id - 2) out.push(w.pTgt[p]);
+    for (let p = 0; p < w.pn; p++) if (w.pSrc[p] === -b.id - 2 && w.pType[p] === P_ARROW) out.push(w.pTgt[p]);
     return out;
   };
+  /** 刚放完一轮后，在飞的炮弹数 */
+  const shellsOf = (w: World, id: number): number => {
+    let n = 0;
+    for (let p = 0; p < w.pn; p++) if (w.pSrc[p] === -id - 2 && w.pType[p] === P_BALL) n++;
+    return n;
+  };
 
-  it('角楼、门楼一轮两支箭，望楼一支；据点升级后翻倍；多支箭分射不同的敌人', () => {
+  it('角楼一轮两支箭、主堡四支，哨塔一支、中军帐两支，门楼不放箭；升级不改箭数；多支箭分射不同的敌人', () => {
     const w = game();
     clear(w);
     w.env.wind = 0;
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const tower = hq.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
     const foes = w.spawnGroup(2, Array(6).fill(idx('dao')), tower.cx + 120, tower.cy + 120, 0, -1);
     for (const f of foes) w.hp[f] = w.maxHp[f] = 1e5;
@@ -722,23 +921,30 @@ describe('第十二轮：箭数、集结点', () => {
     const t0 = volley(w, tower.id);
     expect(t0.length).toBe(2);
     expect(new Set(t0).size).toBe(2);
-    expect(BUILDINGS.gate_h.tower!.arrows).toBe(2);
-    expect(BUILDINGS.watchtower.tower!.arrows).toBe(1);
-    expect(BUILDINGS.arrowtower.tower!.arrows).toBe(1);
+    const B = BUILDINGS;
+    expect(B.tower.tower!.arrows).toBe(2);
+    // 主堡相当于 2 座角楼，中军帐相当于 2 座哨塔：射程、单支伤害、间隔相同
+    for (const k of ['keep', 'keep_town']) expect(B[k].tower, k).toEqual({ ...B.tower.tower!, arrows: 4 });
+    expect(B.watchtower.tower!.arrows).toBe(1);
+    expect(B.arrowtower.tower).toEqual(B.watchtower.tower);
+    expect(B.cmdtent.tower).toEqual({ ...B.watchtower.tower!, arrows: 2 });
+    for (const k of ['gate_h', 'gate_v', 'wgate_h', 'wgate_v']) expect(B[k].tower, k).toBeNull();
+    // 升级不再让箭数翻倍：2 级与 3 级的角楼仍是两支箭，3 级起另加一发炮弹
     w.stock.stone[1] = 1e4;
     expect(w.upgradeSite(hq)).toBe(true);
-    const t1 = volley(w, tower.id);
-    expect(t1.length).toBe(4);
-    expect(new Set(t1).size).toBe(4);
+    expect(volley(w, tower.id).length).toBe(2);
+    expect(w.upgradeSite(hq)).toBe(true);
+    expect(volley(w, tower.id).length).toBe(2);
+    expect(shellsOf(w, tower.id)).toBe(1);
     // 射程里只有一个敌人：几支箭都射它
     for (const f of foes.slice(1)) w.removeUnit(f);
-    expect(volley(w, tower.id)).toEqual([foes[0], foes[0], foes[0], foes[0]]);
+    expect(volley(w, tower.id)).toEqual([foes[0], foes[0]]);
   }, 30000);
 
   it('援军在出兵的据点里出现；没设集结点就留在据点，设了就开赴集结点；集结点只管之后新出的援军', () => {
     const w = game();
     clear(w);
-    expect(w.rally[1]).toBe(null);
+    expect(w.sites.every(s => s.owner !== 1 || s.rally === null)).toBe(true);
     const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 1)!;
     const fire = (): number[] => {
       for (const s of w.sites) s.timer = 999;
@@ -758,7 +964,7 @@ describe('第十二轮：箭数、集结点', () => {
       expect(w.order[u] === O_IDLE || w.pmode[u] !== 0).toBe(true);
     }
     const rx = camp.x + 900, ry = camp.y;
-    w.rally[1] = { x: rx, y: ry };
+    camp.rally = { x: rx, y: ry };
     const b = fire();
     expect(b.length).toBeGreaterThan(0);
     for (const u of b) {
@@ -769,8 +975,66 @@ describe('第十二轮：箭数、集结点', () => {
     // 先前出来的那批不受影响
     for (const u of a) expect(w.order[u] === O_AMOVE && Math.hypot(w.destX[u] - rx, w.destY[u] - ry) < 200).toBe(false);
     // 取消后新出的又留在据点
-    w.rally[1] = null;
+    camp.rally = null;
     for (const u of fire()) expect(w.order[u]).not.toBe(O_AMOVE);
+  }, 30000);
+
+  it('集结点按据点设：只有设了的据点新出的援军开赴那里，别的据点的留在原地', () => {
+    const w = game();
+    clear(w);
+    const mine = w.sites.filter(s => s.owner === 1 && SITE_INFO[s.type].reinf);
+    expect(mine.length).toBeGreaterThanOrEqual(2);
+    const [a, b] = mine;
+    const spot = { x: a.x + 900, y: a.y };
+    a.rally = spot;
+    const fire = (s: Site): number[] => {
+      for (const o of w.sites) o.timer = 999;
+      s.timer = 0.01;
+      const before = new Set<number>();
+      for (let i = 0; i < w.n; i++) if (w.alive[i]) before.add(i);
+      for (let t = 0; t < 30; t++) w.tick();
+      const out: number[] = [];
+      for (let i = 0; i < w.n; i++) if (w.alive[i] && !before.has(i) && w.team[i] === 1) out.push(i);
+      return out;
+    };
+    const toSpot = (u: number): boolean => w.order[u] === O_AMOVE && Math.hypot(w.destX[u] - spot.x, w.destY[u] - spot.y) < 200;
+    const ua = fire(a);
+    expect(ua.length).toBeGreaterThan(0);
+    expect(ua.every(toSpot)).toBe(true);
+    const ub = fire(b);
+    expect(ub.length).toBeGreaterThan(0);
+    expect(ub.some(toSpot)).toBe(false);
+    for (const u of ub) expect(w.order[u]).not.toBe(O_AMOVE);
+    // 取消 A 的：它新出的也留下；B 的集结点不受影响
+    b.rally = { x: spot.x, y: spot.y };
+    a.rally = null;
+    expect(fire(a).some(toSpot)).toBe(false);
+    expect(fire(b).every(toSpot)).toBe(true);
+  }, 30000);
+
+  it('据点易主时集结点清除：电脑新占的出援军据点设回出发阵地（资源点不设），玩家新占的据点援军留守', () => {
+    const w = game();
+    clear(w);
+    const dp = w.map.deploy[2];
+    // 开局：电脑所有据点的集结点都在出发阵地；玩家的都没设
+    const ai = w.sites.filter(s => s.owner === 2);
+    expect(ai.length).toBeGreaterThan(0);
+    for (const s of ai) expect(s.rally).toEqual({ x: dp.x, y: dp.y });
+    for (const s of w.sites) if (s.owner === 1) expect(s.rally).toBe(null);
+    const lumber = w.sites.find(s => s.type === SITE_LUMBER)!;
+    // 玩家的据点设了集结点，被电脑夺走：前主人的作废；资源点不出援军，电脑也不给它设出发阵地（出援军据点的情形见 sites.test.ts）
+    give(w, lumber, 1);
+    lumber.rally = { x: 100, y: 100 };
+    garrison(w, lumber, 2);
+    run(w, SITE_INFO[SITE_LUMBER].captureTime + 3);
+    expect(lumber.owner).toBe(2);
+    expect(lumber.rally).toBe(null);
+    // 玩家夺回：电脑的作废，玩家新占的据点不设
+    clear(w);
+    garrison(w, lumber, 1);
+    run(w, SITE_INFO[SITE_LUMBER].captureTime + 3);
+    expect(lumber.owner).toBe(1);
+    expect(lumber.rally).toBe(null);
   }, 30000);
 
   it('有城墙、木栅的据点：围墙之内（含墙顶）都能休整回血，墙外不行；没有围墙的仍按占领圈', () => {
@@ -778,13 +1042,8 @@ describe('第十二轮：箭数、集结点', () => {
     clear(w);
     const town = w.sites.find(s => s.type === SITE_TOWN)!;
     give(w, town, 1);
-    expect(town.walled).toBe(true);
-    const mw = w.map.w;
-    let x1 = 0, y1 = 0;
-    for (let c = 0; c < w.enclosure.length; c++) if (w.enclosure[c] === town.id) {
-      x1 = Math.max(x1, c % mw);
-      y1 = Math.max(y1, (c / mw) | 0);
-    }
+    expect(town.rect).not.toBeNull();
+    const r = town.rect!, x1 = r.x1 / TILE - 1, y1 = r.y1 / TILE - 1;
     // 墙内东南角（占领圈之外）；以及墙外
     const inX = (x1 - 2.5) * TILE, inY = (y1 - 2.5) * TILE;
     expect(Math.hypot(inX - town.x, inY - town.y)).toBeGreaterThan(town.radius);
@@ -796,8 +1055,84 @@ describe('第十二轮：箭数、集结点', () => {
     expect(w.hp[a]).toBeGreaterThan(40);
     expect(w.sheltered[b]).toBe(0);
     expect(w.hp[b]).toBe(40);
-    const village = w.sites.find(s => s.type === SITE_VILLAGE)!;
-    expect(village.walled).toBe(false);
+    const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 0)!;
+    expect(camp.rect).not.toBeNull();
+    const farm = w.sites.find(s => s.type === SITE_FARM)!;
+    expect(farm.rect).toBeNull();
   }, 30000);
 });
 
+
+describe('据点构成与胜负', () => {
+  const FULL_TOTAL: Record<string, number> = { china: 16, japan: 15, rome: 13, persia: 10 };
+  const archOf = (key: string): string => ARCHETYPES[UNIT_BY_KEY[key].arch].key;
+
+  it('城池与城镇共用每个阵营的一张全兵种援军表：步兵、远程、骑兵、器械齐全，人数取原城池援军表的总人数', () => {
+    for (const f of Object.values(FACTIONS)) {
+      const archs = new Set(f.reinf.map(([k]) => archOf(k)));
+      expect(archs.has('inf'), f.id).toBe(true);
+      expect(archs.has('ranged') || archs.has('cavr'), f.id).toBe(true);
+      expect(archs.has('cav') || archs.has('cavr'), f.id).toBe(true);
+      expect(archs.has('siege') || archs.has('vehicle'), f.id).toBe(true);
+      expect(forceList(f.reinf, 1).length, f.id).toBe(FULL_TOTAL[f.id]);
+      // 编成只用本阵营的兵种
+      for (const [k] of f.reinf) expect(UNIT_BY_KEY[k].faction, k).toBe(f.id);
+    }
+    expect(SITE_INFO[SITE_CITY].reinf).toBe('full');
+    expect(SITE_INFO[SITE_TOWN].reinf).toBe('full');
+    expect(SITE_INFO[SITE_TOWN].reinfScale).toBe(0.6);
+    expect(SITE_INFO[SITE_CITY].interval).toBe(55);
+    expect(SITE_INFO[SITE_TOWN].interval).toBe(60);
+  });
+
+  it('城池出的援军包含步兵、远程、骑兵、器械；城镇每批是城池的 0.6 倍', () => {
+    const w = game();
+    clear(w);
+    const city = w.sites.find(s => s.type === SITE_CITY && s.owner === 0)!;
+    const town = w.sites.find(s => s.type === SITE_TOWN)!;
+    give(w, city, 1);
+    give(w, town, 1);
+    const batch = (s: Site): number[] => {
+      for (const o of w.sites) o.timer = 999;
+      s.timer = 0.01;
+      const before = new Set<number>();
+      for (let i = 0; i < w.n; i++) if (w.alive[i]) before.add(i);
+      run(w, 1);
+      const out: number[] = [];
+      for (let i = 0; i < w.n; i++) if (w.alive[i] && !before.has(i) && w.team[i] === 1) out.push(i);
+      return out;
+    };
+    const c = batch(city), t = batch(town);
+    const archs = new Set(c.map(i => archOf(w.defs[w.type[i]].key)));
+    for (const need of ['inf', 'ranged', 'cav', 'siege']) expect(archs.has(need), need).toBe(true);
+    const mult = reinforceMult(FACTIONS.china);
+    expect(c.length).toBe(forceList(FACTIONS.china.reinf, mult).length);
+    expect(t.length).toBe(forceList(FACTIONS.china.reinf, mult * 0.6).length);
+    expect(t.length).toBeLessThan(c.length);
+  });
+
+  it('开局双方各有一座城池和一座营寨，没有大本营；开局粮草收入是城池 40 加营寨 11.2', () => {
+    const g = createGame({ seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false });
+    const w = g.world;
+    for (const tm of [1, 2]) {
+      const mine = w.sites.filter(s => s.owner === tm);
+      expect(mine.map(s => s.type).sort()).toEqual([SITE_CITY, SITE_CAMP].sort());
+      expect(mine.reduce((n, s) => n + SITE_INFO[s.type].food, 0)).toBeCloseTo(51.2, 6);
+    }
+    expect(SITE_INFO[SITE_CITY].food).toBe(40);
+    expect(SITE_INFO[SITE_TOWN].food).toBe(18);
+    const homes = w.sites.filter(s => s.owner === 1 && s.type === SITE_CITY);
+    expect(homes[0].name).toContain('都城');
+    // 开局城池与地图中央的城池类型、占地相同
+    const center = w.sites.find(s => s.type === SITE_CITY && s.owner === 0)!;
+    const spanOf = (s: Site): number[] => {
+      const ws = s.buildings.map(id => w.buildings[id]).filter(b => b.def.key === 'wall');
+      return [Math.max(...ws.map(b => b.tx)) - Math.min(...ws.map(b => b.tx)), Math.max(...ws.map(b => b.ty)) - Math.min(...ws.map(b => b.ty))];
+    };
+    expect(spanOf(homes[0])).toEqual(spanOf(center));
+  });
+
+  it('墙上远程单位所受的远程伤害减半', () => {
+    expect(RULES.siege.wallCover).toBe(0.5);
+  });
+});

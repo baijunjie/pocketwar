@@ -20,6 +20,14 @@ export function flatWorld(n = 120, seed = 7, paint?: (terrain: Uint8Array, n: nu
   return w;
 }
 
+/**
+ * 长时间同步的模拟循环里定期让出事件循环（每 every 个 tick 一次），免得 vitest worker 与主进程的通信超时报 Unhandled Error。
+ * 用法：循环里 `await breathe(t)`，所在用例要写成 async。
+ */
+export async function breathe(t: number, every = 600): Promise<void> {
+  if (t % every === every - 1) await new Promise<void>(r => setTimeout(r, 0));
+}
+
 export function run(w: World, secs: number): void {
   for (let t = 0; t < secs * 30; t++) {
     w.tick();

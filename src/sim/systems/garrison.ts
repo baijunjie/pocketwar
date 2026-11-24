@@ -5,6 +5,7 @@
  */
 import { DT, RULES, TILE, UnitDef } from '../content';
 import { NONE, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_WALL } from '../state';
+import { siteContains } from '../siteArea';
 import type { World } from '../world';
 
 /** 垛口位 */
@@ -115,7 +116,7 @@ export function canGarrison(d: UnitDef): boolean {
 }
 
 /**
- * 让这些单位里的远程步兵登上所在城邦的城墙驻守，各自去最近的空垛口。
+ * 让这些单位里的远程步兵登上所在城池的城墙驻守，各自去最近的空垛口。
  * @returns 派上去几人；-1 表示里面没有能上墙的兵种，-2 表示都不在自家有城墙的据点里，0 表示垛口满了
  */
 export function orderGarrison(w: World, all: number[]): number {
@@ -134,9 +135,8 @@ export function orderGarrison(w: World, all: number[]): number {
     let best = 1e18, pick = -1, here = false;
     for (const sl of w.slots) {
       const s = w.sites[sl.site];
-      if (s.owner !== tm || s.disabled) continue;
-      const r = s.radius > 0 ? s.radius : RULES.site.hqRadius;
-      if ((ux - s.x) ** 2 + (uy - s.y) ** 2 > r * r) continue;
+      if (s.owner !== tm) continue;
+      if (!siteContains(s, ux, uy)) continue;
       here = true;
       const b = w.buildings[sl.bld];
       if (sl.unit >= 0 || !b.alive || b.owner !== tm) continue;
@@ -174,7 +174,7 @@ function sendToSlot(w: World, i: number, id: number): void {
   w.field[i] = w.lineBlocked(w.x[i], w.y[i], sl.ex, sl.ey, tm) ? w.nav.getField(tm, cell, w.tickCount) : null;
 }
 
-/** 在自家城邦里待命的远程步兵自动登城（每隔一段时间由据点系统调用；垛口满了就留在地上） */
+/** 在自家城池里待命的远程步兵自动登城（每隔一段时间由据点系统调用；垛口满了就留在地上） */
 export function autoGarrison(w: World): void {
   if (!w.slots.length) return;
   const one = [0];

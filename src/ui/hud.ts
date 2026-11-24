@@ -1,24 +1,55 @@
 /** 游戏内界面：顶栏、据点与援军、选中面板、指令按钮、战报、帮助与结算 */
 import {
-  CLASS_NAMES, ELITE, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RES_SHORT, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_HQ, SITE_INFO, SIZES, UNITS,
-  UnitDef,
+  BuildingDef, ELITE, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RES_SHORT, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_INFO, SIZES, UNITS,
+  UnitDef, unitKind,
 } from '../sim/defs';
-import { canUpgradeSite, towerCount, unitUpgradeCost } from '../sim/systems/economy';
+import { SITE_MAX_LEVEL, siteUpgradeCost, towerCount, unitUpgradeCost } from '../sim/systems/economy';
 import { teamMoraleFactors } from '../sim/systems/morale';
-import { fightState } from '../sim/systems/sites';
+import { canRally, rallySites } from '../sim/rally';
+import { campBatch, factionUnits, fightState, militaryLeft, pickedUnit, reinfPaused } from '../sim/systems/sites';
 import { S_BRACE, S_CHARGE, S_COMBAT, S_SHIELD, S_TORCH, S_WALL, Site, World } from '../sim/world';
 import { unitPortrait } from '../render/portrait';
 
-/** 此刻可以点的升级：所选部队、全图全部部队、全图全部城邦 / 营寨（null = 不显示这个按钮） */
+/** 城池、营寨名字后面的星数 = 据点等级；其他据点不能升级，不显示。compact：据点列表里写成「★3」省地方 */
+function starsHtml(s: Site, compact = false): string {
+  return SITE_INFO[s.type].upgradeCost > 0 ? ` <em>${compact ? `★${s.level}` : '★'.repeat(s.level)}</em>` : '';
+}
+
+/** 据点满级（3 级）时所含建筑各自的最高级升级（每种建筑一项）及它解锁的能力（炮弹、连弩），等级一行与升级提示共用 */
+export function tier3Perks(w: World, s: Site): { def: BuildingDef; unlocks: string[] }[] {
+  const out: { def: BuildingDef; unlocks: string[] }[] = [];
+  for (const id of s.buildings) {
+    const d = w.buildings[id].def, t = d.tier3;
+    if (!t || out.some(o => o.def === d)) continue;
+    out.push({ def: d, unlocks: [t.shells ? '炮弹' : '', t.arrowMul ? '连弩' : ''].filter(Boolean) });
+  }
+  return out;
+}
+
+/** 据点升到某一级的加成与解锁的能力，写给提示与等级一栏看 */
+function levelPerks(w: World, s: Site, lv: number): string {
+  const L = RULES.economy.siteLevels[lv - 1], sh = RULES.economy.shell;
+  const out = [`建筑生命 ×${L.hp}、护甲 +${L.armor}，箭矢伤害 ×${L.dmg}、射程 ×${L.range}`];
+  if (lv >= SITE_MAX_LEVEL) {
+    for (const { def: d } of tier3Perks(w, s)) {
+      const t = d.tier3!;
+      const what = [t.shells ? `每轮加 ${t.shells} 发炮弹（伤害 ${sh.dmg}、范围 ${sh.splash}）` : '', t.arrowMul ? `箭矢 ×${t.arrowMul}` : ''].filter(Boolean).join('，');
+      out.push(`${d.name}${t.name !== d.name ? `变${t.name}` : ''}：${what}`);
+    }
+  }
+  return out.join('；');
+}
+
+/** 此刻可以点的升级：所选部队、全图全部部队、全图全部城池 / 营寨（null = 不显示这个按钮） */
 export interface UpgradeOffers {
   /** 所选部队：黄金够升其中几人、要花多少 */
   sel: { count: number; cost: number; total: number } | null;
-  /** 全图的己方部队 / 城邦 / 营寨：资源够升其中几个、要花多少、一共还有几个能升 */
+  /** 全图的己方部队 / 城池 / 营寨：资源够升其中几个、要花多少、一共还有几个能升 */
   all: { count: number; cost: number; total: number } | null;
-  forts: { count: number; cost: number; total: number } | null;
+  cities: { count: number; cost: number; total: number } | null;
   camps: { count: number; cost: number; total: number } | null;
 }
-export type UpgradeAction = 'sel' | 'all' | 'forts' | 'camps';
+export type UpgradeAction = 'sel' | 'all' | 'cities' | 'camps';
 
 export interface HudCallbacks {
   command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow'): void;
@@ -26,8 +57,8 @@ export interface HudCallbacks {
   upgrade(act: UpgradeAction): void;
   /** 选中一个据点（-1 = 取消） */
   selectSite(id: number): void;
-  /** 对选中的据点：升级 / 建一座箭塔 */
-  siteAction(act: 'upgrade' | 'tower', id: number): void;
+  /** 对选中的据点：升级 / 建一座哨塔 / 营寨改选援军兵种（unit 是兵种下标） */
+  siteAction(act: 'upgrade' | 'tower' | 'pick', id: number, unit?: number): void;
   /**
    * 兵种栏里点选 / 框选卡片：replace = 改选屏幕内这些兵种；add = 加选；toggle = 这个兵种选着就去掉、没选就加上；
    * map = 选中全图的这个兵种（双击卡片）
@@ -51,7 +82,7 @@ const css = (c: [number, number, number]): string => `rgb(${c[0]},${c[1]},${c[2]
 
 export function unitTip(d: UnitDef): string {
   const lines = [
-    `${d.name}（${CLASS_NAMES[d.cls]}）`, d.desc,
+    `${d.name}（${unitKind(d)}）`, d.desc,
     `生命 ${d.hp}　攻击 ${d.dmg}${d.splash ? '（范围）' : ''}　攻速 ${d.cd}s`,
     `射程 ${d.range ? d.range : '近战'}　护甲 ${d.armM}/${d.armP}`,
     `体型 ${SIZES[d.size].name}　行军 ${d.walk}　奔跑 ${d.speed}　口粮 ${d.upkeep}`,
@@ -61,7 +92,7 @@ export function unitTip(d: UnitDef): string {
   if (ab.brace) lines.push(`拒马：敌人冲来时立枪，反伤 ${ab.brace.dmg}`);
   if (ab.shield) lines.push(`举盾：遇远程敌人时远程伤害 −${Math.round(ab.shield.block * 100)}%，移动稍慢`);
   if (ab.torch) lines.push('夜间可打火把');
-  lines.push(d.siege ? '工程类：能破坏城墙与箭楼' : '打建筑时投掷火把，烧不动城墙与箭楼');
+  lines.push(d.siege ? '工程类：能破坏城墙与城门' : '打建筑时投掷火把，烧不动城墙');
   if (d.vsBld >= 2) lines.push(`对建筑 ×${d.vsBld}`);
   if (d.elite >= 0) lines.push(`可花 ${unitUpgradeCost(d)} 黄金升为「${UNITS[d.elite].name}」：生命 ×${ELITE.hp}、攻击 ×${ELITE.dmg}、护甲 +${ELITE.armor}`);
   else if (d.tier) lines.push('高级形态');
@@ -178,10 +209,11 @@ export class Hud {
     const bottom = el('div', 'bottom');
     this.selBox = el('div', 'panel detail');
     this.selBox.hidden = true;
-    // 面板内容会被定时重建，按钮用事件委托
+    // 面板内容会被定时重建，按钮用事件委托。
+    // 注意防连击：点一下升级，面板同步重建，同一位置立刻换成「升到下一级」的按钮，双击就会连升两级；e.detail > 1 是连续的第二下起，一律不响应
     this.selBox.addEventListener('click', e => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-act]');
-      if (b && !b.disabled) cb.siteAction(b.dataset.act as 'upgrade' | 'tower', Number(b.dataset.site));
+      if (b && !b.disabled && (e.detail <= 1 || b.dataset.act === 'pick')) cb.siteAction(b.dataset.act as 'upgrade' | 'tower' | 'pick', Number(b.dataset.site), b.dataset.unit === undefined ? undefined : Number(b.dataset.unit));
     });
     this.roster = el('div', 'panel unitbar');
     this.boxEl = el('div', 'rbox');
@@ -217,13 +249,14 @@ export class Hud {
       );
       const reinf = el('div', 'cgrid');
       reinf.append(
-        btn('集结点', 'R', 'rally', '设置援军集结点：之后各据点新出的援军自动开赴那里（已经出来的部队不受影响）'),
-        btn('取消集结', '⇧R', 'unrally', '取消集结点：之后各据点新出的援军留在自己的据点里驻守'),
+        btn('集结点', 'R', 'rally', '设置援军集结点：选中己方据点时只设它的，没选据点时给全部据点设；之后新出的援军自动开赴那里（已经出来的部队不受影响）'),
+        btn('取消集结', '⇧R', 'unrally', '取消集结点：选中己方据点时只取消它的，没选据点时全部取消；之后新出的援军留在据点里驻守'),
       );
       this.upBar = el('div', 'upbar');
+      // 同样要防连击：「城池 / 营寨全部升级」点一下就重建按钮，双击会连升两级
       this.upBar.onclick = e => {
         const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-up]');
-        if (b) cb.upgrade(b.dataset.up as UpgradeAction);
+        if (b && e.detail <= 1) cb.upgrade(b.dataset.up as UpgradeAction);
       };
       const up = section('升级', this.upBar);
       this.upHead = up;
@@ -245,7 +278,7 @@ export class Hud {
       <div class="panel card" role="dialog" aria-labelledby="help-title">
         <div class="help-content" tabindex="0">
           <h2 id="help-title">快速上手</h2>
-          <p class="help-goal">摧毁敌方大本营的主堡即可获胜。</p>
+          <p class="help-goal">丢光城池和营寨的一方战败：攻占敌方所有城池与营寨即可获胜。</p>
           <table aria-label="基本操作">
             <tr><th scope="row">左键点击 / 拖框</th><td>选择部队</td></tr>
             <tr><th scope="row">右键点地面</th><td>命令部队移动</td></tr>
@@ -259,14 +292,14 @@ export class Hud {
               <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；在卡片上拖框：一次选几个兵种（框住全部即选中屏幕内所有部队）；Shift 加选 / 去掉；双击：选中全图的这个兵种。选中的兵种卡片会上前一步</td></tr>
               <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
               <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
-              <tr><td>右键敌军 / 敌方建筑</td><td>攻击（Ctrl+右键可强攻中立建筑；带着器械时，中立的城墙、门楼、角楼直接右键就砸）</td></tr>
+              <tr><td>右键敌军 / 敌方建筑</td><td>攻击（中立的军事建筑会放箭，也直接右键就打；Ctrl+右键可强攻中立的城墙、门楼、木栅、营门；带着器械或战象时，中立的城墙、门楼直接右键就砸；普通建筑不可攻击）</td></tr>
               <tr><td>F + 左键</td><td>攻击移动：沿途遇敌即战、见敌方建筑就打，遇墙自动破城；点在敌方建筑上则直接攻打它</td></tr>
               <tr><td>X / H</td><td>停止 / 坚守</td></tr>
-              <tr><td>R + 左键</td><td>设置援军集结点（只对之后新出的援军有效）</td></tr>
-              <tr><td>Shift + R</td><td>取消集结点：新出的援军留在各自的据点</td></tr>
+              <tr><td>R + 左键</td><td>设置援军集结点（只对之后新出的援军有效）：选中己方据点时只设它的，没选据点时给全部据点设；据点易主后集结点清除</td></tr>
+              <tr><td>Shift + R</td><td>取消集结点，新出的援军留在据点里：选中己方据点时只取消它的，没选据点时全部取消</td></tr>
               <tr><td>T</td><td>点燃 / 熄灭所选部队的火把（夜间）</td></tr>
               <tr><td>B + 左键</td><td>扎营：派所选部队去搭一座临时据点（耗木材）</td></tr>
-              <tr><td>左键点据点</td><td>选中据点：升级，或给资源点、村庄建箭塔</td></tr>
+              <tr><td>左键点据点</td><td>选中据点：升级城池、营寨，或给资源点建哨塔；己方营寨还可以选出哪个兵种</td></tr>
               <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
               <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
               <tr><td>鼠标移到屏幕边缘、W A S D / 方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
@@ -274,12 +307,13 @@ export class Hud {
               <tr><td>中键拖动、Q / E</td><td>旋转镜头（上下拖动调俯角）；Shift+中键拖动平移；Home 复位</td></tr>
               <tr><td>空格 / + −　M</td><td>暂停 / 调整速度　开关音效</td></tr>
             </table>
-            <p><b>占领据点：</b>敌占的城邦、营寨要先拆毁主建筑；再肃清圈内守军，派人站到中央旗帜下读秒；敌人回到圈内读秒暂停，旗下没人则清零。占领后据点定时出援军（设了集结点就开赴集结点，没设就留在据点里），被毁的建筑也会修好。</p>
-            <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城邦的石墙只有器械与战象能破（门楼、角楼可以慢慢烧毁，它们和营寨的望楼都会放箭）。在自家城邦里待命的远程步兵会自动登城驻守（每格墙顶三人），看到射程外的敌人会沿墙顶挪过去；在墙上射得更远、挨箭更轻（下别的命令即下墙）；别的兵种上不了墙，据点里的近战守军不出城，挨了敌方远程的打才出击。</p>
+            <p><b>占领据点：</b>敌占或中立的据点要先拆光全部军事建筑（会放箭的角楼、哨塔、主堡、中军帐）；再肃清据点范围内的守军（有围墙的是围墙圈出的矩形，其余是圆圈），派人站到中央旗帜下读秒；敌人回到范围内读秒暂停，旗下没人则清零。占领后据点定时出援军（这个据点设了集结点就开赴集结点，没设就留在据点里），被毁的建筑也会修好。</p>
+            <p><b>攻坚：</b>士兵和骑兵打建筑是扔火把——营寨的木栅一烧就垮，城池的石墙只有器械与战象能破（门楼、营门不放箭；角楼、主堡和营寨的哨塔、中军帐会放箭，可以慢慢烧毁）。在自家城池里待命的远程步兵会自动登城驻守（每格墙顶三人），看到射程外的敌人会沿墙顶挪过去；在墙上射得更远、挨箭更轻（下别的命令即下墙）；别的兵种上不了墙，据点里的近战守军不出城，挨了敌方远程的打才出击。</p>
             <p>高地上的远程部队射程与伤害更高；森林减免远程伤害并拖慢骑兵；浅滩可涉水但行动迟缓。</p>
             <p><b>士气：</b>敌众我寡、伤亡惨重、断粮、淋雨都会压低士气，士气见底的部队会溃逃（头顶一面小白旗，防御大减），逃回最近的己方据点才恢复指挥。老兵更不容易溃逃。</p>
-            <p><b>粮草：</b>据点产粮、部队吃粮，只靠大本营养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。偶尔下雪：走得更慢、看得更近，据点外的部队防御下降。</p>
-            <p><b>资源点：</b>农庄、伐木场、采石场、金矿，站到旗下几秒就占领，之后自动采集。<b>黄金</b>把部队升为重甲的高级形态（指令面板的「升级」一栏，老兵优先）；<b>石料</b>升级城邦、<b>木材</b>升级营寨（选中据点后点升级），手里有料时建筑也修得更快；木材还能给资源点和村庄建箭塔（最多 4 座，敌人得先拆光才能占领）、让部队扎营。</p>
+            <p><b>粮草：</b>据点产粮、部队吃粮，只靠开局的城池和营寨养不活全军。<b>昼夜：</b>夜里视野缩小，火把能照远但会暴露自己；下雨时火把点不着、行军变慢。偶尔下雪：走得更慢、看得更近，据点外的部队防御下降。</p>
+            <p><b>营寨：</b>占下后选中它，在面板里点选要出的兵种（本文明的全部兵种，含器械与战象），之后定时出这个兵种的援军，选贵的兵种每批人就少；改选后援军计时从头开始，易主后回到缺省兵种。城池与城镇出全兵种援军。</p>
+            <p><b>资源点：</b>农庄、伐木场、采石场、金矿，站到旗下几秒就占领，之后自动采集。<b>黄金</b>把部队升为重甲的高级形态（指令面板的「升级」一栏，老兵优先）；<b>石料</b>升级城池、<b>木材</b>升级营寨（选中据点后点升级，最高 3 级），手里有料时建筑也修得更快；木材还能给资源点建哨塔（最多 4 座，敌人得先拆光才能占领）、让部队扎营。</p>
           </details>
         </div>
         <button class="primary">开始指挥</button>
@@ -378,8 +412,8 @@ export class Hud {
     }
     // 木材、石料、黄金
     const use: Record<ResKind, string> = {
-      wood: `升级营寨、给资源点和村庄建箭塔（${RULES.economy.towerCost}）、扎营（${RULES.economy.outpostCost}）；有木材时营寨的建筑修得更快`,
-      stone: '升级城邦；有石料时城邦的建筑修得更快',
+      wood: `升级营寨、给资源点建哨塔（${RULES.economy.towerCost}）、扎营（${RULES.economy.outpostCost}）；有木材时营寨的建筑修得更快`,
+      stone: '升级城池；有石料时城池的建筑修得更快',
       gold: `把部队升为高级形态（每份口粮 ${RULES.economy.unitGold}）`,
     };
     this.resBox.innerHTML = RES_KINDS.map(k => `<span class="r-${k}" title="${RES_NAMES[k]}：每分钟 +${Math.round(w.income[k][human])}\n${use[k]}">`
@@ -411,22 +445,39 @@ export class Hud {
       if (info.category === 'resource') {
         const towers = towerCount(w, s);
         const short = info.yields ? RES_SHORT[Object.keys(info.yields)[0] as ResKind] : info.provides[0];
-        chips += `<span class="chip${s.disabled ? ' off' : ''}" data-id="${s.id}" style="--c:${s.disabled ? '#555' : c}" title="${s.name}：${s.disabled ? '废墟' : s.owner === human ? '我方' : s.owner ? '敌占' : '中立'}`
-          + `${towers ? `，箭塔 ${towers}` : ''}">${short}${towers ? `<i>${towers}</i>` : ''}`
+        chips += `<span class="chip" data-id="${s.id}" style="--c:${c}" title="${s.name}：${s.owner === human ? '我方' : s.owner ? '敌占' : '中立'}`
+          + `${towers ? `，哨塔 ${towers}` : ''}">${short}${towers ? `<i>${towers}</i>` : ''}`
           + `${s.cap > 0 && s.capTeam ? `<u style="width:${Math.round(s.cap * 100)}%;background:${css(this.teamRgb[s.capTeam])}"></u>` : ''}</span>`;
         continue;
       }
-      let state: string;
-      if (info.category === 'outpost') state = `<i>${s.owner === human ? '休整' : '敌方'}</i>`;
-      else if (s.disabled) state = '<i>废墟 · 占领后修复</i>';
-      else if (s.owner === human || (!w.humanTeam && s.owner)) {
+      // 行末的状态要短（右栏很窄）：详情放在整行的 title 里
+      let state: string, tip = `${s.name}（${SITE_CATEGORY_NAMES[info.category]}）`;
+      if (info.category === 'outpost') {
+        state = `<i>${s.owner === human ? '休整' : '敌方'}</i>`;
+      } else if (s.owner === human || (!w.humanTeam && s.owner)) {
         const sec = Math.max(0, Math.ceil(s.timer));
         const full = w.teamCount[s.owner] >= w.unitCap[s.owner];
-        const food = w.upkeep0[s.owner] > 0 ? ` <i>粮 +${Math.round((info.food * w.upkeep0[s.owner]) / 100)}</i>` : '';
-        state = (full ? '<i>兵力已满</i>' : `<b>${info.provides}</b> ${(sec / 60) | 0}:${String(sec % 60).padStart(2, '0')}`) + food;
-      } else state = `<i>${s.owner ? '敌占' : '中立'}${SITE_CATEGORY_NAMES[info.category]} · ${info.provides}</i>`;
+        const foodN = w.upkeep0[s.owner] > 0 ? Math.round((info.food * w.upkeep0[s.owner]) / 100) : 0;
+        const food = foodN ? ` <i>粮 +${foodN}</i>` : '';
+        if (reinfPaused(w, s)) {
+          state = '<i>援军暂停</i>' + food;
+          tip += '：援军暂停（中央建筑被毁）';
+        } else if (full) {
+          state = '<i>兵力已满</i>' + food;
+          tip += '：兵力已满，暂不出援军';
+        } else {
+          // 城池、城镇出全兵种援军，不必写「全兵种援军」占地方（在 title 里）；营寨写所选的兵种
+          state = `${info.reinf === 'pick' ? `<b>${this.supply(s)}</b> ` : ''}${(sec / 60) | 0}:${String(sec % 60).padStart(2, '0')}${food}`;
+          tip += `：${this.supply(s)}，${sec} 秒后出下一批`;
+        }
+        if (foodN) tip += `；产粮 +${foodN}`;
+      } else {
+        const who = s.owner ? '敌占' : '中立';
+        state = `<i>${who}${s.owner && info.reinf === 'pick' ? ` · ${this.supply(s)}` : ''}</i>`;
+        tip += `：${who}${info.provides ? `，${s.owner && info.reinf === 'pick' ? this.supply(s) : info.provides}` : ''}`;
+      }
       const cap = s.cap > 0 && s.capTeam ? `<u style="width:${Math.round(s.cap * 100)}%;background:${css(this.teamRgb[s.capTeam])}"></u>` : '';
-      html += `<div class="site" data-id="${s.id}"><span class="dot" style="background:${s.disabled ? '#555' : c}"></span><span class="nm">${s.name}${s.level ? ' <em>★</em>' : ''}</span>${state}${cap}</div>`;
+      html += `<div class="site" data-id="${s.id}" title="${tip}"><span class="dot" style="background:${c}"></span><span class="nm">${s.name}${starsHtml(s, true)}</span><span class="st">${state}</span>${cap}</div>`;
     }
     if (chips) html += `<h3 class="sub">资源点</h3><div class="chips">${chips}</div>`;
     if (html !== this.sitesHtml) this.sitesBox.innerHTML = this.sitesHtml = html;
@@ -451,8 +502,8 @@ export class Hud {
     }
     const part = (v: { count: number; total: number }): string => `${v.count}${v.count < v.total ? ` / ${v.total}` : ''}`;
     if (o.all) rows.push(`<button data-up="all" class="gold" title="把全图的己方部队升为高级形态：等级高的优先，直到升完或黄金用尽"><b>部队全部升级</b><i>${part(o.all)} 人 · 金 ${Math.round(o.all.cost)}</i></button>`);
-    if (o.forts) rows.push(`<button data-up="forts" class="gold" title="把全图的己方城邦升级（石料不够时先升离镜头近的）"><b>城邦全部升级</b><i>${part(o.forts)} 座 · 石 ${o.forts.cost}</i></button>`);
-    if (o.camps) rows.push(`<button data-up="camps" class="gold" title="把全图的己方营寨升级（木材不够时先升离镜头近的）"><b>营寨全部升级</b><i>${part(o.camps)} 座 · 木 ${o.camps.cost}</i></button>`);
+    if (o.cities) rows.push(`<button data-up="cities" class="gold" title="把全图的己方城池各升一级，已满级的不再升（石料不够时先升离镜头近的）"><b>城池全部升级</b><i>${part(o.cities)} 座 · 石 ${o.cities.cost}</i></button>`);
+    if (o.camps) rows.push(`<button data-up="camps" class="gold" title="把全图的己方营寨各升一级，已满级的不再升（木材不够时先升离镜头近的）"><b>营寨全部升级</b><i>${part(o.camps)} 座 · 木 ${o.camps.cost}</i></button>`);
     const key = rows.join('');
     if (key === this.upKey) return;
     this.upKey = key;
@@ -460,11 +511,11 @@ export class Hud {
     this.upHead.hidden = !key;
   }
 
-  /** 选中一个据点时：它的状况，以及能对它做的事（升级、建箭塔） */
+  /** 选中一个据点时：它的状况，以及能对它做的事（升级、建哨塔） */
   private siteDetail(s: Site): void {
     const w = this.world, human = w.humanTeam;
     const info = SITE_INFO[s.type];
-    const mine = s.owner === human && !s.disabled;
+    const mine = s.owner === human;
     const mat = info.material, have = Math.floor(w.stock[mat][human] ?? 0);
     let alive = 0, total = 0, hp = 0, max = 0, shooters = 0, down = 0;
     for (const id of s.buildings) {
@@ -478,6 +529,7 @@ export class Hud {
       if (b.down) down++;
       else if (b.tower) shooters++;
     }
+    const military = militaryLeft(w, s, human);
     const towers = towerCount(w, s);
     const yields: string[] = [];
     if (info.food && w.upkeep0[human] > 0) yields.push(`粮 +${Math.round((info.food * w.upkeep0[human]) / 100)}`);
@@ -488,32 +540,38 @@ export class Hud {
     const E = RULES.economy;
     let btns = '';
     if (mine && info.upgradeCost > 0) {
-      const ok = canUpgradeSite(s) && have >= info.upgradeCost;
-      btns += s.level ? '<span class="done">★ 已升级</span>'
-        : `<button data-act="upgrade" data-site="${s.id}"${ok ? '' : ' disabled'} title="建筑生命 ×${E.siteHp}、护甲 +${E.siteArmor}，箭塔伤害 ×${E.towerDmg}、射程 ×${E.towerRange}；主建筑也会放箭。被敌人占领后降回">`
-          + `<b>升级</b><i>${RES_NAMES[mat]} ${info.upgradeCost}${ok ? '' : `（现有 ${have}）`}</i></button>`;
+      const cost = siteUpgradeCost(s), ok = cost > 0 && have >= cost;
+      btns += s.level >= SITE_MAX_LEVEL ? '<span class="done">已升到最高级</span>'
+        : `<button data-act="upgrade" data-site="${s.id}"${ok ? '' : ' disabled'} title="${levelPerks(w, s, s.level + 1)}。被敌人占领后降回 1 级">`
+          + `<b>升到 ${s.level + 1} 级</b><i>${RES_NAMES[mat]} ${cost}${ok ? '' : `（现有 ${have}）`}</i></button>`;
     }
     if (mine && s.slots.length) {
       const ok = towers < s.slots.length && w.stock.wood[human] >= E.towerCost;
-      btns += towers >= s.slots.length ? `<span class="done">箭塔 ${towers} / ${s.slots.length}</span>`
-        : `<button data-act="tower" data-site="${s.id}"${ok ? '' : ' disabled'} title="在固定的位置建一座箭塔（地上的黄圈）。敌人要把箭塔全部摧毁才能占领这里">`
-          + `<b>建箭塔 ${towers} / ${s.slots.length}</b><i>木材 ${E.towerCost}${ok ? '' : `（现有 ${Math.floor(w.stock.wood[human])}）`}</i></button>`;
+      btns += towers >= s.slots.length ? `<span class="done">哨塔 ${towers} / ${s.slots.length}</span>`
+        : `<button data-act="tower" data-site="${s.id}"${ok ? '' : ' disabled'} title="在固定的位置建一座哨塔（地上的黄圈）。敌人要把哨塔全部摧毁才能占领这里">`
+          + `<b>建哨塔 ${towers} / ${s.slots.length}</b><i>木材 ${E.towerCost}${ok ? '' : `（现有 ${Math.floor(w.stock.wood[human])}）`}</i></button>`;
     }
-    const who = s.disabled ? '废墟' : s.owner === human ? '我方' : s.owner ? '敌方' : '中立';
+    const afterCapture = mine ? '' : [info.upgradeCost > 0 ? '升级' : '', info.reinf === 'pick' && !s.owner ? '选择出哪个兵种' : ''].filter(Boolean).join('、');
+    const unlocks = s.level >= SITE_MAX_LEVEL ? [...new Set(tier3Perks(w, s).flatMap(p => p.unlocks))] : [];
+    const who = s.owner === human ? '我方' : s.owner ? '敌方' : '中立';
     const html = `
       <div class="sdetail">
-        <div class="who"><b>${s.name}${s.level ? ' <em>★</em>' : ''}</b><span>${SITE_CATEGORY_NAMES[info.category]} · ${info.label}</span>
-          <span class="own" style="--c:${css(this.teamRgb[s.disabled ? 0 : s.owner])}">${who}</span></div>
+        <div class="who"><b>${s.name}${starsHtml(s)}</b><span>${SITE_CATEGORY_NAMES[info.category]}${SITE_CATEGORY_NAMES[info.category] === info.label ? '' : ` · ${info.label}`}</span>
+          <span class="own" style="--c:${css(this.teamRgb[s.owner])}">${who}</span></div>
         <div class="rows">
           <div class="grid">
             <span>状态</span><b>${this.siteFight(s)}</b>
             <span>建筑</span><b>${alive - down} / ${total} 完好${down ? ` · ${down} 座重建中` : ''} · 生命 ${max ? Math.round((hp / max) * 100) : 0}%</b>
-            <span>守备</span><b>${shooters ? `${shooters} 处放箭` : '不设防'}${s.type === SITE_HQ ? '' : info.captureTime > 0 ? ` · 占领需 ${info.captureTime} 秒` : ' · 不能占领，只能摧毁'}</b>
+            ${info.upgradeCost > 0 ? `<span>等级</span><b title="${s.level > 1 ? levelPerks(w, s, s.level) : ''}">${s.level} / ${SITE_MAX_LEVEL} 级${unlocks.length ? ` · 解锁${unlocks.join('、')}` : ''}</b>` : ''}
+            <span>守备</span><b>${shooters ? `${shooters} 处放箭` : '不设防'}${info.captureTime > 0 ? ` · 占领需 ${info.captureTime} 秒` : ' · 不能占领，只能摧毁'}</b>
             <span>产出</span><b>${yields.length ? `${yields.join('　')} <i>每分钟</i>` : '—'}</b>
-            <span>${info.reinf ? '援军' : '用途'}</span><b>${info.reinf ? `${info.provides} · 每 ${info.interval} 秒` : info.haven ? '部队在此休整回血' : `采集${info.provides}`}</b>
+            <span>${info.reinf ? '援军' : '用途'}</span><b>${info.reinf ? `${this.supply(s)}${this.batch(s)} · 每 ${info.interval} 秒${reinfPaused(w, s) ? ' · 暂停：中央建筑被毁' : ''}` : info.haven ? '部队在此休整回血' : `采集${info.provides}`}</b>
+            ${mine && info.reinf ? `<span>集结点</span><b>${s.rally ? '已设（地上的旗）' : '未设，援军留在据点里'}</b>` : ''}
           </div>
-          ${info.razeFirst && s.owner !== 0 && s.owner !== human && !s.disabled ? '<div class="dim">要先拆毁主建筑才能占领</div>' : ''}
-          ${info.upgradeCost > 0 && !mine ? '<div class="dim">占领后可以升级</div>' : ''}
+          ${info.captureTime > 0 && !mine && military > 0 ? `<div class="dim">要先摧毁全部军事建筑才能占领（还剩 ${military} 座）</div>` : ''}
+          ${!s.owner && shooters > 0 ? '<div class="dim">中立的军事建筑会向双方放箭，可以直接右键攻击</div>' : ''}
+          ${afterCapture ? `<div class="dim">占领后可以${afterCapture}</div>` : ''}
+          ${mine && info.reinf === 'pick' ? this.pickList(s) : ''}
         </div>
         ${btns ? `<div class="acts">${btns}</div>` : ''}
       </div>`;
@@ -522,15 +580,42 @@ export class Hud {
     this.selBox.innerHTML = html;
   }
 
+  /** 据点出什么援军：营寨是所选的兵种名，其余是据点类型的说明 */
+  private supply(s: Site): string {
+    const info = SITE_INFO[s.type];
+    return info.reinf === 'pick' && s.owner ? UNITS[pickedUnit(this.world, s)].name : info.provides;
+  }
+
+  /** 营寨每批援军的人数（给「援军」一行补上「× n」）；没有主人的营寨不显示 */
+  private batch(s: Site): string {
+    const w = this.world;
+    if (SITE_INFO[s.type].reinf !== 'pick' || !s.owner) return '';
+    return ` × ${campBatch(w, s, s.owner, UNITS[pickedUnit(w, s)])}`;
+  }
+
+  /** 己方营寨的兵种选择：本文明全部兵种，当前所选高亮，鼠标悬停看每批人数；改选后援军计时从头开始 */
+  private pickList(s: Site): string {
+    const w = this.world, human = w.humanTeam;
+    const cur = pickedUnit(w, s);
+    const btns = factionUnits(w.factions[human]!).map(d => {
+      const n = campBatch(w, s, human, d);
+      const tip = `${d.name}：每批 ${n} 人。${unitTip(d)}`.replace(/"/g, '&quot;');
+      return `<button data-act="pick" data-site="${s.id}" data-unit="${d.idx}" class="${d.idx === cur ? 'on' : ''}" title="${tip}">`
+        + `<img src="${this.portrait(d.idx, human)}" draggable="false"><b>${d.name}</b><i>${n} 人</i></button>`;
+    }).join('');
+    return `<div class="picks" title="选择这座营寨出哪个兵种的援军；改选后援军计时从头开始">${btns}</div>`;
+  }
+
   /** 据点此刻是否在交战，以及为什么（交战中不修建筑、不回血） */
   private siteFight(s: Site): string {
-    if (!s.owner || s.disabled) return '<i>无人驻守</i>';
+    const info = SITE_INFO[s.type];
     const f = fightState(this.world, s);
-    if (!f.fighting) return '平静 <i>建筑自修、部队休整</i>';
+    if (!info.regen) return '<i>没有恢复能力，建筑不自行修复</i>';
+    if (!f.fighting) return s.owner ? '平静 <i>建筑自修、部队休整</i>' : '平静 <i>建筑自修</i>';
     const why: string[] = [];
-    if (f.foes) why.push(`圈内有 ${f.foes} 名敌兵`);
+    if (f.foes) why.push(s.owner ? `据点内有 ${f.foes} 名敌兵` : `据点内有 ${f.foes} 名士兵`);
     if (f.calmIn > 0) why.push(`建筑 ${Math.round(f.hitAgo)} 秒前挨打`);
-    const tail = f.calmIn > 0 ? `，${Math.ceil(f.calmIn)} 秒后平静` : f.foes ? '，敌兵离开后平静' : '';
+    const tail = f.calmIn > 0 ? `，${Math.ceil(f.calmIn)} 秒后平静` : f.foes ? (s.owner ? '，敌兵离开后平静' : '，士兵离开后平静') : '';
     return `<span class="warn">交战中</span> <i>${why.join('、')}${tail}</i>`;
   }
 
@@ -569,7 +654,7 @@ export class Hud {
         <div class="who">
           <img src="${this.portrait(d.idx, w.humanTeam)}" draggable="false">
           <b>${d.name}</b>
-          <span>${CLASS_NAMES[d.cls]} · ${SIZES[d.size].name}</span>
+          <span>${unitKind(d)} · ${SIZES[d.size].name}</span>
           <span class="${d.tier ? 'elite' : ''}">${d.tier ? '高级形态' : `初级 · 升级需 ${unitUpgradeCost(d)} 金`}</span>
         </div>
         <div class="rows">
@@ -594,6 +679,19 @@ export class Hud {
   }
 
   /**
+   * 「取消集结」有没有东西可取消：选中己方出援军的据点看它自己，没选据点看全部己方据点；
+   * 选中的据点不是这样的（敌方、中立、不出援军）时留着可按（按下会提示）
+   */
+  private rallySet(site: number): boolean {
+    const w = this.world;
+    if (site >= 0 && !w.sites[site].gone) {
+      const s = w.sites[site];
+      return s.owner !== w.humanTeam || !canRally(s) || !!s.rally;
+    }
+    return rallySites(w, w.humanTeam).some(s => s.rally);
+  }
+
+  /**
    * @param site 没选部队时选中的据点（-1 = 没有）
    * @param screen 屏幕内的己方单位（兵种栏按它数每个兵种的数量）
    */
@@ -612,7 +710,7 @@ export class Hud {
     }
     // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
     for (const [cmd, b] of this.cmdBtns) {
-      const off = cmd === 'unrally' ? !w.rally[w.humanTeam] : cmd === 'follow' ? !sel.length && !this.following
+      const off = cmd === 'unrally' ? !this.rallySet(site) : cmd === 'follow' ? !sel.length && !this.following
         : cmd !== 'all' && cmd !== 'rally' && !sel.length;
       if (b.disabled !== off) b.disabled = off;
       if (cmd === 'follow') b.classList.toggle('on', this.following);
@@ -756,7 +854,7 @@ export class Hud {
     const human = w.humanTeam || 1, other = 3 - human;
     const f = w.factions as FactionDef[];
     const title = win === null ? `${f[w.winner].name} 获胜` : win ? '胜　利' : '战　败';
-    const sub = win === null ? '' : win ? '敌方主堡已被攻陷' : '我方主堡陷落';
+    const sub = win === null ? '' : win ? '敌方城池与营寨已全部丢失' : '我方城池与营寨已全部丢失';
     const t = Math.floor(w.time);
     this.over.innerHTML = `
       <div class="panel card ${win === false ? 'lose' : 'win'}">

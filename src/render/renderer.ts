@@ -2,14 +2,15 @@
 import * as THREE from 'three';
 import {
   BK_KEEP, BK_MAIN, BK_TOWER, BK_WALL, BUILDINGS, DT, PROJ_ARC, P_BALL, P_BIGBOLT, P_BOLT, P_BULLET, P_JAVELIN, P_ROCKET, P_STONE, P_TORCH,
-  RULES, SITE_HQ, SITE_INFO, TILE, T_BRIDGE, UNITS,
+  RULES, SITE_INFO, TILE, T_BRIDGE, UNITS,
 } from '../sim/defs';
 import { CHUNK } from '../sim/map';
+import { rallyPoint } from '../sim/rally';
 import {
   Building, FX_ARROW_HIT, FX_BUILT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_FIRE, FX_HIT, FX_IMPACT, FX_LEVEL, FX_SMOKE, FX_UPGRADE,
   MAX_CORPSE, MAX_UNITS, S_BRACE, S_CHARGE, S_ROUT, S_SHIELD, S_TORCH, S_WALL, VIS_CELL, World,
 } from '../sim/world';
-import { bridgeGeo, buildingGeo, flagHeight, hasUpgradeLook, propGeo, rubbleGeo, wallGeo } from './buildings';
+import { bridgeGeo, buildingGeo, flagHeight, lookLevel, propGeo, rubbleGeo, wallGeo } from './buildings';
 import { litMaterial, shared } from './materials';
 import { box, cone, cyl, join } from './prims';
 import { Atlas, Q_AXIS, Q_BILLBOARD, Q_GROUND, Q_SCREEN, Quads, Sprite } from './quads';
@@ -52,7 +53,7 @@ function pennantGeo(): THREE.BufferGeometry {
   return join(cyl(0.45, 0.6, 25, 0x2e2620, 0, 12.5, 0, 4), cone(1, 2.4, 0xc9a227, 0, 26, 0, 4), tri);
 }
 
-/** 同一种模型的建筑合成一批绘制；对局中途会有新建筑、新模型（箭塔、升级后的样子），所以容量按需增长 */
+/** 同一种模型的建筑合成一批绘制；对局中途会有新建筑、新模型（哨塔、升级后的样子），所以容量按需增长 */
 interface InstGroup {
   mesh: THREE.InstancedMesh;
   geo: THREE.BufferGeometry;
@@ -66,7 +67,6 @@ interface InstGroup {
 interface BldKind {
   key: string;
   geo: (lv: number) => THREE.BufferGeometry;
-  lvLook: boolean;
   rubble: string;
 }
 
@@ -83,7 +83,7 @@ export class Renderer {
   markers: Marker[] = [];
   /** 正在拖动指定的队列朝向：从落点指向鼠标（世界坐标），没有则为 null */
   arrow: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  /** 玩家选中的据点（-1 = 没有）：画一圈高亮，资源点另标出空着的箭塔位 */
+  /** 玩家选中的据点（-1 = 没有）：画一圈高亮，资源点另标出空着的哨塔位 */
   selSite = -1;
   drawn = 0;
 
@@ -243,7 +243,7 @@ export class Renderer {
     };
     for (const s of world.sites) this.labels.push(label(s.name));
     this.outpostLabel = label(SITE_INFO[SITE_INFO.length - 1].label);
-    // 已升级的据点：名牌旁一颗星
+    // 据点等级：名牌旁按等级挂几颗星
     this.star = at.add(18, 18, 2, c => {
       c.beginPath();
       for (let k = 0; k < 10; k++) {
@@ -310,7 +310,7 @@ export class Renderer {
     // 旗帜：旗杆 + 旗面，颜色随归属变化
     const flagGeo = join(cyl(0.5, 0.6, 22, 0x3a3028, 0, 11, 0, 4), box(13, 8, 0.5, 0xffffff, 6.8, 17.5, 0));
     const flagMat = litMaterial({ side: THREE.DoubleSide });
-    // 留出对局中途新建的箭塔、行营的余量
+    // 留出对局中途新建的哨塔、行营的余量
     this.flags = new THREE.InstancedMesh(flagGeo, flagMat, blds.length + 128);
     this.siteFlags = new THREE.InstancedMesh(flagGeo, flagMat, world.sites.length + 24);
     for (const f of [this.flags, this.siteFlags]) {
@@ -406,12 +406,12 @@ export class Renderer {
         key = `${def.key}:${mask}:${out}`;
         geo = lv => wallGeo(mask, def.wood, out, lv);
       } else {
-        const variants = def.key === 'house' || def.key === 'tent' ? 4 : def.key === 'farmhouse' ? 2 : 1;
+        const variants = def.key === 'house' || def.key === 'tent' ? 4 : 1;
         const v = b.variant % variants, st = def.kind === BK_KEEP ? b.style : '';
         key = `${def.key}:${st}:${v}`;
         geo = lv => buildingGeo(def.key, st, v, lv);
       }
-      this.bldKinds.push({ key, geo, lvLook: hasUpgradeLook(def.key), rubble: `${def.w}x${def.h}:${def.wood ? 1 : 0}` });
+      this.bldKinds.push({ key, geo, rubble: `${def.w}x${def.h}:${def.wood ? 1 : 0}` });
     }
     if (this.bldSig.length < blds.length) {
       const sig = new Int32Array(blds.length + 64).fill(-1);
@@ -462,6 +462,27 @@ export class Renderer {
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
     }
+  }
+
+  /**
+   * 地面上画一圈虚线矩形（据点的围墙范围）：四条边各按固定的线段与间隔排开，每段贴着各自脚下的地形高度。
+   * 线段厚度 3.5，沿边方向 26 长、间隔 18。
+   */
+  private dashRect(x0: number, z0: number, x1: number, z1: number, r: number, g: number, b: number, a: number): void {
+    const G = this.ground, white = this.white;
+    const edge = (ax: number, az: number, bx: number, bz: number): void => {
+      const len = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / len, dz = (bz - az) / len;
+      const horiz = Math.abs(dx) > 0.5;
+      for (let t = 0; t < len; t += 44) {
+        const l = Math.min(26, len - t), m = t + l / 2;
+        const px = ax + dx * m, pz = az + dz * m;
+        G.add(Q_GROUND, white, px, this.groundY(px, pz), pz, horiz ? l : 3.5, horiz ? 3.5 : l, r, g, b, a);
+      }
+    };
+    edge(x0, z0, x1, z0);
+    edge(x1, z0, x1, z1);
+    edge(x1, z1, x0, z1);
+    edge(x0, z1, x0, z0);
   }
 
   /** 单位脚下的高度：桥面抬到水面以上，浅滩里只没到小腿 */
@@ -649,7 +670,7 @@ export class Renderer {
     // 先数出每种模型要画几个（升级、倒塌、重建都会让建筑换到另一批里），再逐个写入
     const keyOf = (b: Building): string => {
       const kd = this.bldKinds[b.id];
-      return !b.alive ? `rubble:${kd.rubble}` : kd.lvLook ? `${kd.key}:${b.lv}` : kd.key;
+      return !b.alive ? `rubble:${kd.rubble}` : `${kd.key}:${lookLevel(b.def.key, b.lv)}`;
     };
     for (const g of this.bldGroups.values()) g.want = g.n = 0;
     const keys: string[] = new Array(blds.length);
@@ -658,7 +679,7 @@ export class Renderer {
       const key = (keys[b.id] = keyOf(b));
       const g = this.bldGroups.get(key);
       if (g) g.want++;
-      else this.bldGroup(key, () => (b.alive ? this.bldKinds[b.id].geo(b.lv) : rubbleGeo(b.def.w, b.def.h, b.def.wood)), b.alive, 1).want = 1;
+      else this.bldGroup(key, () => (b.alive ? this.bldKinds[b.id].geo(lookLevel(b.def.key, b.lv)) : rubbleGeo(b.def.w, b.def.h, b.def.wood)), b.alive, 1).want = 1;
     }
     for (const [key, g] of this.bldGroups) if (g.want > g.cap) this.bldGroup(key, () => g.geo, g.mesh.castShadow, g.want);
     for (const b of blds) {
@@ -745,7 +766,7 @@ export class Renderer {
     }
   }
 
-  /** 夜里据点自动升起火把：塔楼、门楼顶上和主建筑门前各一处火光（废墟不点） */
+  /** 夜里据点自动升起火把：塔楼、门楼顶上和主建筑门前各一处火光 */
   private drawSiteTorches(S: Quads, G: Quads, fog: boolean): void {
     const w = this.world;
     const dark = 1 - w.env.light;
@@ -755,7 +776,7 @@ export class Renderer {
     const k = Math.min(1, (dark - 0.35) / 0.3) * (1 - wet);
     const near = this.dist < 3200;
     for (const s of w.sites) {
-      if (s.gone || s.disabled || !this.inView(s.x, s.y, 600)) continue;
+      if (s.gone || !this.inView(s.x, s.y, 600)) continue;
       if (fog && w.explored[((s.y / VIS_CELL) | 0) * w.vw + ((s.x / VIS_CELL) | 0)] !== 1) continue;
       let i = 0;
       const flame = (x: number, y: number, z: number, size: number): void => {
@@ -774,7 +795,7 @@ export class Renderer {
           for (const sx of [-1, 1]) flame(b.cx + sx * 13, gy + 9, b.y1 + 6, 8);
           if (near) G.add(Q_GROUND, this.soft, b.cx, gy, b.y1 + 18, 240, 200, 1, 0.62, 0.25, 0.3 * k);
         } else if (b.def.wood) {
-          // 望楼、箭塔、营门：护栏边挑出一支火把
+          // 哨塔、营门：护栏边挑出一支火把
           flame(b.cx + 11, gy + (b.gate ? 30 : 36), b.cy + 11, 7);
           if (near) G.add(Q_GROUND, this.soft, b.cx + 11, gy, b.cy + 14, 190, 190, 1, 0.62, 0.25, 0.26 * k);
         } else {
@@ -910,9 +931,15 @@ export class Renderer {
       const y = gy(s.x, s.y);
       const info = SITE_INFO[s.type];
       if (s.id === this.selSite) {
-        // 选中的据点：一圈亮环；资源点另标出还空着的箭塔位
-        const r = (s.radius > 0 ? s.radius : RULES.site.hqRadius) * 2 + 16 + Math.sin(this.time * 4) * 5;
-        G.add(Q_GROUND, this.circle, s.x, y, s.y, r, r, 0.45, 1, 0.5, 1);
+        // 选中的据点：围墙矩形（有围墙的）或一圈亮环；资源点另标出还空着的哨塔位
+        const pulse = Math.sin(this.time * 4) * 5;
+        if (s.rect) {
+          const pad = 8 + pulse;
+          this.dashRect(s.rect.x0 - pad, s.rect.y0 - pad, s.rect.x1 + pad, s.rect.y1 + pad, 0.45, 1, 0.5, 1);
+        } else {
+          const r = s.radius * 2 + 16 + pulse;
+          G.add(Q_GROUND, this.circle, s.x, y, s.y, r, r, 0.45, 1, 0.5, 1);
+        }
         for (const sl of s.slots) {
           if (sl.bld >= 0 && w.buildings[sl.bld].alive) continue;
           const px = (sl.tx + 0.5) * TILE, pz = (sl.ty + 0.5) * TILE;
@@ -923,24 +950,32 @@ export class Renderer {
         // 临时据点：只画休整范围，没有可争夺的旗帜
         G.add(Q_GROUND, this.circle, s.x, y, s.y, s.radius * 2, s.radius * 2, c[0], c[1], c[2], 0.4);
       } else if (s.radius > 0) {
-        G.add(Q_GROUND, this.circle, s.x, y, s.y, s.radius * 2, s.radius * 2, c[0], c[1], c[2], 0.55);
-        // 旗帜区：进攻方要站进这个小圈才开始读秒；读秒进度从小圈向外扩到整个占领圈
+        // 有围墙的据点围墙本身就是边界，地上不常驻画圈；没有围墙的（资源点）常驻一圈占领圈
+        if (!s.rect) G.add(Q_GROUND, this.circle, s.x, y, s.y, s.radius * 2, s.radius * 2, c[0], c[1], c[2], 0.55);
+        // 旗帜区：进攻方要站进这个小圈才开始读秒；读秒进度从小圈向外扩到整个据点范围（围墙矩形或占领圈）
         const fr = RULES.capture.flagRadius * 2;
         G.add(Q_GROUND, ring, s.x, y, s.y, fr * 1.17, fr * 1.17, 1, 1, 1, 0.35);
         if (s.capTeam) {
           const cc = tc[s.capTeam];
-          const rr = fr + (s.radius * 2 - fr) * s.cap;
-          G.add(Q_GROUND, this.circle, s.x, y, s.y, rr, rr, cc[0], cc[1], cc[2], 0.9);
+          if (s.rect) {
+            const f = RULES.capture.flagRadius, k = s.cap, r = s.rect;
+            this.dashRect(s.x - f + (r.x0 - s.x + f) * k, s.y - f + (r.y0 - s.y + f) * k, s.x + f + (r.x1 - s.x - f) * k, s.y + f + (r.y1 - s.y - f) * k,
+              cc[0], cc[1], cc[2], 0.9);
+          } else {
+            const rr = fr + (s.radius * 2 - fr) * s.cap;
+            G.add(Q_GROUND, this.circle, s.x, y, s.y, rr, rr, cc[0], cc[1], cc[2], 0.9);
+          }
         }
         m.makeRotationY(wave).scale(this.v.set(2.2, 2.2, 2.2)).setPosition(s.x, y, s.y);
         this.siteFlags.setMatrixAt(nf, m);
         this.siteFlags.setColorAt(nf++, this.teamLin[s.owner]);
       }
       const lb = this.labels[s.id] ?? this.outpostLabel;
-      const dim = s.disabled ? 0.5 : 1;
-      const ly = y + (s.type === SITE_HQ ? 150 : 62);
-      O.add(Q_SCREEN, lb, s.x, ly, s.y, lb.w, lb.h, dim, dim, dim, 1, 0.5, 1);
-      if (s.level) O.add(Q_SCREEN, this.star, s.x, ly, s.y, 15, 15, 1, 0.82, 0.25, 1, -(lb.w / 2 + 2) / 15, 1.23);
+      const ly = y + (SITE_INFO[s.type].category === 'city' ? 150 : 62);
+      O.add(Q_SCREEN, lb, s.x, ly, s.y, lb.w, lb.h, 1, 1, 1, 1, 0.5, 1);
+      if (SITE_INFO[s.type].upgradeCost > 0) {
+        for (let k = 0; k < s.level; k++) O.add(Q_SCREEN, this.star, s.x, ly, s.y, 15, 15, 1, 0.82, 0.25, 1, -(lb.w / 2 + 2 + k * 12) / 15, 1.23);
+      }
       O.add(Q_SCREEN, white, s.x, ly, s.y, 36, 4, 0.05, 0.05, 0.05, 0.75, 0.5, -0.5);
       O.add(Q_SCREEN, white, s.x, ly, s.y, 34, 2.4, c[0], c[1], c[2], 1, 0.5, -1.2);
       if (s.cap > 0 && s.capTeam) {
@@ -960,9 +995,10 @@ export class Renderer {
       G.add(Q_GROUND, this.circle, p.x, y, p.y, r, r, 1, 0.85, 0.35, 0.9);
       G.add(Q_GROUND, ring, p.x, y, p.y, 30, 30, 1, 0.85, 0.35, 0.8);
     }
-    // 集结点
-    if (human) {
-      const r = w.rally[human];
+    // 集结点：只显示选中的己方据点的
+    if (human && this.selSite >= 0) {
+      const s = w.sites[this.selSite];
+      const r = rallyPoint(s, human);
       if (r && this.inView(r.x, r.y)) {
         const y = gy(r.x, r.y);
         G.add(Q_GROUND, ring, r.x, y, r.y, 30, 30, 1, 0.9, 0.3, 0.8);

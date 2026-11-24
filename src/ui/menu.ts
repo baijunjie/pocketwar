@@ -1,6 +1,6 @@
 /** 主菜单：选择阵营、对手与对局设置 */
-import { CLASS_NAMES, FACTIONS, FACTION_IDS, FactionId, UNIT_BY_KEY } from '../sim/defs';
-import { GameOptions } from '../sim/setup';
+import { FACTIONS, FACTION_IDS, FactionId, UNIT_BY_KEY } from '../sim/defs';
+import { GameOptions, MENU_SIZES } from '../sim/setup';
 import { unitPortrait } from '../render/portrait';
 import { unitTip } from './hud';
 
@@ -16,9 +16,12 @@ interface Saved {
 const KEY = 'fengyan.menu';
 
 function load(): Saved {
-  const def: Saved = { faction: 'china', enemy: 'random', size: 600, difficulty: 1, fog: true, spectate: false };
+  const def: Saved = { faction: 'china', enemy: 'random', size: 850, difficulty: 1, fog: true, spectate: false };
   try {
-    return { ...def, ...(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Saved>) };
+    const st: Saved = { ...def, ...(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Saved>) };
+    // 存档里不是现有档位的（改档位之前存的 300、600、1000、1500），按同一档换过来
+    if (!MENU_SIZES.includes(st.size)) st.size = MENU_SIZES[[300, 600, 1000, 1500].indexOf(st.size)] ?? def.size;
+    return st;
   } catch {
     return def;
   }
@@ -53,8 +56,8 @@ export function showMenu(root: HTMLElement, onStart: (opts: GameOptions) => void
             <button data-v="random" class="${st.enemy === 'random' ? 'on' : ''}">随机</button>
             ${FACTION_IDS.map(id => `<button data-v="${id}" class="${st.enemy === id ? 'on' : ''}">${FACTIONS[id].name}</button>`).join('')}
           </div></div>
-          <div class="opt"><label>每方兵力</label><div class="seg" data-k="size">
-            ${[300, 600, 1000, 1500].map(n => `<button data-v="${n}" class="${st.size === n ? 'on' : ''}">${n}</button>`).join('')}
+          <div class="opt"><label title="单位是兵力份数：1 份是一个近战步兵的兵力，骑兵、器械、战象每人占得更多，同样的份数下人数更少">每方兵力</label><div class="seg" data-k="size">
+            ${MENU_SIZES.map(n => `<button data-v="${n}" class="${st.size === n ? 'on' : ''}">${n}</button>`).join('')}
           </div></div>
           <div class="opt"><label>难度</label><div class="seg" data-k="difficulty">
             ${['简单', '普通', '困难'].map((n, i) => `<button data-v="${i}" class="${st.difficulty === i ? 'on' : ''}">${n}</button>`).join('')}
@@ -70,7 +73,7 @@ export function showMenu(root: HTMLElement, onStart: (opts: GameOptions) => void
           </div></div>
         </div>
         <button class="primary start">开　战</button>
-        <footer>不造兵、不用派人采集：开局即拥有整支军队。占领据点获得援军，占领资源点自动采集，攻破敌方主堡取胜。</footer>
+        <footer>不造兵、不用派人采集：开局即拥有整支军队。占领据点获得援军，占领资源点自动采集，攻下敌方所有城池与营寨取胜。</footer>
       </div>`;
     for (const id of FACTION_IDS) {
       const box = menu.querySelector<HTMLDivElement>(`[data-roster="${id}"]`)!;
@@ -82,7 +85,6 @@ export function showMenu(root: HTMLElement, onStart: (opts: GameOptions) => void
         cell.appendChild(unitPortrait(d.model, FACTIONS[id].color, 40));
         const nm = document.createElement('span');
         nm.textContent = d.name;
-        nm.dataset.cls = CLASS_NAMES[d.cls];
         cell.appendChild(nm);
         box.appendChild(cell);
       }

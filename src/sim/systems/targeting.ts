@@ -2,9 +2,9 @@
  * 索敌：在看得见的敌人里挑一个「打得到」的，而不是单纯最近的。
  * 评分 = 距离 × 克制偏好 + 各种惩罚：目标已被围满、刚被判定够不着、已经溃逃。
  */
-import { BK_WALL, RULES, SITE_INFO, SIZES, TILE, UnitDef } from '../content';
+import { BK_WALL, BR_MILITARY, RULES, SIZES, TILE, UnitDef } from '../content';
 import { COARSE, GRID, NONE, S_ROUT } from '../state';
-import type { World } from '../world';
+import type { Building, World } from '../world';
 
 /** scan() 的结果 */
 export const SCAN = {
@@ -65,8 +65,8 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
       if (d2 > acq2 || d2 < min2) continue;
       if (leash2 > 0 && j !== cur && (x[j] - hx) * (x[j] - hx) + (y[j] - hy) * (y[j] - hy) > leash2) continue;
       const jd = defs[type[j]];
-      // 优先打自己克制的类别
-      const v = d.vs[jd.cls];
+      // 优先打自己克制的兵种
+      const v = d.vs[jd.idx];
       let score = Math.sqrt(d2) * (v > 1.05 ? 0.8 : v < 0.95 ? 1.15 : 1);
       if (j === cur) score -= 25;
       else if (melee && w.crowd[j] >= SIZES[jd.size].slots) score += C.crowdPenalty;
@@ -84,13 +84,21 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
 }
 
 /**
+ * tm 一方能不能攻击这座建筑：立着、不是自己的、可被攻击（普通建筑不行）、打得动（城防工事只有工程类能破坏）。
+ * 玩家的攻击指令、单位自动索敌、挡路时就地攻城、电脑选目标、投射物与范围伤害都按它判断。
+ */
+export function canAttackBuilding(b: Building, tm: number, siege: boolean): boolean {
+  return b.alive && b.owner !== tm && b.def.hittable && (!b.def.fort || siege);
+}
+
+/**
  * 附近最该打的敌方建筑（自动攻击用）：先挑会放箭的，再挑近的。
- * 不挑的：城墙与木栅（只在挡路时才打，否则会沿着墙一格一格拆下去）、自己打不动的城防工事、
- * 能占领的据点里不放箭的主建筑（留着占领，烧掉就成废墟了）、中立建筑。
+ * 敌方的建筑，以及中立的军事建筑（会放箭，又必须拆光才能占领）。
+ * 不挑的：城墙与木栅（只在挡路时才打，否则会沿着墙一格一格拆下去）、中立的城防、自己打不动的城防工事、普通建筑（不可被攻击）。
  * @param leash 大于 0 时只挑离岗位不超过这个距离的
  */
 export function findBuilding(w: World, i: number, ux: number, uy: number, tm: number, range: number, d: UnitDef, leash = 0): number {
-  const mw = w.map.w, mh = w.map.h, bld = w.nav.bld, bs = w.buildings, sites = w.sites;
+  const mw = w.map.w, mh = w.map.h, bld = w.nav.bld, bs = w.buildings;
   let x0 = ((ux - range) / TILE) | 0, x1 = ((ux + range) / TILE) | 0;
   let y0 = ((uy - range) / TILE) | 0, y1 = ((uy + range) / TILE) | 0;
   if (x0 < 0) x0 = 0;
@@ -108,12 +116,7 @@ export function findBuilding(w: World, i: number, ux: number, uy: number, tm: nu
       if (k < 0 || k === last) continue;
       last = k;
       const b = bs[k];
-      if (b.owner !== foe || !b.alive || b.def.kind === BK_WALL || (b.def.fort && !d.siege)) continue;
-      if (!b.tower) {
-        const s = sites[b.site];
-        // 资源点不放箭的主建筑留着占领；城邦、营寨的主建筑要先拆掉才能占领（razeFirst）
-        if (s && s.main === k && SITE_INFO[s.type].captureTime > 0 && !SITE_INFO[s.type].razeFirst) continue;
-      }
+      if ((b.owner !== foe && !(b.owner === 0 && b.def.role === BR_MILITARY)) || b.def.kind === BK_WALL || !canAttackBuilding(b, tm, d.siege)) continue;
       const px = ux < b.x0 ? b.x0 : ux > b.x1 ? b.x1 : ux, py = uy < b.y0 ? b.y0 : uy > b.y1 ? b.y1 : uy;
       const d2 = (px - ux) * (px - ux) + (py - uy) * (py - uy);
       if (d2 < min2 || d2 > range * range) continue;

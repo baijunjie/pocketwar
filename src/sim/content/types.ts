@@ -1,8 +1,10 @@
 /**
  * 内容层的类型与注册表。
- * 「内容」= 可替换的数据：兵种、类别、体型、阵营、建筑、据点、规则数值。
+ * 「内容」= 可替换的数据：兵种、原型、特性、体型、阵营、建筑、据点、规则数值。
  * 「系统」（src/sim/systems）= 固定算法，只读这些表，不认识任何具体兵种。
  */
+
+import { DIMS, Dim, LEVEL_RANGES, Levels, POSITIONS, Panel, applyLevels, estimatePoints, panelPower, positionOf, powerFromPoints } from './points';
 
 export const TILE = 32;
 export const TICK_RATE = 30;
@@ -65,11 +67,13 @@ export interface ChargeSpec {
 }
 /** 拒马：发现有敌人冲过来时立枪，撞上来的敌人受伤并被拦停 */
 export interface BraceSpec {
-  /** 反伤（还要乘以对来敌类别的克制倍率） */
+  /** 反伤（还要乘以对来敌兵种的克制倍率） */
   dmg: number;
   speedMul: number;
 }
-/** 举盾：遇到远程敌人时举盾，移动稍慢，远程减伤 */
+/** 举盾时的移动速度倍率（全兵种统一，不计点） */
+export const SHIELD_SPEED_MUL = 0.8;
+/** 举盾：遇到远程敌人时举盾，移动稍慢，远程减伤。减免比例是点数维度（举盾），由级数算出 */
 export interface ShieldSpec {
   /** 远程伤害减免 0..1 */
   block: number;
@@ -90,25 +94,116 @@ export interface AuxAttack {
   proj: number;
 }
 
-// ---------- 兵种类别 ----------
-export interface ClassDef {
+// ---------- 标签 ----------
+/** 标签：原型 key 与特性给兵种加的标签（如长柄），克制与受击修正都按标签命中；每个标签占一位 */
+export const TAGS: string[] = [];
+export function tagBit(key: string): number {
+  let i = TAGS.indexOf(key);
+  if (i < 0) {
+    i = TAGS.length;
+    if (i >= 31) throw new Error('标签超过 31 个');
+    TAGS.push(key);
+  }
+  return 1 << i;
+}
+
+/** 一条倍率：目标（克制）或攻击方（受击修正）带 tag 里任一标签时乘上 mult */
+export interface Mult {
+  tag: number;
+  mult: number;
+}
+/** 标签 key → 倍率 */
+export type MultTable = Record<string, number>;
+const multList = (t: MultTable | undefined): Mult[] => Object.entries(t ?? {}).map(([k, mult]) => ({ tag: tagBit(k), mult }));
+
+// ---------- 原型 ----------
+export interface ArchetypeDef {
   idx: number;
   key: string;
   name: string;
-  /** 该类别的缺省属性 */
+  /** 远程（兵种的射程必须大于 0），否则近战 */
+  ranged: boolean;
+  /** 兵力占用：基准状态下每人占几份兵力（近战步兵为 1）；开局兵力与援军都按份数计，人数 = 份数 ÷ 兵力占用 */
+  force: number;
+  /** 原型固定克制：打带某个标签的目标的倍率，全阵营一样 */
+  counter: MultTable;
+  /** 原型固定的受击修正：被带某个标签的攻击方打的倍率 */
+  hitMod: MultTable;
+  /** 该原型的缺省属性（体型、冲锋等行为与自带特性、不计点的字段） */
   base: UnitSpec;
+  /** 原型基准面板（基础单位，点数 0）：兵种的面板由它按级数算出 */
+  panel: Panel;
+  /** 开放哪些维度：兵种只能在这些维度上加减级数 */
+  dims: Dim[];
+  /** 为个别维度声明自己的级数范围；没声明的取 LEVEL_RANGES */
+  ranges: Partial<Record<Dim, [number, number]>>;
 }
-export const CLASSES: ClassDef[] = [];
-export const CLASS_INDEX: Record<string, number> = {};
-export function defineClass(key: string, name: string, base: UnitSpec): number {
-  const idx = CLASSES.length;
-  CLASSES.push({ idx, key, name, base });
-  CLASS_INDEX[key] = idx;
+export const ARCHETYPES: ArchetypeDef[] = [];
+export const ARCHETYPE_INDEX: Record<string, number> = {};
+export interface ArchetypeSpec {
+  ranged: boolean;
+  force: number;
+  counter?: MultTable;
+  hitMod?: MultTable;
+  base?: UnitSpec;
+  panel: Panel;
+  dims: Dim[];
+  ranges?: Partial<Record<Dim, [number, number]>>;
+}
+export function defineArchetype(key: string, name: string, a: ArchetypeSpec): number {
+  const idx = ARCHETYPES.length;
+  ARCHETYPES.push({ idx, key, name, ranged: a.ranged, force: a.force, counter: a.counter ?? {}, hitMod: a.hitMod ?? {}, base: a.base ?? {}, panel: a.panel, dims: a.dims, ranges: a.ranges ?? {} });
+  ARCHETYPE_INDEX[key] = idx;
+  tagBit(key);
   return idx;
 }
 
+/** 原型在某个维度上的级数范围：原型自己声明的，没声明的取全局初值 */
+export function levelRange(arch: ArchetypeDef, dim: Dim): [number, number] {
+  return arch.ranges[dim] ?? LEVEL_RANGES[dim];
+}
+
+// ---------- 特性 ----------
+/** 特性：挂在兵种上的命名能力，带自己的参数 */
+export interface TraitDef {
+  key: string;
+  name: string;
+  /** 系统里按位判断的被动特性标志（TR_*） */
+  flag: number;
+  /** 给兵种加的标签 */
+  tags: string[];
+  /** 给兵种加的特殊动作 */
+  abilities?: Abilities;
+  /** 克制：打带某个标签的目标的倍率；兵种可以在使用特性时覆盖其中的数值 */
+  counter: MultTable;
+  /** 受击修正：被带某个标签的攻击方打的倍率（小于 1 是抗性，大于 1 是弱点） */
+  hitMod: MultTable;
+  /** 副武器（接敌途中投出的重标枪、弓） */
+  aux?: AuxAttack;
+  /** 改变主攻击的伤害类型（A_*），如抛射器械的穿刺攻击 */
+  atk?: number;
+}
+export const TRAITS: Record<string, TraitDef> = {};
+export interface TraitSpec {
+  name: string;
+  flag?: number;
+  tags?: string[];
+  abilities?: Abilities;
+  counter?: MultTable;
+  hitMod?: MultTable;
+  aux?: AuxAttack;
+  atk?: number;
+}
+export function defineTrait(key: string, t: TraitSpec): void {
+  if (TRAITS[key]) throw new Error(`特性重复：${key}`);
+  for (const tag of t.tags ?? []) tagBit(tag);
+  TRAITS[key] = { key, name: t.name, flag: t.flag ?? 0, tags: t.tags ?? [], abilities: t.abilities, counter: t.counter ?? {}, hitMod: t.hitMod ?? {}, aux: t.aux, atk: t.atk };
+}
+/** 兵种使用特性：只写 key，或写 [key, 覆盖的克制倍率] */
+export type TraitUse = string | [string, MultTable];
+
 // ---------- 兵种 ----------
-/** 定义兵种时填写的字段；没填的取类别缺省值，再取全局缺省值 */
+/** 定义兵种时填写的字段；没填的取原型缺省值，再取全局缺省值。点数维度的面板只填级数（lv） */
 export interface UnitSpec {
   /** 体型 key，决定碰撞半径、速度折扣、粮草消耗 */
   size?: string;
@@ -116,39 +211,25 @@ export interface UnitSpec {
   radius?: number;
   /** 默认队列的排次：0 最前。不填则按速度与射程推算（快的在前） */
   row?: number;
-  hp?: number;
-  /** 基准机动（未计体型折扣的奔跑速度，像素/秒） */
-  pace?: number;
   /** 行军（非战斗状态）速度占奔跑速度的比例 */
   marchMul?: number;
-  dmg?: number;
   atk?: number;
-  /** 0 为近战 */
-  range?: number;
   minRange?: number;
-  cd?: number;
-  armM?: number;
-  armP?: number;
-  /** 破甲比例 0..1 */
-  pen?: number;
-  splash?: number;
   proj?: number;
-  /** 对各类别的伤害倍率：类别 key → 倍率 */
-  vs?: Record<string, number>;
   vsBld?: number;
-  aux?: AuxAttack | null;
-  traits?: number;
+  /** 特性（原型的缺省特性在前，兵种自己的在后） */
+  traits?: TraitUse[];
+  /** 各点数维度（生命、输出、节奏、护甲、机动、射程、纪律、冲击、破甲、范围杀伤、举盾）相对原型基准的级数 */
+  lv?: Levels;
   abilities?: Abilities;
   vision?: number;
   /** 警戒距离：这个范围内出现敌人即进入战斗状态 */
   alert?: number;
   /** 近战单位的索敌距离（远程按射程推算） */
   acq?: number;
-  /** 纪律：士气基准的加减值 */
-  discipline?: number;
   /** 人形单位（骑兵也算）：打建筑时改为投掷火把。缺省 true */
   humanoid?: boolean;
-  /** 工程类：能破坏城邦的石墙。缺省 false */
+  /** 工程类：能破坏城池的石墙。缺省 false */
   siege?: boolean;
   /** 能边移动边攻击（骑兵）。其余单位出手时必须站定。缺省 false */
   mobile?: boolean;
@@ -164,7 +245,22 @@ export interface UnitDef {
   key: string;
   name: string;
   faction: FactionId;
-  cls: number;
+  /** 原型下标（ARCHETYPES） */
+  arch: number;
+  /** 标准混编军里的位置 key（POSITIONS） */
+  position: string;
+  /** 各维度相对原型基准的级数 */
+  lv: Levels;
+  /** 兵种自己的特性（不含原型与位置基准本来就带的），价目表按它们计价 */
+  ownTraits: string[];
+  /** 兵种点数（估算点数）：按价目表计账，阵营点数与单兵种上下限都用它；兵种整体实测（tools/measure/data/unit-points.json）只作参考 */
+  points: number;
+  /** 标签位（原型标签加特性给的标签） */
+  tags: number;
+  /** 克制：原型固定克制加特性给的克制 */
+  counter: Mult[];
+  /** 受击修正：原型固定的加特性给的 */
+  hitMod: Mult[];
   size: number;
   radius: number;
   /** 默认队列排次：0 前排，数值越大越靠后 */
@@ -187,7 +283,10 @@ export interface UnitDef {
   pen: number;
   splash: number;
   proj: number;
-  /** [类别下标] 伤害倍率 */
+  /**
+   * [目标兵种下标] 本兵种打它的克制倍率（原型固定克制 × 命中的克制 × 目标命中的受击修正，全部相乘）。
+   * 展开兵种时预先算好，出手与索敌只查表；新增兵种后用 linkMatchups 补齐。
+   */
   vs: number[];
   vsBld: number;
   aux: AuxAttack | null;
@@ -212,6 +311,8 @@ export interface UnitDef {
   desc: string;
   /** 0 初级形态，1 高级形态 */
   tier: number;
+  /** 测量工具（tools/measure）造出来登记进兵种表的基准单位或变体，不是正式兵种；正式兵种没有这个标记，用 isContentUnit 判断 */
+  probe?: true;
   /** 对应的高级 / 初级形态的兵种下标，没有则为 -1 */
   elite: number;
   basic: number;
@@ -228,20 +329,12 @@ export interface UnitDef {
 export const UNITS: UnitDef[] = [];
 export const UNIT_BY_KEY: Record<string, UnitDef> = {};
 
-/** 登记阶段暂存，finalizeContent() 时统一展开（这样类别、规则可以按任意顺序定义） */
-interface Pending {
-  faction: FactionId;
-  key: string;
-  name: string;
-  cls: string;
-  spec: UnitSpec;
-  desc: string;
-}
-const pending: Pending[] = [];
+/** 登记阶段暂存，finalizeContent() 时统一展开（这样原型、特性、规则可以按任意顺序定义） */
+const pending: UnitInput[] = [];
 
-export function defineUnit(faction: FactionId, key: string, name: string, cls: string, spec: UnitSpec, desc: string): void {
+export function defineUnit(faction: FactionId, key: string, name: string, arch: string, spec: UnitSpec, desc: string): void {
   if (pending.some(p => p.key === key) || UNIT_BY_KEY[key]) throw new Error(`兵种重复：${key}`);
-  pending.push({ faction, key, name, cls, spec, desc });
+  pending.push({ faction, key, name, arch, spec, desc });
 }
 
 export interface LevelRules {
@@ -268,76 +361,221 @@ export interface EliteRules {
   prefix: string;
 }
 
-/** 把登记的兵种展开成 UnitDef，每个兵种紧跟着生成它的高级形态。hpScale 为全局生命倍率 */
-export function finalizeUnits(lv: LevelRules, hpScale: number, elite: EliteRules): void {
-  for (const p of pending.splice(0)) {
-    const ci = CLASS_INDEX[p.cls];
-    if (ci === undefined) throw new Error(`未知类别：${p.cls}`);
-    const base = CLASSES[ci].base, s = p.spec;
-    const m: UnitSpec = { ...base, ...s };
-    const size = SIZE_INDEX[m.size ?? 'small'];
-    if (size === undefined) throw new Error(`未知体型：${m.size}`);
-    const sz = SIZES[size];
-    const vs = CLASSES.map(c => s.vs?.[c.key] ?? base.vs?.[c.key] ?? 1);
-    const range = m.range ?? 0;
-    const pace = m.pace ?? 56;
-    const speed = Math.round(pace * sz.speedMul);
-    const cd = m.cd ?? 1.2;
-    const splash = m.splash ?? 0;
-    const siege = m.siege ?? false;
-    const n = lv.thresholds.length;
-    const base0: UnitDef = {
-      idx: UNITS.length, key: p.key, name: p.name, faction: p.faction, cls: ci, size,
-      radius: m.radius ?? sz.radius,
-      // 近战在前、远程在后，同一档里快的在前；器械殿后
-      row: m.row ?? (speed < 45 ? 4 : (range > 0 ? 2 : 0) + (speed >= 85 ? 0 : 1)),
-      hp: 0, pace, speed, walk: Math.round(speed * (m.marchMul ?? 0.65)), forestMul: sz.forestMul,
-      dmg: 0, atk: m.atk ?? (range > 0 ? A_PIERCE : A_MELEE), range, minRange: m.minRange ?? 0, cd,
-      armM: 0, armP: 0, pen: m.pen ?? 0, splash, proj: m.proj ?? P_ARROW,
-      vs, vsBld: m.vsBld ?? 1, aux: m.aux ?? null,
-      traits: (base.traits ?? 0) | (s.traits ?? 0),
-      abilities: { ...base.abilities, ...s.abilities },
-      vision: Math.max(m.vision ?? 320, siege ? range : 0),
-      alert: 0, acq: 0, lookK: range > 60 ? Math.min(14, Math.floor(range / TILE)) : 1,
-      power: 0, upkeep: sz.upkeep, xpValue: 0,
-      discipline: m.discipline ?? 0, humanoid: m.humanoid ?? true, siege, mobile: m.mobile ?? false, model: m.model ?? p.key, desc: p.desc,
-      tier: 0, elite: -1, basic: -1,
-      lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [], lvRout: lv.rout.slice(0, n),
+/** 被击杀时给出的经验值：按原型 key 取，高级形态再乘倍率 */
+export interface XpValueRules {
+  value: Record<string, number>;
+  elite: number;
+}
+
+/** 原型加上特性之后的标签、克制、受击修正、被动特性标志与特殊动作 */
+export function composeTraits(arch: ArchetypeDef, uses: TraitUse[]): {
+  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined;
+} {
+  const mix = traitMix(uses);
+  return {
+    tags: tagBit(arch.key) | mix.tags, counter: [...multList(arch.counter), ...mix.counter], hitMod: [...multList(arch.hitMod), ...mix.hitMod],
+    flags: mix.flags, abilities: mix.abilities, aux: mix.aux, atk: mix.atk,
+  };
+}
+
+/** 一组特性给兵种带来的标签、克制、受击修正、被动特性标志与特殊动作 */
+export function traitMix(uses: TraitUse[]): {
+  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined;
+} {
+  let tags = 0, flags = 0;
+  const counter: Mult[] = [], hitMod: Mult[] = [];
+  const abilities: Abilities = {};
+  let aux: AuxAttack | null = null;
+  let atk: number | undefined;
+  for (const u of uses) {
+    const [key, over] = typeof u === 'string' ? [u, {}] : u;
+    const t = TRAITS[key];
+    if (!t) throw new Error(`未知特性：${key}`);
+    for (const tag of t.tags) tags |= tagBit(tag);
+    flags |= t.flag;
+    counter.push(...multList({ ...t.counter, ...over }));
+    hitMod.push(...multList(t.hitMod));
+    Object.assign(abilities, t.abilities);
+    if (t.aux) aux = t.aux;
+    if (t.atk !== undefined) atk = t.atk;
+  }
+  return { tags, counter, hitMod, flags, abilities, aux, atk };
+}
+
+/** 攻击方 a 打目标 t 的倍率：原型固定克制 × a 命中 t 标签的克制 × t 命中 a 标签的受击修正 */
+export function matchup(a: UnitDef, t: UnitDef): number {
+  let m = 1;
+  for (const c of a.counter) if (c.tag & t.tags) m *= c.mult;
+  for (const h of t.hitMod) if (h.tag & a.tags) m *= h.mult;
+  // 连乘有浮点误差（如 1.2 ÷ 1.2），收到六位小数
+  return Math.round(m * 1e6) / 1e6;
+}
+
+/** 新兵种已经进了 UNITS 之后，补齐它对所有兵种的倍率与所有兵种对它的倍率 */
+export function linkMatchups(d: UnitDef): void {
+  d.vs = UNITS.map(t => matchup(d, t));
+  for (const u of UNITS) if (u !== d) u.vs[d.idx] = matchup(u, d);
+}
+
+/** 一个待展开的兵种 */
+export interface UnitInput {
+  faction: FactionId;
+  key: string;
+  name: string;
+  /** 原型 key */
+  arch: string;
+  spec: UnitSpec;
+  desc: string;
+}
+
+/** 展开兵种用到的全局规则 */
+export interface ExpandRules {
+  levels: LevelRules;
+  /** 全局生命倍率 */
+  hpScale: number;
+  elite: EliteRules;
+  xp: XpValueRules;
+}
+
+/** 原型基准的战力估值（面板的估值式，不含位置价目） */
+export function archetypePower(arch: ArchetypeDef): number {
+  const p = arch.panel;
+  return panelPower(p.hp, p.dmg, p.cd, p.range > 0, p.splash > 0);
+}
+
+/**
+ * 把一个兵种展开成 UnitDef：面板由原型基准按级数算出，特性合成标签与克制。
+ * withElite 为真时紧跟着生成它的高级形态（两个都没有登记进 UNITS，登记用 registerUnit）。
+ */
+export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): UnitDef[] {
+  const ai = ARCHETYPE_INDEX[p.arch];
+  if (ai === undefined) throw new Error(`未知原型：${p.arch}`);
+  const arch = ARCHETYPES[ai], base = arch.base, s = p.spec;
+  for (const k of ['hp', 'dmg', 'cd', 'armM', 'armP', 'pace', 'range', 'discipline', 'impact', 'pen', 'splash']) {
+    if (k in s) throw new Error(`${p.key}：${k} 是点数维度，兵种只填级数（lv）`);
+  }
+  if (s.abilities?.shield) throw new Error(`${p.key}：举盾是点数维度，兵种只填级数（lv.block）`);
+  if ('aux' in s) throw new Error(`${p.key}：副武器用特性挂上去（traits）`);
+  if ('atk' in s) throw new Error(`${p.key}：伤害类型用特性改（traits），兵种不直接填`);
+  const L = s.lv ?? {};
+  for (const k of DIMS) if (L[k] && !arch.dims.includes(k)) throw new Error(`${p.key}：原型 ${arch.key} 没有开放维度 ${k}`);
+  for (const k of DIMS) {
+    const [lo, hi] = levelRange(arch, k);
+    if ((L[k] ?? 0) < lo || (L[k] ?? 0) > hi) throw new Error(`${p.key}：${k} 的级数 ${L[k]} 越出范围 ${lo}…${hi}`);
+  }
+  const m: UnitSpec = { ...base, ...s };
+  const uses = [...(base.traits ?? []), ...(s.traits ?? [])];
+  const mix = composeTraits(arch, uses);
+  const traitKeys = uses.map(u => (typeof u === 'string' ? u : u[0]));
+  const pos = positionOf(arch.key, t => traitKeys.includes(t));
+  const panel = applyLevels(arch.panel, L);
+  if (panel.armM < 0 || panel.armP < 0) throw new Error(`${p.key}：护甲低于 0`);
+  const abilities: Abilities = { ...base.abilities, ...mix.abilities, ...s.abilities };
+  if (panel.block > 0) abilities.shield = { block: panel.block, speedMul: SHIELD_SPEED_MUL };
+  if (arch.panel.impact > 0) {
+    if (!abilities.charge) throw new Error(`${p.key}：原型 ${arch.key} 有冲击基准但没有冲锋`);
+    abilities.charge = { ...abilities.charge, impact: panel.impact };
+  } else if (L.imp) throw new Error(`${p.key}：原型 ${arch.key} 没有冲锋，不能加冲击级数`);
+  const size = SIZE_INDEX[m.size ?? 'small'];
+  if (size === undefined) throw new Error(`未知体型：${m.size}`);
+  const sz = SIZES[size];
+  const range = panel.range, pace = panel.pace;
+  const speed = Math.round(pace * sz.speedMul);
+  const cd = panel.cd;
+  const splash = panel.splash;
+  const siege = m.siege ?? false;
+  const n = R.levels.thresholds.length;
+  const xpBase = R.xp.value[arch.key];
+  if (xpBase === undefined) throw new Error(`原型 ${arch.key} 没有登记经验值`);
+  if (arch.ranged !== (range > 0)) throw new Error(`${p.key}：原型 ${arch.key} 是${arch.ranged ? '远程' : '近战'}，射程是 ${range}`);
+  // 估算点数：兵种自己的特性（不含原型与位置基准本来就带的）按位置价目计
+  const carried = [...(base.traits ?? []), ...(POSITIONS[pos].trait ? [POSITIONS[pos].trait!] : [])]
+    .map(u => (typeof u === 'string' ? u : u[0]));
+  const ownTraits = traitKeys.filter(t => !carried.includes(t));
+  const points = estimatePoints(pos, L, ownTraits);
+  const power0 = powerFromPoints(archetypePower(arch), pos, points);
+  const base0: UnitDef = {
+    idx: UNITS.length, key: p.key, name: p.name, faction: p.faction, arch: ai, position: pos, lv: { ...L }, ownTraits, points,
+    tags: mix.tags, counter: mix.counter, hitMod: mix.hitMod, size,
+    radius: m.radius ?? sz.radius,
+    // 近战在前、远程在后，同一档里快的在前；器械殿后
+    row: m.row ?? (speed < 45 ? 4 : (range > 0 ? 2 : 0) + (speed >= 85 ? 0 : 1)),
+    hp: 0, pace, speed, walk: Math.round(speed * (m.marchMul ?? 0.65)), forestMul: sz.forestMul,
+    dmg: 0, atk: mix.atk ?? m.atk ?? (range > 0 ? A_PIERCE : A_MELEE), range, minRange: m.minRange ?? 0, cd,
+    armM: 0, armP: 0, pen: panel.pen, splash, proj: m.proj ?? P_ARROW,
+    vs: [], vsBld: m.vsBld ?? 1, aux: mix.aux,
+    traits: mix.flags,
+    abilities,
+    vision: Math.max(m.vision ?? 320, siege ? range : 0),
+    alert: 0, acq: 0, lookK: range > 60 ? Math.min(14, Math.floor(range / TILE)) : 1,
+    power: 0, upkeep: sz.upkeep, xpValue: 0,
+    discipline: panel.discipline, humanoid: m.humanoid ?? true, siege, mobile: m.mobile ?? false, model: m.model ?? p.key, desc: p.desc,
+    tier: 0, elite: -1, basic: -1,
+    lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [], lvRout: R.levels.rout.slice(0, n),
+  };
+  base0.acq = range > 0 ? range + (siege ? 0 : 40) : m.acq ?? 170;
+  base0.alert = Math.max(m.alert ?? 300, base0.acq);
+  // 初级与高级两个形态：除了生命、攻击、护甲、名称与模型，其余完全一样；等级与高级形态是全兵种统一的倍率，不计点
+  const out: UnitDef[] = [];
+  for (let tier = 0; tier < (withElite ? 2 : 1); tier++) {
+    const E = R.elite, lv = R.levels;
+    const hp0 = panel.hp * (tier ? E.hp : 1), dmg = panel.dmg * (tier ? E.dmg : 1);
+    const armM = panel.armM + (tier ? E.armor : 0), armP = panel.armP + (tier ? E.armor : 0);
+    const hp = Math.round(hp0 * R.hpScale);
+    const d: UnitDef = {
+      ...base0, hp, dmg, armM, armP, tier,
+      power: power0 * (tier ? Math.sqrt(E.hp * E.dmg) : 1),
+      xpValue: Math.round(xpBase * (tier ? R.xp.elite : 1)),
+      lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [],
     };
-    base0.acq = range > 0 ? range + (siege ? 0 : 40) : m.acq ?? 170;
-    base0.alert = Math.max(m.alert ?? 300, base0.acq);
-    // 初级与高级两个形态：除了生命、攻击、护甲、名称与模型，其余完全一样
-    for (let tier = 0; tier < 2; tier++) {
-      const hp0 = (m.hp ?? 60) * (tier ? elite.hp : 1), dmg = (m.dmg ?? 8) * (tier ? elite.dmg : 1);
-      const armM = (m.armM ?? 0) + (tier ? elite.armor : 0), armP = (m.armP ?? 0) + (tier ? elite.armor : 0);
-      const power = Math.sqrt((hp0 / 60) * (dmg / cd / 6.5)) * (range > 0 ? 1.15 : 1) * (splash > 0 ? 1.6 : 1);
-      const hp = Math.round(hp0 * hpScale);
-      const d: UnitDef = {
-        ...base0, idx: UNITS.length, hp, dmg, armM, armP, power, xpValue: Math.round(power * 10), tier,
-        lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [],
-      };
-      if (tier) {
-        d.key = `${p.key}_e`;
-        d.name = m.eliteName ?? `${m.elitePrefix ?? elite.prefix}${p.name}`;
-        d.model = `${base0.model}_e`;
-        d.basic = d.idx - 1;
-        UNITS[d.basic].elite = d.idx;
-      }
-      for (let l = 0; l < n; l++) {
-        d.lvHp.push(Math.round(hp * (1 + lv.hp * l)));
-        d.lvDmg.push(dmg * (1 + lv.dmg * l));
-        d.lvArmM.push(armM + lv.armor * l);
-        d.lvArmP.push(armP + lv.armor * l);
-        d.lvCd.push(cd * (1 - lv.cd * l));
-      }
-      UNITS.push(d);
-      UNIT_BY_KEY[d.key] = d;
+    if (tier) {
+      d.key = `${p.key}_e`;
+      d.name = m.eliteName ?? `${m.elitePrefix ?? E.prefix}${p.name}`;
+      d.model = `${base0.model}_e`;
     }
+    Object.assign(d, levelTables(d, lv));
+    out.push(d);
+  }
+  return out;
+}
+
+/** 是否正式兵种：兵种表里除了兵种定义展开的，还有测量工具登记的基准单位与变体（带 probe 标记），据点出兵、界面列表、价目与指纹只认正式兵种 */
+export const isContentUnit = (d: UnitDef): boolean => !d.probe;
+
+/** 按等级展开的数值（下标为等级）：生命、攻击、护甲、攻击间隔按等级规则逐级加成 */
+export function levelTables(d: Pick<UnitDef, 'hp' | 'dmg' | 'armM' | 'armP' | 'cd'>, lv: LevelRules):
+  Pick<UnitDef, 'lvHp' | 'lvDmg' | 'lvArmM' | 'lvArmP' | 'lvCd'> {
+  const t = { lvHp: [] as number[], lvDmg: [] as number[], lvArmM: [] as number[], lvArmP: [] as number[], lvCd: [] as number[] };
+  for (let l = 0; l < lv.thresholds.length; l++) {
+    t.lvHp.push(Math.round(d.hp * (1 + lv.hp * l)));
+    t.lvDmg.push(d.dmg * (1 + lv.dmg * l));
+    t.lvArmM.push(d.armM + lv.armor * l);
+    t.lvArmP.push(d.armP + lv.armor * l);
+    t.lvCd.push(d.cd * (1 - lv.cd * l));
+  }
+  return t;
+}
+
+/** 把展开好的兵种登记进兵种表：排在已有兵种之后，并补齐克制倍率表。高级形态跟在初级形态后面传入 */
+export function registerUnit(...ds: UnitDef[]): void {
+  for (const d of ds) {
+    d.idx = UNITS.length;
+    if (d.tier) {
+      d.basic = d.idx - 1;
+      UNITS[d.basic].elite = d.idx;
+    }
+    UNITS.push(d);
+    UNIT_BY_KEY[d.key] = d;
+    linkMatchups(d);
   }
 }
 
+/** 把登记的兵种展开成 UnitDef，每个兵种紧跟着生成它的高级形态 */
+export function finalizeUnits(R: ExpandRules): void {
+  for (const p of pending.splice(0)) registerUnit(...expandUnit(p, R));
+}
+
 // ---------- 阵营 ----------
-export type ReinfKind = 'base' | 'levy' | 'mixed' | 'cav' | 'siege' | 'elite';
 export interface FactionDef {
   id: FactionId;
   name: string;
@@ -347,27 +585,57 @@ export interface FactionDef {
   color: [number, number, number];
   /** 镜像对战时敌方使用的替代色 */
   altColor: [number, number, number];
-  /** 初始部队构成：兵种 key → 占比 */
+  /** 开局编制：兵种 key → 占全军兵力的比重，之和为 1 */
   army: [string, number][];
-  /** 初始兵力倍率（平衡用） */
-  armyMult: number;
-  reinfMult: number;
-  reinf: Record<ReinfKind, [string, number][]>;
+  /** 兵员级数：开局兵力份数的阵营级维度，每级 ×1.035（MANPOWER_STEP），可以取小数；兵员倍率只由它给出（见 manpowerMult） */
+  manpower: number;
+  /** 援军级数：城池、城镇援军份数的阵营级维度，每级 ×1.035（REINF_STEP），可以取小数；援军倍率只由它给出（见 reinforceMult）。营寨的每批份数固定，不受它影响 */
+  reinfLevel: number;
+  /** 城池、城镇的全兵种援军编成：兵种 key → 兵力份数（人数 = 份数 × 援军倍率 ÷ 兵力占用，每个兵种至少 1 人） */
+  reinf: [string, number][];
 }
 
 // ---------- 建筑 ----------
 export const BK_WALL = 0, BK_GATE = 1, BK_TOWER = 2, BK_KEEP = 3, BK_HOUSE = 4, BK_MAIN = 5;
+/**
+ * 建筑角色：军事建筑（会放箭，占领前必须拆光）、城防（只挡路，占领时不用拆）、
+ * 普通建筑（不可被攻击，范围伤害也不伤它）
+ */
+export const BR_MILITARY = 0, BR_DEFENSE = 1, BR_COMMON = 2;
+export type BuildingRole = typeof BR_MILITARY | typeof BR_DEFENSE | typeof BR_COMMON;
 export interface TowerDef {
   range: number;
   dmg: number;
   cd: number;
   /** 一轮同时放几支箭（各射一个目标，由近及远；目标不够时余下的都射最近那个） */
   arrows: number;
+  /** 一轮另外加几发炮弹（范围伤害，打最近的敌人）；缺省 0。据点 3 级的炮楼、主堡才有 */
+  shells?: number;
+}
+/** 某一级的据点加成（建筑的生命、护甲、箭伤、射程，以及升到这一级的花费） */
+export interface SiteLevelSpec {
+  hp: number;
+  armor: number;
+  dmg: number;
+  range: number;
+  /** 升到这一级的花费是 upgradeCost 的几倍（1 级不用升，填 0） */
+  cost: number;
+}
+export interface TierThree {
+  /** 3 级时的名称（角楼 → 炮楼） */
+  name: string;
+  /** 箭矢数量倍数，缺省 1 */
+  arrowMul?: number;
+  /** 每轮加几发炮弹，缺省 0 */
+  shells?: number;
 }
 export interface BuildingDef {
   key: string;
   name: string;
   kind: number;
+  role: BuildingRole;
+  /** 能被攻击：普通建筑不能（临时据点的行营例外，它是唯一要打的目标） */
+  hittable: boolean;
   w: number;
   h: number;
   hp: number;
@@ -383,11 +651,13 @@ export interface BuildingDef {
   fort: boolean;
   /** 顶上可以站人（石墙、角楼）：己方单位能从城内一侧走上去驻守，站立高度（像素）；0 表示不能 */
   top: number;
+  /** 所在据点升到 3 级后的变化；没有的话 3 级与 2 级相同 */
+  tier3?: TierThree;
 }
 
 // ---------- 据点 ----------
-export const SITE_HQ = 0, SITE_CITY = 1, SITE_TOWN = 2, SITE_CAMP = 3, SITE_VILLAGE = 4, SITE_RANCH = 5,
-  SITE_WORKSHOP = 6, SITE_FARM = 7, SITE_LUMBER = 8, SITE_QUARRY = 9, SITE_MINE = 10, SITE_OUTPOST = 11;
+export const SITE_CITY = 0, SITE_TOWN = 1, SITE_CAMP = 2,
+  SITE_FARM = 3, SITE_LUMBER = 4, SITE_QUARRY = 5, SITE_MINE = 6, SITE_OUTPOST = 7;
 /** 可以囤积的资源（粮食另算，见粮草） */
 export type ResKind = 'wood' | 'stone' | 'gold';
 export const RES_KINDS: ResKind[] = ['wood', 'stone', 'gold'];
@@ -396,17 +666,21 @@ export const RES_NAMES: Record<ResKind, string> = { wood: '木材', stone: '石�
 export const RES_SHORT: Record<ResKind, string> = { wood: '木', stone: '石', gold: '金' };
 export interface SiteInfo {
   label: string;
-  /** 占领圈半径（像素） */
+  /** 占领圈半径（像素），只用于没有围墙的据点（资源点、临时据点）；有围墙的据点（城池、营寨）的范围是围墙矩形，不看它（渲染只借它是否大于 0 判断有没有据点范围） */
   radius: number;
   /** 援军间隔（秒） */
   interval: number;
-  /** 出哪一类援军；null 表示不出援军 */
-  reinf: ReinfKind | null;
+  /** 出哪种援军：full 出阵营的全兵种表，pick 出占领方选定的那一个兵种；null 表示不出援军 */
+  reinf: 'full' | 'pick' | null;
+  /** full 类：援军表里每个兵种的数量倍率（同一张表在不同规模的据点里按它缩放） */
+  reinfScale: number;
+  /** pick 类：每批援军的兵力份数（人数 = 份数 × 难度倍率（只有电脑一方）÷ 所选兵种的兵力占用，至少 1 人） */
+  reinfForce: number;
   /** AI 评估的价值 */
   value: number;
   provides: string;
-  /** 据点大类：城邦有石墙，营寨是木栅或不设防；资源点只产资源；临时据点是部队自己搭的 */
-  category: 'fort' | 'camp' | 'resource' | 'outpost';
+  /** 据点大类：城池有石墙，营寨有木栅；资源点只产资源；临时据点是部队自己搭的 */
+  category: 'city' | 'camp' | 'resource' | 'outpost';
   /** 清空守军后，在旗帜下站多少秒才算占领；0 表示不能占领 */
   captureTime: number;
   /** 粮草产量：能养活「开局全军」的百分之几 */
@@ -419,10 +693,10 @@ export interface SiteInfo {
   upgradeCost: number;
   /** 算作可以落脚的据点：部队在里面休整回血、溃兵往这里逃、雪天有遮蔽 */
   haven: boolean;
-  /** 计入「占有据点数」（士气） */
+  /** 计入「占有据点数」（士气）；一方此类据点全部丢失即判负 */
   counts: boolean;
-  /** 可以建几座箭塔；有敌方箭塔立着时不能占领 */
+  /** 可以建几座哨塔；军事建筑（含自建的哨塔）没拆光不能占领 */
   towerSlots: number;
-  /** 敌占时要先拆毁主建筑才能读秒（主建筑倒了据点即成废墟） */
-  razeFirst: boolean;
+  /** 建筑会自行修复、倒塌的自行重建（交战中停）；资源点没有恢复能力 */
+  regen: boolean;
 }

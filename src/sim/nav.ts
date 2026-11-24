@@ -34,6 +34,8 @@ export interface NavBuilding {
   owner: number;
   alive: boolean;
   gate: boolean;
+  /** 能被攻击；不能的（普通建筑）对谁都是实心障碍，没有「打穿」这条路 */
+  hittable: boolean;
   breach: number;
   /** 己方可以走上去（城墙顶）；值为额外的寻路代价，0 表示不能 */
   climb: number;
@@ -129,7 +131,7 @@ export class Nav {
         // 自家城墙：能上去驻守，但寻路时尽量走城门
         this.cost[t][c] = base + b.climb;
         this.block[t][c] = 0;
-      } else if (b.owner === t) {
+      } else if (b.owner === t || !b.hittable) {
         this.cost[t][c] = 0;
         this.block[t][c] = 1;
       } else {

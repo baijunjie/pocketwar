@@ -23,7 +23,7 @@ export function updateSupply(w: World, seconds = 1): void {
   for (let tm = 1; tm <= 2; tm++) {
     if (w.upkeep0[tm] <= 0) continue;
     let prod = 0;
-    for (const s of w.sites) if (s.owner === tm && !s.disabled) prod += siteFood(w, s.type, tm);
+    for (const s of w.sites) if (s.owner === tm) prod += siteFood(w, s.type, tm);
     const cons = w.upkeep[tm];
     w.foodIn[tm] = prod;
     w.foodOut[tm] = cons;

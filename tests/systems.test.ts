@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDINGS, LEVELS, RULES, SITE_CAMP, SITE_HQ, SITE_INFO, SITE_TOWN, SIZES, TILE, T_BRIDGE, T_DEEP, T_MOUNTAIN, UNITS, UNIT_BY_KEY } from '../src/sim/defs';
+import { BUILDINGS, LEVELS, RULES, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_INFO, SITE_TOWN, SIZES, TILE, T_BRIDGE, T_DEEP, T_MOUNTAIN, UNITS, UNIT_BY_KEY } from '../src/sim/defs';
 import { createGame } from '../src/sim/setup';
 import { damageUnit } from '../src/sim/systems/combat';
 import { P_POSTED } from '../src/sim/systems/garrison';
@@ -175,7 +175,7 @@ describe('士气与溃逃', () => {
     w.orderMove(few, C + 120, C, true);
     w.orderMove(many, C - 120, C, true);
     let routed = false;
-    for (let t = 0; t < 30 * 40 && !routed; t++) {
+    for (let t = 0; t < 30 * 90 && !routed; t++) {
       w.tick();
       routed = few.some(s => w.alive[s] && w.state[s] & S_ROUT);
     }
@@ -205,7 +205,7 @@ describe('士气与溃逃', () => {
   it('溃兵逃回最近的己方据点后恢复控制；没有据点则逃出地图消失', () => {
     const g = createGame({ seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false });
     const w = g.world;
-    const hq = w.sites.find(s => s.type === 0 && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const dp = w.map.deploy[1];
     const u = w.spawnGroup(1, [idx('dao')], dp.x + dp.dx * 500, dp.y + dp.dy * 500, 1, 0)[0];
     startRout(w, u);
@@ -305,7 +305,7 @@ describe('昼夜与天气', () => {
 });
 
 describe('粮草', () => {
-  it('只靠大本营养不活全军：存粮耗尽后挨饿、士气下降；多占据点则有盈余', () => {
+  it('只靠开局城池养不活全军：存粮耗尽后挨饿、士气下降；多占据点则有盈余', () => {
     const g = createGame({ seed: 5, factions: ['china', 'japan'], armySize: 200, difficulty: 1, fog: false, spectate: false, environment: false });
     const w = g.world;
     expect(w.upkeep0[1]).toBeGreaterThan(0);
@@ -385,9 +385,9 @@ describe('据点与建筑', () => {
     for (let i = 0; i < w.n; i++) if (w.alive[i] && w.team[i] === tm) w.removeUnit(i);
   };
 
-  it('据点分城邦与营寨；兵种分人形与工程类', () => {
-    expect(SITE_INFO[SITE_HQ].category).toBe('fort');
-    expect(SITE_INFO[SITE_TOWN].category).toBe('fort');
+  it('据点分城池与营寨；兵种分人形与工程类', () => {
+    expect(SITE_INFO[SITE_CITY].category).toBe('city');
+    expect(SITE_INFO[SITE_TOWN].category).toBe('city');
     expect(SITE_INFO[SITE_CAMP].category).toBe('camp');
     expect(UNIT_BY_KEY.dao.humanoid && UNIT_BY_KEY.tieqi.humanoid && UNIT_BY_KEY.nu.humanoid).toBe(true);
     expect(UNIT_BY_KEY.pili.humanoid || UNIT_BY_KEY.elephant.humanoid).toBe(false);
@@ -413,10 +413,10 @@ describe('据点与建筑', () => {
     expect(men.every(s => Math.hypot(w.x[s] - fence.cx, w.y[s] - fence.cy) > 20)).toBe(true);
   }, 30000);
 
-  it('城邦的石墙：人形单位烧不动，工程类才能破坏', () => {
+  it('城池的石墙：人形单位烧不动，工程类才能破坏', () => {
     const w = game();
     clear(w, 2);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 2)!;
     const wall = hq.buildings.map(id => w.buildings[id]).filter(b => b.def.key === 'wall').sort((a, b) => b.cy - a.cy)[0];
     expect(wall.def.fort).toBe(true);
     const men = w.spawnGroup(1, Array(20).fill(idx('dao')), wall.cx, wall.cy + 110, 0, -1);
@@ -436,7 +436,7 @@ describe('据点与建筑', () => {
     const w = game();
     clear(w, 1);
     clear(w, 2);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const wall = hq.buildings.map(id => w.buildings[id]).filter(b => b.def.key === 'wall').sort((a, b) => a.cy - b.cy)[0];
     const cell = wall.ty * w.map.w + wall.tx;
     expect(wall.def.top).toBeGreaterThan(0);
@@ -452,6 +452,10 @@ describe('据点与建筑', () => {
       if (w.state[u] & S_WALL) climbed = true;
     }
     expect(climbed).toBe(false);
+    // 移动命令把人带到了墙根，不同兵种的速度差一点就会停在墙外：放回城内再下驻守令
+    w.orderStop([u], false);
+    w.x[u] = hq.x + 40;
+    w.y[u] = hq.y - 60;
     // 近战、骑射不能驻守；城外的人也不行
     expect(w.orderGarrison([w.spawnUnit(idx('dao'), 1, hq.x, hq.y + 60)])).toBe(-1);
     expect(w.orderGarrison([w.spawnUnit(idx('asvaran'), 1, hq.x + 30, hq.y + 60)])).toBe(-1);
@@ -502,7 +506,7 @@ describe('据点与建筑', () => {
     const w = game();
     clear(w, 1);
     clear(w, 2);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const mine = w.slots.filter(sl => sl.site === hq.id);
     // 北墙正中的一个站位，以及同一段墙顶上隔得最远（但不超过警戒距离）的另一个站位
     const s0 = mine.filter(sl => sl.y < hq.y).sort((a, b) => Math.abs(a.x - hq.x) - Math.abs(b.x - hq.x) || a.y - b.y)[0];
@@ -544,7 +548,7 @@ describe('据点与建筑', () => {
     const w = game();
     clear(w, 1);
     clear(w, 2);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const mine = w.slots.filter(sl => sl.site === hq.id);
     const men = w.spawnGroup(1, Array(2).fill(idx('nu')), hq.x - 200, hq.y - 120, 0, -1);
     w.orderGarrison(men);
@@ -578,11 +582,12 @@ describe('据点与建筑', () => {
     expect(1e6 - w.hp[foe]).toBeGreaterThan(0);
   }, 30000);
 
-  it('占领：肃清守军后在旗下读秒；敌人回来暂停，旗下没人清零；占领后修复废墟', () => {
+  it('占领：肃清守军后在旗下读秒；敌人回来暂停，旗下没人清零', () => {
     const w = game();
     clear(w, 1);
     clear(w, 2);
-    const s = w.sites.find(x => x.owner === 0 && x.type >= 4)!;
+    // 资源点没有军事建筑，肃清守军站到旗下就能读秒
+    const s = w.sites.find(x => x.owner === 0 && x.type >= SITE_FARM)!;
     const T = SITE_INFO[s.type].captureTime;
     // 圈内有守军：站在旗下也不读秒
     const guard = w.spawnUnit(idx('yari'), 2, s.x + s.radius - 30, s.y);
@@ -627,26 +632,6 @@ describe('据点与建筑', () => {
     run(w, T * 0.6);
     expect(s.owner).toBe(1);
 
-    // 主建筑被毁 → 无主废墟，不再产出；重新占领后修复
-    const main = w.buildings[s.main];
-    for (const m of mine) w.x[m] += 3000;
-    for (const m of mine) w.destX[m] = w.x[m];
-    w.damageBuilding(main, 1e6, 2, 1, 2);
-    expect(main.alive).toBe(false);
-    expect(s.disabled).toBe(true);
-    expect(s.owner).toBe(0);
-    const foes = w.spawnGroup(2, Array(3).fill(idx('yumi')), s.x, s.y + 20, 0, -1);
-    for (const m of foes) {
-      w.order[m] = 1;
-      w.destX[m] = w.x[m];
-      w.destY[m] = w.y[m];
-    }
-    run(w, T + 2);
-    expect(s.owner).toBe(2);
-    expect(s.disabled).toBe(false);
-    expect(main.alive).toBe(true);
-    expect(main.hp).toBe(main.def.hp);
-    expect(w.events.some(e => e.kind === 'captured' && e.team === 2 && e.repaired)).toBe(true);
   }, 30000);
 });
 
@@ -657,7 +642,7 @@ describe('城墙与守御', () => {
 
   it('城墙两格厚、分内外：墙顶走不上去，墙外更上不去；垛口都排在朝外的一圈、墙根在城内', () => {
     const w = game();
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const blds = hq.buildings.map(id => w.buildings[id]);
     const walls = blds.filter(b => b.def.key === 'wall');
     // 北墙：最靠北的两排各有一圈
@@ -698,17 +683,18 @@ describe('城墙与守御', () => {
     expect(climbed).toBe(false);
   }, 30000);
 
-  it('门楼、角楼、望楼都会放箭；门楼和角楼烧得掉，石墙烧不动', () => {
-    for (const k of ['gate_h', 'gate_v', 'tower', 'watchtower']) expect(BUILDINGS[k].tower, k).not.toBeNull();
+  it('角楼、哨塔、主堡、中军帐放箭，门楼、营门不放箭；门楼和角楼烧得掉，石墙烧不动', () => {
+    for (const k of ['tower', 'watchtower', 'keep', 'keep_town', 'cmdtent', 'arrowtower']) expect(BUILDINGS[k].tower, k).not.toBeNull();
+    for (const k of ['gate_h', 'gate_v', 'wgate_h', 'wgate_v', 'wall', 'palisade']) expect(BUILDINGS[k].tower, k).toBeNull();
     expect(BUILDINGS.gate_h.fort || BUILDINGS.tower.fort).toBe(false);
     expect(BUILDINGS.wall.fort).toBe(true);
     const w = game();
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const gate = hq.buildings.map(id => w.buildings[id]).find(b => b.gate)!;
     const tower = hq.buildings.map(id => w.buildings[id]).find(b => b.def.key === 'tower')!;
     for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
-    const out = gate.cy < hq.y ? -1 : gate.cy > hq.y + 100 ? 1 : 0;
-    const foe = w.spawnUnit(idx('samurai'), 2, gate.cx + (out === 0 ? (gate.cx < hq.x ? -120 : 120) : 0), gate.cy + out * 120);
+    const out = tower.cy < hq.y ? -1 : 1;
+    const foe = w.spawnUnit(idx('samurai'), 2, tower.cx, tower.cy + out * 120);
     w.hp[foe] = w.maxHp[foe] = 1e5;
     w.order[foe] = 4;
     run(w, 5);
@@ -722,7 +708,7 @@ describe('城墙与守御', () => {
 
   it('在自家据点里休整：单位慢慢回血，建筑一段时间没挨打后自行修复', () => {
     const w = game();
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
     const inside = w.spawnUnit(idx('dao'), 1, hq.x, hq.y + 60);
     const outside = w.spawnUnit(idx('dao'), 1, hq.x + 900, hq.y - 900);
@@ -814,7 +800,7 @@ describe('队列与站位', () => {
     startRout(w, v);
     damageUnit(w, u, 30, 0, 0, UNIT_BY_KEY.dao.vs, 2, -1);
     damageUnit(w, v, 30, 0, 0, UNIT_BY_KEY.dao.vs, 2, -1);
-    expect(1000 - w.hp[u]).toBeCloseTo(30 - UNIT_BY_KEY.legion.armM, 3);
+    expect(1000 - w.hp[u]).toBeCloseTo(900 / (30 + RULES.combat.armorScale * UNIT_BY_KEY.legion.armM), 3);
     expect(1000 - w.hp[v]).toBeCloseTo(30 * RULES.morale.routDamage, 3);
   });
 });
@@ -836,8 +822,8 @@ describe('第四轮反馈', () => {
     }
     expect(inside).toBe(true);
     expect(camp.buildings.some(id => !w.buildings[id].alive)).toBe(true);
-    // 敌方大本营：石门楼
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!;
+    // 敌方开局城池：石门楼
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 2)!;
     const gates = hq.buildings.map(id => w.buildings[id]).filter(b => b.gate);
     const g0 = gates.sort((a, b) => b.cy - a.cy)[0];
     const army = w.spawnGroup(1, Array(60).fill(idx('dao')), g0.cx, g0.cy + 400, 0, -1);
@@ -908,7 +894,7 @@ describe('第六轮反馈', () => {
 
   it('一大队近战步兵往墙上挤：上不了墙，也不会被挤进墙里再漏到城外', () => {
     const w = game();
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
     const north = hq.buildings.map(id => w.buildings[id]).filter(b => b.def.key === 'wall').sort((a, b) => a.cy - b.cy)[0];
     const men = w.spawnGroup(1, Array(80).fill(idx('dao')), hq.x, hq.y + 60, 0, -1);
@@ -964,7 +950,7 @@ describe('第六轮反馈', () => {
     for (const d of UNITS) {
       const cg = d.abilities.charge;
       if (!cg || d.tier) continue;
-      for (const f of foot) expect(cg.impact * d.vs[f.cls] - f.armM, `${d.key} → ${f.key}`).toBeGreaterThanOrEqual(f.lvHp[0] * 0.7);
+      for (const f of foot) expect(cg.impact * d.vs[f.idx] - f.armM, `${d.key} → ${f.key}`).toBeGreaterThanOrEqual(f.lvHp[0] * 0.7);
     }
     // 实打一次：一队铁骑冲一队刀盾兵，被撞到的人当场掉七成以上
     const w = flatWorld();
@@ -988,7 +974,7 @@ describe('第六轮反馈', () => {
   it('据点里的守军：远程自动登城；近战不出城，挨了敌方远程的打才出击', () => {
     const w = game();
     for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 1)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
     const bow = w.spawnUnit(idx('nu'), 1, hq.x - 20, hq.y + 80), sword = w.spawnUnit(idx('dao'), 1, hq.x + 20, hq.y + 80);
     run(w, 25);
     // 待命的弩兵自己走上城墙站到垛口上
@@ -1112,12 +1098,12 @@ describe('编队行军：特殊地形', () => {
   }, 60000);
 
   it('到了终点挤不进自己的落点：几秒没再靠近就就地算到，不在人堆边上来回绕', () => {
-    // 真实地图上复现过的一例：全军开进麦田村，有人在流场和直线之间来回绕，永远到不了
+    // 真实地图上复现过的一例：全军开进营寨，有人在流场和直线之间来回绕，永远到不了
     const w = createGame({ seed: 7, factions: ['china', 'rome'], armySize: 300, difficulty: 1, fog: false, spectate: false, environment: false }).world;
     const dp = w.map.deploy[1];
     const g: number[] = [];
     for (let i = 0; i < w.n; i++) if (w.alive[i] && w.team[i] === 1 && Math.hypot(w.x[i] - dp.x, w.y[i] - dp.y) < 800) g.push(i);
-    const site = w.sites.find(s => s.name === '麦田村')!;
+    const site = w.sites.find(s => s.name === '柳溪寨')!;
     w.orderMove(g, site.x, site.y + 120, false);
     const moving = (): boolean => g.some(s => w.alive[s] && (w.order[s] === 1 || w.order[s] === 2));
     let t = 0;

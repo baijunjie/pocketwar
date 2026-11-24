@@ -8,8 +8,9 @@
     "strict": true,
     "noEmit": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "tools"]
 }

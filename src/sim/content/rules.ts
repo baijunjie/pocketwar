@@ -2,7 +2,7 @@
  * 规则数值：各系统的可调参数集中在这里，系统代码里不写死数字。
  * 每一项的玩法含义见 docs/product/ 下按功能分篇的产品文档；改了这里要同步改对应的那份。
  */
-import { EliteRules, LevelRules, TowerDef, defineSize } from './types';
+import { EliteRules, LevelRules, SiteLevelSpec, defineSize } from './types';
 
 // ---------- 体型：越大越慢、越吃粮、越容易被围 ----------
 defineSize({ key: 'small', name: '小型', radius: 6, speedMul: 1, upkeep: 1, slots: 3, forestMul: 1 });
@@ -30,12 +30,24 @@ export const ELITE: EliteRules = { hp: 1.35, dmg: 1.25, armor: 2, prefix: '重�
 
 export const RULES = {
   xp: {
+    /**
+     * 被击杀时给出的经验值：只看原型（原型 key → 经验），不随兵种自身强弱变。
+     * 取各原型基准单位战力估值的 10 倍（取整）；经验值随兵种强弱变会让升级线附近的战果跳变。
+     */
+    value: { inf: 12, ranged: 8, cav: 21, cavr: 13, vehicle: 41, siege: 30, bolt: 26 } as Record<string, number>,
+    /** 高级形态给出的经验值相对初级形态的倍率 */
+    elite: 1.3,
     /** 击杀者拿到目标经验值的全额，助攻者拿这个比例 */
     assist: 0.4,
     /** 多少秒内打过目标算助攻 */
     assistWindow: 6,
   },
   combat: {
+    /**
+     * 伤害 = d² ÷ (d + armorScale × 护甲 × (1 − 破甲))，d 是打击强度（攻击 × 克制倍率；打建筑时是攻击 × 对建筑倍率）。
+     * 单位与建筑共用，不设保底。
+     */
+    armorScale: 2,
     /** 视野内最后一次见到敌人后，战斗状态再维持多少秒 */
     linger: 5,
     /** 追不上 / 挤不进去多久后改找别的目标 */
@@ -105,7 +117,7 @@ export const RULES = {
     bldSeek: 160,
   },
   vision: {
-    /** 建筑提供的视野（像素）：会放箭的箭塔 / 塔楼看得远得多 */
+    /** 建筑提供的视野（像素）：会放箭的哨塔 / 塔楼看得远得多 */
     building: 192,
     tower: 560,
   },
@@ -164,7 +176,7 @@ export const RULES = {
     shockDecay: 0.12,
     /** 全局战力对比 */
     global: 10,
-    /** 除大本营外没有任何据点 */
+    /** 没有任何据点 */
     noSite: -8,
     /** 每多一个据点 */
     perSite: 2,
@@ -204,7 +216,7 @@ export const RULES = {
     gate: 0.3,
     /** 站在城墙上：射程倍率、所受远程伤害倍率 */
     wallRange: 1.15,
-    wallCover: 0.6,
+    wallCover: 0.5,
     /** 己方单位上墙的寻路代价（越大越倾向走城门）；只能从城内一侧上下 */
     climbCost: 60,
     /** 垛口位到墙根（城内空地）最多隔几格墙顶 */
@@ -221,8 +233,6 @@ export const RULES = {
   site: {
     /** 己方据点内、不在战斗中的单位每秒恢复的生命比例 */
     unitRegen: 0.012,
-    /** 大本营没有占领圈：离中心这么近就算在据点里 */
-    hqRadius: 400,
     /** 援军在据点中心往南多远处出现 */
     spawnOff: 70,
     /** 在自家据点里待命的守军的警戒距离（与塔楼的视野相当）：远程的会上前迎击这么远的敌人 */
@@ -299,19 +309,21 @@ export const RULES = {
   economy: {
     /** 兵种升为高级形态：每份口粮（体型）花多少黄金 */
     unitGold: 10,
-    /** 据点升级后：建筑生命倍率、护甲加成、箭塔伤害与射程倍率 */
-    siteHp: 1.6,
-    siteArmor: 3,
-    towerDmg: 1.5,
-    towerRange: 1.1,
-    /** 升级后的据点，主建筑若原本不会放箭，就添一队弓手 */
-    mainTower: { range: 240, dmg: 16, cd: 1.2, arrows: 1 } as TowerDef,
-    /** 升级后每轮放箭数量的倍数 */
-    towerArrows: 2,
+    /**
+     * 据点各级的加成，下标 = 等级 − 1，都相对 1 级计：建筑生命上限倍率、护甲加成（近战、远程各加）、箭矢伤害倍率、射程倍率，
+     * 以及升到这一级的花费是 SiteInfo.upgradeCost（升到 2 级的花费）的几倍。
+     */
+    siteLevels: [
+      { hp: 1, armor: 0, dmg: 1, range: 1, cost: 0 },
+      { hp: 1.3, armor: 2, dmg: 1.25, range: 1.05, cost: 1 },
+      { hp: 1.6, armor: 3, dmg: 1.5, range: 1.1, cost: 1.5 },
+    ] as SiteLevelSpec[],
+    /** 3 级防御建筑的炮弹：单发伤害与爆炸半径，不乘等级加成；射程与间隔跟所在建筑一致 */
+    shell: { dmg: 36, splash: 20 },
     /** 有石料 / 木材时建筑自修加快到几倍，以及每修复 100 点生命消耗多少 */
     repairBoost: 4,
     repairCost: 1,
-    /** 资源点的箭塔：用哪种建筑、每座花多少木材 */
+    /** 资源点的哨塔：用哪种建筑、每座花多少木材 */
     towerKey: 'arrowtower',
     towerCost: 50,
     /** 临时据点：用哪种建筑、花多少木材、每方最多几座、部队离多近才能搭起来、下令后多久搭不成就作罢 */

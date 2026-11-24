@@ -1,13 +1,14 @@
-/** 战斗结算：出手、伤害、阵亡、经验与升级、投射物、箭楼 */
+/** 战斗结算：出手、伤害、阵亡、经验与升级、投射物、防御建筑（角楼、哨塔、主堡等）放箭 */
 import {
-  A_FIRE, A_MELEE, A_PIERCE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_HQ, SITE_INFO, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
+  A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_INFO, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
   T_FOREST, T_HILL, UnitDef,
 } from '../content';
 import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
 import type { Building, World } from '../world';
+import { canAttackBuilding } from './targeting';
 
-/** 箭楼 / 主堡开火时使用的「攻击者」数据 */
-const TOWER_ATTACKER = { vs: new Array<number>(64).fill(1), vsBld: 0, siege: false };
+/** 防御建筑（角楼、哨塔、主堡等）开火时使用的「攻击者」数据 */
+const TOWER_ATTACKER = { vs: null, vsBld: 0, siege: false };
 
 export function attack(w: World, i: number, d: UnitDef, tgt: number, tt: number): void {
   const lv = w.level[i];
@@ -53,7 +54,12 @@ export function attack(w: World, i: number, d: UnitDef, tgt: number, tt: number)
   }
 }
 
-export function damageUnit(w: World, j: number, raw: number, atk: number, pen: number, vs: number[], ateam: number,
+/** 强度对比式：打击强度 d 对上有效护甲 armor（已计破甲）后的伤害。单位与建筑共用，不设保底 */
+export function mitigate(d: number, armor: number): number {
+  return d > 0 ? d * d / (d + RULES.combat.armorScale * armor) : 0;
+}
+
+export function damageUnit(w: World, j: number, raw: number, atk: number, pen: number, vs: ArrayLike<number> | null, ateam: number,
   aslot: number): void {
   const td = w.defs[w.type[j]];
   const lv = w.level[j];
@@ -61,7 +67,9 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
   // 雪天在据点之外：手脚冻僵，防御打折
   if (w.env.snowing && !w.sheltered[j]) arm *= RULES.env.snowArmor;
   const routed = (w.state[j] & S_ROUT) !== 0;
-  let dmg = routed ? raw * vs[td.cls] * RULES.morale.routDamage : raw * vs[td.cls] - arm * (1 - pen);
+  // 溃兵不计护甲；其余按强度对比式：打击强度 d 对上护甲，没有保底
+  const d0 = vs ? raw * vs[td.idx] : raw;
+  let dmg = routed ? d0 * RULES.morale.routDamage : mitigate(d0, arm * (1 - pen));
   if (atk === A_PIERCE) {
     if (td.traits & TR_TESTUDO) dmg *= 0.65;
     const sh = td.abilities.shield;
@@ -76,7 +84,6 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
   }
   // 等级的防御加成
   if (lv > 0) dmg /= 1 + LEVELS.def * lv;
-  if (dmg < 1) dmg = 1;
   w.hp[j] -= dmg;
   w.flash[j] = 0.12;
   w.combatT[j] = RULES.combat.linger;
@@ -106,9 +113,9 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
     w.target[j] = aslot;
     w.targetUid[j] = w.uid[aslot];
   } else if (aslot < NONE && w.order[j] !== O_HOLD && (td.range === 0 || td.humanoid || td.vsBld >= 2)) {
-    // 被箭塔射中：打得动它、离岗位又不远，就上去拆
+    // 被哨塔射中：打得动它、离岗位又不远，就上去拆
     const b = w.buildings[-aslot - 2];
-    if (!b.alive || b.owner === w.team[j] || (b.def.fort && !td.siege)) return;
+    if (!canAttackBuilding(b, w.team[j], td.siege)) return;
     if (w.order[j] === O_IDLE && (b.cx - w.homeX[j]) ** 2 + (b.cy - w.homeY[j]) ** 2 > RULES.combat.leash ** 2) return;
     w.target[j] = aslot;
   }
@@ -160,7 +167,7 @@ export function kill(w: World, j: number, ateam: number, killer: number): void {
 }
 
 export function splashDamage(w: World, cx: number, cy: number, radius: number, dmg: number, atk: number, pen: number,
-  ad: { vs: number[]; vsBld: number; siege: boolean }, ateam: number, aslot: number, hitBuilding: boolean): void {
+  ad: { vs: ArrayLike<number> | null; vsBld: number; siege: boolean }, ateam: number, aslot: number, hitBuilding: boolean): void {
   const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
   const reach = radius + 15;
   let gx0 = ((cx - reach) / GRID) | 0, gx1 = ((cx + reach) / GRID) | 0;
@@ -185,18 +192,17 @@ export function splashDamage(w: World, cx: number, cy: number, radius: number, d
   }
 }
 
-/** @param canFort 攻击者是否为工程类；不是的话打不动城防工事（石墙、石箭楼） */
+/** @param canFort 攻击者是否为工程类；不是的话打不动石质城防（城墙） */
 export function damageBuilding(w: World, b: Building, raw: number, atk: number, vsBld: number, ateam: number,
   canFort = true): void {
   if (!b.alive) return;
   const def = b.def;
-  if (def.fort && !canFort) return;
+  // 普通建筑不可被攻击（投射物与范围伤害也不伤它）；城防工事只有工程类打得动
+  if (!def.hittable || (def.fort && !canFort)) return;
   const S = RULES.siege;
   const arm = atk === A_MELEE ? def.armM + b.armor : atk === A_PIERCE ? def.armP + b.armor : 0;
   // 火把：木头一点就着，石头房子烧得慢，门楼与角楼更慢
-  let dmg = atk === A_FIRE ? raw * (def.wood ? S.wood : b.gate || def.kind === BK_TOWER ? S.gate : S.stone) : raw * vsBld - arm;
-  const min = atk === A_PIERCE ? 0.5 : 1;
-  if (dmg < min) dmg = min;
+  const dmg = atk === A_FIRE ? raw * (def.wood ? S.wood : b.gate || def.kind === BK_TOWER ? S.gate : S.stone) : mitigate(raw * vsBld, arm);
   b.hp -= dmg;
   b.hitTick = w.tickCount;
   if (b.hp <= 0) destroyBuilding(w, b, ateam);
@@ -209,26 +215,17 @@ function destroyBuilding(w: World, b: Building, ateam: number): void {
   w.addFx(FX_COLLAPSE, b.cx, b.cy, Math.max(b.w, b.h));
   if (b.site < 0) return;
   const s = w.sites[b.site];
-  if (s.main !== b.id) return;
-  if (s.type === SITE_HQ) {
-    if (!w.winner) {
-      w.winner = 3 - s.owner;
-      w.events.push({ kind: 'gameover', winner: w.winner });
-    }
-  } else {
-    // 主建筑被毁：据点成为无主的废墟，谁重新占领谁就把它修好
-    s.disabled = true;
-    s.owner = s.capTeam = 0;
-    s.cap = 0;
-    // 临时据点毁了就没了，不会重生
-    if (SITE_INFO[s.type].category === 'outpost') s.gone = true;
-    for (const id of s.buildings) {
-      const o = w.buildings[id];
-      o.owner = 0;
-      if (o.alive) w.nav.refresh(o);
-    }
-    w.events.push({ kind: 'razed', site: s.id, team: ateam });
+  // 中央建筑被毁只会终止援军（见 updateSites），据点照旧归原主；只有临时据点例外：行营被毁，这座据点就没了
+  if (s.main !== b.id || SITE_INFO[s.type].category !== 'outpost') return;
+  s.gone = true;
+  s.owner = s.capTeam = 0;
+  s.cap = 0;
+  for (const id of s.buildings) {
+    const o = w.buildings[id];
+    o.owner = 0;
+    if (o.alive) w.nav.refresh(o);
   }
+  w.events.push({ kind: 'razed', site: s.id, team: ateam });
 }
 
 // ---------------------------------------------------------------- 投射物
@@ -354,16 +351,27 @@ export function updateProjectiles(w: World): void {
   }
 }
 
-// ---------------------------------------------------------------- 箭楼
+// ---------------------------------------------------------------- 防御建筑放箭
+/**
+ * 防御建筑（角楼、哨塔等）找射击目标：有主的打对方的单位；中立的两边都打，且不受视野限制（中立方没有视野）。
+ * 返回离这座建筑最近、距离不小于 minRange 的单位。
+ */
+function towerFind(w: World, b: Building, maxR: number, minRange: number): number {
+  if (b.owner) return w.findEnemy(b.cx, b.cy, b.owner, maxR, minRange);
+  const a = w.findEnemy(b.cx, b.cy, 1, maxR, minRange, false), c = w.findEnemy(b.cx, b.cy, 2, maxR, minRange, false);
+  if (a === NONE || c === NONE) return a === NONE ? c : a;
+  return (w.x[a] - b.cx) ** 2 + (w.y[a] - b.cy) ** 2 <= (w.x[c] - b.cx) ** 2 + (w.y[c] - b.cy) ** 2 ? a : c;
+}
+
 export function updateTowers(w: World): void {
   for (const b of w.armed) {
     const tw = b.tower;
-    if (!tw || !b.alive || b.down || b.owner === 0) continue;
+    if (!tw || !b.alive || b.down) continue;
     b.cd -= DT;
     if (b.cd > 0) continue;
     // 顺风射得远、顶风射得近：先按最远的可能找，再按那个方向的实际射程核对
     const maxR = tw.range * (1 + RULES.env.windRange * w.env.wind);
-    let e = w.findEnemy(b.cx, b.cy, b.owner, maxR, 0);
+    let e = towerFind(w, b, maxR, 0);
     if (e !== NONE) {
       const dx = w.x[e] - b.cx, dy = w.y[e] - b.cy;
       if (dx * dx + dy * dy > (tw.range * windRangeMul(w, dx, dy)) ** 2) e = NONE;
@@ -379,7 +387,7 @@ export function updateTowers(w: World): void {
       spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, tgt, w.x[tgt], w.y[tgt], 0, tw.dmg, A_PIERCE, 0, 0, -1, b.owner, -b.id - 2);
       if (k + 1 >= tw.arrows) break;
       near = Math.hypot(w.x[tgt] - b.cx, w.y[tgt] - b.cy) + 0.01;
-      let nx = near < maxR ? w.findEnemy(b.cx, b.cy, b.owner, maxR, near) : NONE;
+      let nx = near < maxR ? towerFind(w, b, maxR, near) : NONE;
       if (nx !== NONE) {
         const dx = w.x[nx] - b.cx, dy = w.y[nx] - b.cy;
         if (dx * dx + dy * dy > (tw.range * windRangeMul(w, dx, dy)) ** 2) nx = NONE;
@@ -387,5 +395,15 @@ export function updateTowers(w: World): void {
       tgt = nx !== NONE ? nx : e;
     }
     w.addFx(FX_SHOT, b.cx, b.cy, 0);
+    // 3 级的炮楼与主堡：箭矢之外再放炮弹，全打最近的敌人，爆炸范围伤害
+    const shells = tw.shells ?? 0;
+    if (shells > 0) {
+      const sh = RULES.economy.shell;
+      for (let k = 0; k < shells; k++) {
+        spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, e, w.x[e], w.y[e], P_BALL, sh.dmg, A_SIEGE, sh.splash, 0, -1, b.owner, -b.id - 2);
+      }
+      w.addFx(FX_SHOT, b.cx, b.cy, P_BALL);
+      w.addFx(FX_SMOKE, b.cx, b.cy - 10, 2.2);
+    }
   }
 }

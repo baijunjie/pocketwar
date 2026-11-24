@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { FACTIONS, FACTION_IDS, FactionId, SITE_HQ, TILE, T_DEEP, T_GRASS, T_MOUNTAIN, UNIT_BY_KEY } from '../src/sim/defs';
+import { BR_MILITARY, FACTIONS, FACTION_IDS, FactionId, SITE_CAMP, SITE_CITY, SITE_INFO, SITE_FARM, TILE, T_DEEP, T_GRASS, T_MOUNTAIN, UNITS, UNIT_BY_KEY } from '../src/sim/defs';
 import { GameMap, generateMap } from '../src/sim/map';
 import { DIR_NONE } from '../src/sim/nav';
 import { armyList, createGame } from '../src/sim/setup';
-import { O_IDLE, World } from '../src/sim/world';
+import { O_IDLE, Site, World } from '../src/sim/world';
+import { breathe } from './helpers';
 
 function ascii(map: ReturnType<typeof generateMap>, step = 4): string {
   const ch = '~-.f^M=#"';
@@ -20,17 +21,18 @@ describe('地图生成', () => {
     const a = generateMap(42), b = generateMap(42);
     expect(a.terrain).toEqual(b.terrain);
     expect(a.sites.length).toBe(27);
-    expect(a.sites.filter(s => s.type === SITE_HQ).length).toBe(2);
+    expect(a.sites.filter(s => s.type === SITE_CITY).length).toBe(3);
+    expect(a.sites.filter(s => s.home).map(s => s.owner)).toEqual([1, 2]);
     expect(a.buildings.length).toBeGreaterThan(400);
     if (import.meta.env.VITE_DUMP) console.log(ascii(a));
   }, 30000);
 
-  it('多个种子下所有据点、出兵口都与双方大本营连通', () => {
+  it('多个种子下所有据点、出兵口都与双方开局城池连通', () => {
     for (const seed of [1, 7, 42, 1234, 99999]) {
       const g = createGame({ seed, factions: ['china', 'rome'], armySize: 100, difficulty: 1, fog: false, spectate: true });
       const w = g.world;
       for (const tm of [1, 2]) {
-        const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === tm)!;
+        const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === tm)!;
         const f = w.nav.getField(tm, w.cellAt(hq.x, hq.y), 0);
         expect(f.pending).toBe(true);
         w.nav.finish(f);
@@ -83,7 +85,7 @@ describe('单位行为', () => {
 
   it('攻击建筑：器械能摧毁城墙并打开通路', () => {
     const w = mk();
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!;
+    const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 2)!;
     const gate = hq.buildings.map(id => w.buildings[id]).find(b => b.gate)!;
     const siege = w.spawnGroup(1, Array(12).fill(UNIT_BY_KEY.pili.idx), gate.cx, gate.cy + 14 * TILE, 0, -1);
     const v0 = w.nav.version;
@@ -96,7 +98,9 @@ describe('单位行为', () => {
 
   it('占领据点后定时从后方获得援军', () => {
     const w = mk();
-    const s = w.sites.find(x => x.owner === 0 && x.radius > 0 && x.type >= 4)!;
+    const s = w.sites.find(x => x.owner === 0 && x.radius > 0 && x.type === SITE_CAMP)!;
+    // 中立的哨塔与中军帐会放箭、又必须拆光才能读秒：先拆掉
+    for (const id of s.buildings) if (w.buildings[id].def.role === BR_MILITARY) w.damageBuilding(w.buildings[id], 1e9, 0, 1, 2);
     w.spawnGroup(1, Array(20).fill(UNIT_BY_KEY.ji.idx), s.x, s.y + 30, 0, -1);
     const before = w.arrived[1];
     for (let t = 0; t < 30 * 20; t++) w.tick();
@@ -107,17 +111,33 @@ describe('单位行为', () => {
     expect(w.arrived[1]).toBeGreaterThan(before);
   });
 
-  it('主堡被毁即分出胜负', () => {
+  it('一方的城池与营寨全部丢失才判负：只剩资源点不算，只丢城池也不算', () => {
     const w = mk();
-    const hq = w.sites.find(s => s.type === SITE_HQ && s.owner === 2)!;
-    w.damageBuilding(w.buildings[hq.main], 1e6, 2, 1, 1);
+    const mine = (tm: number): Site[] => w.sites.filter(s => s.owner === tm && SITE_INFO[s.type].counts);
+    expect(mine(2).map(s => SITE_INFO[s.type].category).sort()).toEqual(['camp', 'city']);
+    // 中央建筑被毁不再让据点易主，这里直接把据点划成中立来模拟丢失
+    const raze = (s: Site): void => {
+      s.owner = 0;
+    };
+    // 开局双方各有一座城池一座营地，没有任何资源点
+    expect(w.sites.filter(s => s.owner && SITE_INFO[s.type].category === 'resource').length).toBe(0);
+    const [city, camp] = [mine(2).find(s => s.type === SITE_CITY)!, mine(2).find(s => s.type === SITE_CAMP)!];
+    raze(city);
+    for (let t = 0; t < 30; t++) w.tick();
+    expect(w.winner).toBe(0);
+    // 给 2 号一座资源点，丢光城池与营寨后仍判负
+    const farm = w.sites.find(s => s.type === SITE_FARM)!;
+    farm.owner = 2;
+    raze(camp);
+    for (let t = 0; t < 30; t++) w.tick();
     expect(w.winner).toBe(1);
+    expect(w.events.some(e => e.kind === 'gameover' && e.winner === 1)).toBe(true);
   });
 });
 
 describe('性能与整局推演', () => {
   it('3000 单位混战：单帧模拟耗时在预算内', () => {
-    const g = createGame({ seed: 9, factions: ['rome', 'persia'], armySize: 1500, difficulty: 1, fog: true, spectate: false });
+    const g = createGame({ seed: 9, factions: ['rome', 'persia'], armySize: 2100, difficulty: 1, fog: true, spectate: false });
     const w = g.world;
     // 把双方主力拉到同一处开战
     const all: number[][] = [[], [], []];
@@ -145,13 +165,39 @@ describe('性能与整局推演', () => {
     expect(sum / N).toBeLessThan(12);
   });
 
-  it('AI 对 AI：开局 6 分钟内会争夺据点并交战', () => {
+  it('AI 对 AI 整局：多个种子里至少有一局分出胜负；分出胜负的，输家的城池与营寨丢光、赢家还有，营寨都带本方兵种', async () => {
+    // 不断言某个固定种子的走向：逐个种子打，打出胜负就停（耗时只算一局），都分不出才失败
+    let finished = 0;
+    for (const seed of [42, 43, 44]) {
+      const g = createGame({ seed, factions: ['rome', 'persia'], armySize: 120, difficulty: 1, fog: false, spectate: true });
+      const w = g.world;
+      for (let t = 0; t < 30 * 60 * 40 && !w.winner; t++) {
+        w.tick();
+        for (const ai of g.ais) ai.update();
+        w.fxN = 0;
+        await breathe(t);
+      }
+      // 打没打完，每座有主的营寨都带着本方文明的兵种（电脑占下营寨、每出一批后都会选）
+      for (const s of w.sites) if (s.type === SITE_CAMP && s.owner) expect(UNITS[s.pick].faction, `${seed} ${s.name}`).toBe(w.factions[s.owner]!.id);
+      if (!w.winner) continue;
+      finished++;
+      const left = [0, 0, 0];
+      for (const s of w.sites) if (s.owner && SITE_INFO[s.type].counts) left[s.owner]++;
+      expect(left[3 - w.winner], `${seed} 输家`).toBe(0);
+      expect(left[w.winner], `${seed} 赢家`).toBeGreaterThan(0);
+      break;
+    }
+    expect(finished).toBeGreaterThan(0);
+  }, 600000);
+
+  it('AI 对 AI：开局 6 分钟内会争夺据点并交战', async () => {
     const g = createGame({ seed: 100, factions: ['china', 'japan'], armySize: 200, difficulty: 1, fog: false, spectate: true });
     const w = g.world;
     for (let t = 0; t < 30 * 60 * 6 && !w.winner; t++) {
       w.tick();
       for (const ai of g.ais) ai.update();
       w.fxN = 0;
+      await breathe(t);
     }
     const owned = [0, 0, 0];
     for (const s of w.sites) owned[s.owner]++;
@@ -232,7 +278,7 @@ describe.runIf(import.meta.env.VITE_BALANCE === 'duel')('平衡：对冲', () =>
 });
 
 describe.runIf(import.meta.env.VITE_BALANCE && import.meta.env.VITE_BALANCE !== 'duel')('平衡', () => {
-  it('各阵营组合 AI 对 AI 打完整局', () => {
+  it('各阵营组合 AI 对 AI 打完整局', async () => {
     // VITE_BALANCE 为轮数；VITE_ROUND0 为起始轮次（换一批地图种子，便于多进程并行跑）
     const rounds = Number(import.meta.env.VITE_BALANCE) || 1;
     const r0 = Number(import.meta.env.VITE_ROUND0) || 0;
@@ -249,6 +295,7 @@ describe.runIf(import.meta.env.VITE_BALANCE && import.meta.env.VITE_BALANCE !== 
             for (const ai of g.ais) ai.update();
             w.fxN = 0;
             w.events.length = 0;
+            await breathe(t);
           }
           const fa = FACTION_IDS[a], fb = FACTION_IDS[b];
           games[fa] = (games[fa] ?? 0) + 1;

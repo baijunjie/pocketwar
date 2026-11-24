@@ -2,25 +2,25 @@
 
 ## 项目地图
 
-- [project-map.md](project-map.md)：代码在哪个目录、各目录管什么，`sim` / `render` / `ui` 之间怎么分工与读写对方的状态。
+- [project-map.md](project-map.md)：代码在哪个目录、各目录管什么，`sim` / `render` / `ui` 之间怎么分工与读写对方的状态，对战测量工具 `tools/measure/`（另有就近 README）。
 
 ## 产品文档（游戏现在是什么样，规则与数值以这里为准）
 
-- [product/match.md](product/match.md)：对局整体——概述、主菜单设置、地图构成、开局部署、电脑对手难度与行为限制、胜负。
-- [product/factions.md](product/factions.md)：四阵营的特点与倍率，全部兵种数值表，开局编制，各类据点出的援军。
-- [product/units.md](product/units.md)：兵种通用规则——类别与克制、体型、等级与经验、高级形态、特殊动作、兵种特性。
+- [product/match.md](product/match.md)：对局整体——概述、主菜单设置（兵力份数）、地图构成、开局部署、电脑对手难度与行为、胜负（丢光城池与营寨判负）。
+- [product/factions.md](product/factions.md)：四阵营的特点、兵员级数与援军级数，阵营点数与预算，全部兵种数值表，开局编制（按兵力份数），援军编成（城池与城镇共用全兵种表，营寨每批出占领方选的一个兵种）。
+- [product/units.md](product/units.md)：兵种通用规则——七个原型与克制合成、体型、等级与经验、高级形态、特殊动作、兵种特性，以及点数机制（原型基准、维度阶梯、价目表、级数范围；配新兵种、新阵营的依据）。
 - [product/movement.md](product/movement.md)：行军——地形速度、行军与战斗状态、人与人的推挤（自己人穿过、不往自己人身上挤）、编队行军与纵队、默认队列、指定朝向。
-- [product/combat.md](product/combat.md)：战斗——伤害公式与倍率、高地与林地、寻敌（挤不进战线时往两侧绕、绕到敌群外缘的空位）、自动打建筑、守军、待命与坚守。
-- [product/morale.md](product/morale.md)：士气加减、溃逃阈值、溃兵恢复与逃散。
+- [product/combat.md](product/combat.md)：战斗——伤害公式（强度对比式）与倍率、高地与林地、寻敌（挤不进战线时往两侧绕、绕到敌群外缘的空位）、自动打建筑、守军、待命与坚守。
+- [product/morale.md](product/morale.md)：士气加减、战力估值、溃逃阈值、溃兵恢复与逃散。
 - [product/environment.md](product/environment.md)：迷雾与视野、昼夜、火把、雨雪、风。
 - [product/economy.md](product/economy.md)：粮草产耗与断粮，木 / 石 / 金的产量与用处，电脑怎么花资源。
-- [product/sites.md](product/sites.md)：据点——城邦与营寨、资源点与箭塔、升级、临时据点、占领、休整修复、废墟、援军。
-- [product/siege.md](product/siege.md)：攻城与城防——防御建筑放箭、火把与器械打建筑、驻守城墙、全部建筑数值表。
+- [product/sites.md](product/sites.md)：据点——城池、营寨、资源点、临时据点四类的构成，据点范围（围墙矩形 / 占领圈），资源点与哨塔，1–3 级升级（炮楼、连弩），临时据点，占领（先拆光军事建筑），休整修复，援军（营寨由占领方选兵种）与分据点集结点。
+- [product/siege.md](product/siege.md)：攻城与城防——建筑的三种角色（军事建筑 / 城防 / 普通建筑，普通建筑不可攻击），防御建筑放箭，火把与器械打建筑，中立建筑怎么打，驻守城墙，全部建筑数值表。
 - [product/controls.md](product/controls.md)：操作与界面——选择、指令、编队、镜头与跟随、各面板、小地图、场景标记、音效、观战与结算。
 
 ## 编码规范
 
-- [coding-standards.md](coding-standards.md)：写代码、审查改动时对照——模拟层与渲染界面的分层、content / systems 分工、几处要同改的规则、材质与插值、可点元素、测试断言。
+- [coding-standards.md](coding-standards.md)：写代码、审查改动时对照——模拟层与渲染界面的分层、content / systems 分工、几处要同改的规则、内容层与点数（只填级数、价目表过期要重量）、材质与插值、可点元素、测试断言。
 
 ## 开发记忆（开工前按主题读）
 
@@ -29,9 +29,9 @@
 
 ## 开发计划（临时文档，做完即删）
 
-- TODO [plans/20261124-兵种数值建模/README.md](plans/20261124-兵种数值建模/README.md)：兵种数值建模——统一伤害公式、原型与标签、以对战实测定点数、按兵力占用计兵力、以实测强度定阵营预算并用循环赛验收的方案总览，七个里程碑的清单、原型验证的实测数字与待定项。
-- TODO [plans/20261124-据点规范化/README.md](plans/20261124-据点规范化/README.md)：据点规范化——城池、营寨、资源点三类的建筑构成与火力，军事建筑、城防、普通建筑三种角色，拆光军事建筑才能占领，1–3 级升级，分据点集结点，矩形据点范围，取消大本营改为丢光城池营寨判负；五个里程碑的清单，以及与兵种数值建模计划的先后。
+- TODO [plans/20261125-光环特性/README.md](plans/20261125-光环特性/README.md)：光环特性——特性可声明光环，让范围内的己方单位获得加成，第一种是带盾步兵类的「所受远程伤害倍率」掩护；同类取最强、来源溃逃失效、按特性测价计点；单里程碑。
 
 ## 专题
 
 - [art-assets.md](art-assets.md)：画风要求（写实、真人比例）与现成 CC0 模型素材的调研结论；找素材或换模型前读。
+- [unit-stat-model.md](unit-stat-model.md)：兵种数值建模的设计取舍（伤害公式、经验脱钩、兵力占用、阵营预算）、点数标尺的实测依据、估算与实测的边界，以及待定事项（维度交互、建筑机制、神职与载具、整局定价、平地之外情境）；动价目表、点数口径或兵力占用前读。

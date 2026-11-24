@@ -1,6 +1,6 @@
 /** 代码建模的建筑：原点在占地中心的地面，+X 向东、+Z 向南，单位为世界像素（每格 32） */
 import * as THREE from 'three';
-import { TILE } from '../sim/defs';
+import { BUILDINGS, TILE } from '../sim/defs';
 import { Col, ball, box, cone, cyl, join, xf } from './prims';
 
 const STONE = 0x9c978c, STONE_D = 0x7d786e, STONE_L = 0xb4afa3, PLASTER = 0xd9cfb8, TIMBER = 0x5a4028, WOOD = 0x8a6a42;
@@ -54,9 +54,9 @@ function battlement(w: number, d: number, y: number, color: Col, n = 3, mh = 5):
 /**
  * 城墙 / 木栅：按四邻连接情况生成（位掩码：1 北，2 东，4 南，8 西）。
  * @param out 石墙朝城外的那几条边（同样的位掩码）：只有正面砌垛口，朝城内的一面敞开，士兵从那边上下
- * @param lv 据点升级后：木栅加高并钉上横木、朝外架拒马；石墙垛口加高，外沿搭一道带顶的木战棚
+ * @param lv 据点等级，2 级起：木栅加高并钉上横木、朝外架拒马；石墙垛口加高，外沿搭一道带顶的木战棚
  */
-export function wallGeo(mask: number, wood: boolean, out = 0, lv = 0): G {
+export function wallGeo(mask: number, wood: boolean, out = 0, lv = 1): G {
   const parts: G[] = [];
   const half = TILE / 2;
   const dirs: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
@@ -64,16 +64,16 @@ export function wallGeo(mask: number, wood: boolean, out = 0, lv = 0): G {
     const log = (x: number, z: number, h: number): void => {
       parts.push(cyl(2.6, 2.9, h, WOOD, x, h / 2, z, 5), cone(2.6, 4, 0xa98a5a, x, h + 2, z, 5));
     };
-    const up = lv ? 7 : 0;
+    const up = lv >= 2 ? 7 : 0;
     log(0, 0, 19 + up);
     dirs.forEach(([dx, dz], k) => {
       if (!(mask & (1 << k))) return;
       log(dx * 6, dz * 6, 17 + up);
       log(dx * 11.5, dz * 11.5, 18.5 + up);
       parts.push(box(dx ? half : 1.5, 2, dz ? half : 1.5, TIMBER, dx * half / 2, 11, dz * half / 2));
-      if (lv) parts.push(box(dx ? half : 2.2, 2.4, dz ? half : 2.2, IRON, dx * half / 2, 18, dz * half / 2), box(dx ? half : 2, 2, dz ? half : 2, TIMBER, dx * half / 2, 5, dz * half / 2));
+      if (lv >= 2) parts.push(box(dx ? half : 2.2, 2.4, dz ? half : 2.2, IRON, dx * half / 2, 18, dz * half / 2), box(dx ? half : 2, 2, dz ? half : 2, TIMBER, dx * half / 2, 5, dz * half / 2));
     });
-    if (lv) {
+    if (lv >= 2) {
       // 没有接着木栅的那两侧就是栅外 / 栅内：各架一排斜插的尖木
       dirs.forEach(([dx, dz], k) => {
         if (mask & (1 << k)) return;
@@ -95,7 +95,7 @@ export function wallGeo(mask: number, wood: boolean, out = 0, lv = 0): G {
     for (const s of [-1, 1]) parts.push(box(dx ? 3.5 : 9, 4.5, dz ? 3.5 : 9, STONE_L, ex + (dz ? s * 8 : 0), H + 5.2, ez + (dx ? s * 8 : 0)));
     // 墙脚收分
     parts.push(box(dx ? 3 : TILE, 6, dz ? 3 : TILE, STONE_D, dx * (half + 0.6), 3, dz * (half + 0.6)));
-    if (lv) {
+    if (lv >= 2) {
       // 升级：墙脚再包一层条石，垛口上搭木战棚（立柱 + 斜顶），远看整道墙高出一截
       parts.push(box(dx ? 5 : TILE, 11, dz ? 5 : TILE, STONE_L, dx * (half + 1.6), 5.5, dz * (half + 1.6)));
       for (const s of [-1, 1]) parts.push(box(1.6, 9, 1.6, TIMBER, ex + (dz ? s * 14 : 0), H + 8, ez + (dx ? s * 14 : 0)));
@@ -111,24 +111,46 @@ function banner(x: number, z: number, h: number, c1: Col = 0xb0483a, c2: Col = 0
     box(7, 2, 0.8, c2, x + 4.2, h * 0.54, z), cone(1.4, 4, c2, x, h + 2, z, 5)];
 }
 
-/** 升级后加在建筑上的东西：四角的旌旗；不会放箭的主建筑另搭一座弓手的望台 */
-function fortify(key: string, style: string): G[] {
+/** 火炮：炮口朝南（+Z），底座在原点的地面 */
+function cannon(x: number, y: number, z: number, s = 1): G[] {
+  const p: G[] = [box(15, 4, 24, TIMBER, 0, 6, 0), box(11, 5, 6, WOOD, 0, 9.5, -8)];
+  for (const sx of [-1, 1]) p.push(xf(cyl(5.5, 5.5, 2.6, WOOD, 0, 0, 0, 8), { rz: Math.PI / 2, t: [sx * 8.8, 5.5, 2] }), xf(cyl(1.4, 1.4, 3.4, IRON, 0, 0, 0, 6), { rz: Math.PI / 2, t: [sx * 8.8, 5.5, 2] }));
+  p.push(xf(cyl(3.1, 4.6, 28, IRON, 0, 0, 0, 8), { rx: Math.PI / 2 - 0.12, t: [0, 12, 5] }), xf(cyl(4.2, 4.2, 2.2, 0x2a2a2e, 0, 0, 0, 8), { rx: Math.PI / 2 - 0.12, t: [0, 13.6, 17.5] }),
+    ball(4.8, IRON, 0, 12, -9, 6));
+  return p.map(g => xf(g, { s, t: [x, y, z] }));
+}
+
+/** 连弩：弩臂朝南（+Z），弩身上方一个装箭的匣子 */
+function ballista(x: number, y: number, z: number, s = 1): G[] {
+  const p: G[] = [cyl(1.6, 2.2, 11, TIMBER, 0, 5.5, 0, 5), box(3, 2, 24, WOOD, 0, 12, 3), box(6, 5, 9, TIMBER, 0, 16, -2)];
+  for (const sx of [-1, 1]) p.push(xf(box(15, 1.8, 2.2, TIMBER), { ry: sx * 0.32, t: [sx * 7.2, 12.5, 11] }), xf(box(0.7, 0.7, 13, IRON), { t: [sx * 1.5, 12.8, 5] }));
+  p.push(box(30, 0.5, 0.5, PLASTER, 0, 12.5, 3), box(0.7, 0.7, 17, IRON, 0, 13.3, 6), box(0.7, 0.7, 17, IRON, 0, 18.5, -1));
+  return p.map(g => xf(g, { s, t: [x, y, z] }));
+}
+
+/** 升级后加在建筑上的东西：四角的旌旗；3 级的主堡朝南挑出两座炮台，中军帐前架两座连弩 */
+function fortify(key: string, style: string, lv: number): G[] {
   const fp: Record<string, [number, number, number]> = {
-    keep: [118, 118, style === 'japan' ? 96 : 78], citadel: [96, 96, 70], hall: [84, 60, 50], cmdtent: [80, 48, 34], granary: [52, 52, 44],
-    stable: [92, 58, 30], workshop: [84, 52, 36], barracks: [88, 50, 34],
+    keep: [118, 118, style === 'japan' ? 96 : 78], keep_town: [84, 60, 50], cmdtent: [80, 48, 34], barracks: [88, 50, 34],
   };
   const f = fp[key];
   if (!f) return [];
   const [w, d, h] = f;
   const p: G[] = [];
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(...banner(sx * (w / 2 + 3), sz * (d / 2 + 3), h));
-  if (key !== 'keep' && key !== 'citadel' && key !== 'barracks') {
-    // 望台：四根立柱撑起一圈护栏和一个小顶，立在建筑的东南角外
-    const x = w / 2 - 6, z = d / 2 + 9, ph = h * 0.75 + 12;
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1.2, 1.5, ph, TIMBER, x + sx * 6.5, ph / 2, z + sz * 6.5, 5));
-    p.push(box(17, 1.6, 17, WOOD, x, ph - 8, z), box(17, 4.5, 1, WOOD, x, ph - 5, z + 8), box(17, 4.5, 1, WOOD, x, ph - 5, z - 8),
-      box(1, 4.5, 17, WOOD, x + 8, ph - 5, z), box(1, 4.5, 17, WOOD, x - 8, ph - 5, z), hip(17, 17, 7, 0x6e4a36, ph, 2.5));
-    p[p.length - 1].translate(x, 0, z);
+  if (lv >= 3 && (key === 'keep' || key === 'keep_town')) {
+    // 炮台：贴着南墙挑出的木台，下面两根立柱撑到地面，台上一门火炮
+    const hy = Math.round(h * 0.55), px = w * 0.28, pz = d / 2 + 11;
+    for (const sx of [-1, 1]) {
+      p.push(box(30, 3, 26, WOOD, sx * px, hy, pz), box(30, 5, 1.4, TIMBER, sx * px, hy + 4, pz + 12.5), box(1.4, 5, 26, TIMBER, sx * px + 14.3, hy + 4, pz), box(1.4, 5, 26, TIMBER, sx * px - 14.3, hy + 4, pz));
+      for (const dx of [-12, 12]) p.push(cyl(1.8, 2.2, hy, TIMBER, sx * px + dx, hy / 2, pz + 10, 5));
+      p.push(...cannon(sx * px, hy + 1.5, pz - 2, 1.1));
+    }
+  }
+  if (lv >= 3 && key === 'cmdtent') {
+    for (const sx of [-1, 1]) {
+      p.push(box(22, 6, 18, WOOD, sx * (w / 2 - 4), 3, d / 2 + 12), ...ballista(sx * (w / 2 - 4), 6, d / 2 + 12, 1.1));
+    }
   }
   return p;
 }
@@ -179,11 +201,11 @@ function keep(style: string): G {
 
 /**
  * @returns 建筑几何体；style 仅主堡使用，variant 用于民居等的外观变化
- * @param lv 所在据点的等级：1 时在原样上加固（见各建筑的升级部分）
+ * @param lv 所在据点的等级：2 级起在原样上加固（见各建筑的升级部分），3 级再架火炮或连弩（见 lookLevel）
  */
-export function buildingGeo(key: string, style: string, variant: number, lv = 0): G {
+export function buildingGeo(key: string, style: string, variant: number, lv = 1): G {
   const g = baseGeo(key, style, variant, lv);
-  const extra = lv ? fortify(key, style) : [];
+  const extra = lv >= 2 ? fortify(key, style, lv) : [];
   return extra.length ? join(g, ...extra) : g;
 }
 
@@ -196,7 +218,7 @@ function baseGeo(key: string, style: string, variant: number, lv: number): G {
         p.push(cyl(3.2, 3.6, 26, WOOD, -27, 13, 0, 6), cyl(3.2, 3.6, 26, WOOD, 27, 13, 0, 6), box(60, 3, 4, TIMBER, 0, 24, 0), box(50, 17, 2, 0x7a5a36, 0, 9, 0),
           box(50, 1.5, 2.6, TIMBER, 0, 14, 0), box(50, 1.5, 2.6, TIMBER, 0, 5, 0));
         // 升级：门上架一座带顶的敌楼，门板包铁
-        if (lv) p.push(cyl(3.6, 4, 36, WOOD, -27, 18, 0, 6), cyl(3.6, 4, 36, WOOD, 27, 18, 0, 6), box(64, 2, 12, WOOD, 0, 27, 0), box(64, 5, 1.2, WOOD, 0, 30.5, 6), box(64, 5, 1.2, WOOD, 0, 30.5, -6),
+        if (lv >= 2) p.push(cyl(3.6, 4, 36, WOOD, -27, 18, 0, 6), cyl(3.6, 4, 36, WOOD, 27, 18, 0, 6), box(64, 2, 12, WOOD, 0, 27, 0), box(64, 5, 1.2, WOOD, 0, 30.5, 6), box(64, 5, 1.2, WOOD, 0, 30.5, -6),
           hip(64, 12, 8, 0x6e4a36, 37, 3), box(50, 2.4, 2.8, IRON, 0, 10, 0), box(50, 2.4, 2.8, IRON, 0, 2.5, 0), box(2.4, 17, 2.8, IRON, 0, 9, 0));
       } else {
         // 门楼：四格宽、两格深，与两格厚的城墙齐平；门洞贯通（约 2.4 格宽），两扇门板向内敞开
@@ -208,7 +230,7 @@ function baseGeo(key: string, style: string, variant: number, lv: number): G {
         for (const sx of [-1, 1]) p.push(box(hole / 2 - 2, 25, 3, 0x5a4028, sx * (hole / 4 + 1), 13, 0), box(hole / 2 - 2, 2, 3.6, 0x3a3a40, sx * (hole / 4 + 1), 18, 0),
           box(hole / 2 - 2, 2, 3.6, 0x3a3a40, sx * (hole / 4 + 1), 7, 0));
         // 升级：城楼加一层重檐，两侧立旌旗
-        if (lv) p.push(box(76, 10, 36, 0xb0483a, 0, 51, 0), hip(76, 36, 9, TILE_GREY, 56, 5), box(40, 9, 20, 0xb0483a, 0, 67, 0), hip(40, 20, 9, TILE_GREY, 71, 4),
+        if (lv >= 2) p.push(box(76, 10, 36, 0xb0483a, 0, 51, 0), hip(76, 36, 9, TILE_GREY, 56, 5), box(40, 9, 20, 0xb0483a, 0, 67, 0), hip(40, 20, 9, TILE_GREY, 71, 4),
           ...banner(-(W / 2 - 8), 28, 62), ...banner(W / 2 - 12, 28, 62));
       }
       const g = join(...p);
@@ -220,23 +242,31 @@ function baseGeo(key: string, style: string, variant: number, lv: number): G {
         box(66, 5, 66, STONE_D, 0, 2.5, 0),
         box(3, 8, 1, 0x2a2a2e, 0, 24, 32.2), box(1, 8, 3, 0x2a2a2e, 32.2, 24, 0), box(3, 8, 1, 0x2a2a2e, 0, 24, -32.2), box(1, 8, 3, 0x2a2a2e, -32.2, 24, 0));
       // 升级：平顶上起一座四面敞开的箭亭（人仍然站在亭下），墙脚包条石
-      if (lv) {
+      if (lv >= 2) {
         for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1.8, 2, 24, 0x7a2a20, sx * 25, 52, sz * 25, 6));
-        p.push(hip(58, 58, 16, TILE_GREY, 64, 6), box(72, 1.6, 72, 0x3c4245, 0, 64.6, 0), cone(2.4, 7, 0xc9a227, 0, 83, 0, 6), box(70, 12, 70, STONE_L, 0, 6, 0));
+        p.push(box(72, 1.6, 72, 0x3c4245, 0, 64.6, 0), box(70, 12, 70, STONE_L, 0, 6, 0));
+        if (lv >= 3) {
+          // 3 级炮楼：箭亭的顶换成石砌炮台，台上架一门火炮，朝南
+          p.push(box(72, 3, 72, STONE_D, 0, 66, 0), ...battlement(72, 72, 67.5, STONE_L, 5, 5), ...cannon(0, 67.5, 2, 1.5));
+        } else p.push(hip(58, 58, 16, TILE_GREY, 64, 6), cone(2.4, 7, 0xc9a227, 0, 83, 0, 6));
       }
       break;
     case 'watchtower':
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(xf(cyl(1.5, 1.8, 34, TIMBER, 0, 17, 0, 5), { t: [sx * 9, 0, sz * 9] }));
       p.push(box(24, 2, 24, WOOD, 0, 26, 0), box(24, 6, 1.2, WOOD, 0, 30, 12), box(24, 6, 1.2, WOOD, 0, 30, -12), box(1.2, 6, 24, WOOD, 12, 30, 0), box(1.2, 6, 24, WOOD, -12, 30, 0),
-        hip(24, 24, 9, lv ? 0x6e4a36 : THATCH, 38, 3), box(20, 1.2, 1.2, TIMBER, 0, 13, 9), box(20, 1.2, 1.2, TIMBER, 0, 13, -9));
+        box(20, 1.2, 1.2, TIMBER, 0, 13, 9), box(20, 1.2, 1.2, TIMBER, 0, 13, -9));
+      // 3 级连弩哨塔：顶棚拆去，平台上架一架连弩；其余等级顶着瓦（或茅草）顶
+      if (lv < 3) p.push(hip(24, 24, 9, lv >= 2 ? 0x6e4a36 : THATCH, 38, 3));
       // 升级：护栏外挂一圈盾牌，塔脚加斜撑和一圈木板
-      if (lv) {
+      if (lv >= 2) {
         for (const s of [-1, 1]) p.push(box(7, 6, 1, 0x8a3a2c, s * 6, 30, 13), box(7, 6, 1, 0x8a3a2c, s * 6, 30, -13), box(1, 6, 7, 0x8a3a2c, 13, 30, s * 6), box(1, 6, 7, 0x8a3a2c, -13, 30, s * 6));
-        p.push(box(21, 12, 21, WOOD, 0, 6, 0), box(22, 1.6, 22, IRON, 0, 12, 0), cone(1.6, 5, 0xc9a227, 0, 49, 0, 5));
+        p.push(box(21, 12, 21, WOOD, 0, 6, 0), box(22, 1.6, 22, IRON, 0, 12, 0));
+        if (lv >= 3) p.push(...ballista(0, 27, 0, 1.15));
+        else p.push(cone(1.6, 5, 0xc9a227, 0, 49, 0, 5));
       }
       break;
     case 'arrowtower':
-      // 资源点的箭塔：方木塔身上挑出一圈战棚，尖顶
+      // 资源点的哨塔：方木塔身上挑出一圈战棚，尖顶
       p.push(box(15, 30, 15, WOOD, 0, 15, 0), box(16.5, 2, 16.5, TIMBER, 0, 10, 0), box(16.5, 2, 16.5, TIMBER, 0, 20, 0), box(24, 2, 24, TIMBER, 0, 30, 0),
         box(24, 7, 1.4, 0x7a5a36, 0, 34.5, 11.6), box(24, 7, 1.4, 0x7a5a36, 0, 34.5, -11.6), box(1.4, 7, 24, 0x7a5a36, 11.6, 34.5, 0), box(1.4, 7, 24, 0x7a5a36, -11.6, 34.5, 0),
         hip(22, 22, 13, 0x6e4a36, 44, 3), box(4, 6, 0.8, 0x2a2a2e, 0, 22, 7.7), box(0.8, 6, 4, 0x2a2a2e, 7.7, 22, 0));
@@ -291,12 +321,7 @@ function baseGeo(key: string, style: string, variant: number, lv: number): G {
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(1.6, 1.9, 13, WOOD, sx * 29, 6.5, sz * 29, 5), cone(1.6, 3.5, 0xa98a5a, sx * 29, 14.7, sz * 29, 5));
       break;
     case 'keep': return keep(style);
-    case 'citadel':
-      p.push(box(92, 46, 92, STONE, 0, 23, 0), ...battlement(92, 92, 46, STONE_L, 7));
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(14, 15, 58, STONE_D, sx * 44, 29, sz * 44, 8), cone(16, 16, TILE_RED, sx * 44, 66, sz * 44, 8));
-      p.push(box(52, 18, 52, STONE_D, 0, 55, 0), hip(52, 52, 18, TILE_RED, 64, 3), box(14, 20, 4, TIMBER, 0, 10, 46.5));
-      break;
-    case 'hall':
+    case 'keep_town':
       p.push(box(80, 16, 56, STONE_L, 0, 8, 0), box(82, 14, 58, PLASTER, 0, 23, 0), gable(82, 58, 22, TILE_RED, 30, 4), box(84, 1.6, 60, TIMBER, 0, 16, 0),
         box(18, 44, 18, STONE, -26, 22, -14), hip(18, 18, 14, TILE_RED, 44, 2), box(10, 13, 2, TIMBER, 8, 6.5, 28.5));
       for (let i = -3; i <= 3; i++) p.push(box(1.5, 14, 0.8, TIMBER, i * 12, 23, 29.2));
@@ -306,26 +331,9 @@ function baseGeo(key: string, style: string, variant: number, lv: number): G {
       const g = join(...house(46, 34, 15, 13, walls[variant % 4], roofs[variant % 4]), box(5, 9, 5, STONE_D, -12, 24, -6));
       return variant & 2 ? g.rotateY(Math.PI / 2) : g;
     }
-    case 'farmhouse': {
-      const g = join(...house(44, 32, 12, 15, 0xcdbf9e, THATCH), box(18, 9, 16, WOOD, 28, 4.5, 4), gable(18, 16, 6, THATCH, 9, 1).translate(28, 0, 4));
-      return variant & 1 ? g.rotateY(Math.PI / 2) : g;
-    }
     case 'barracks':
       p.push(...house(84, 46, 16, 14, 0xcfc4a8, TILE_RED), box(86, 3, 48, STONE_D, 0, 1.5, 0));
       for (let i = -3; i <= 3; i++) p.push(box(4, 4, 0.8, 0x3a3630, i * 11, 10, 23.3));
-      break;
-    case 'workshop':
-      p.push(...house(60, 44, 16, 13, 0xb9ab8e, 0x7a6a52, false).map(g => g.translate(-10, 0, 0)), box(8, 34, 8, STONE_D, -32, 17, -12), box(10, 3, 10, STONE, -32, 35, -12));
-      for (const sz of [-1, 1]) p.push(cyl(1.3, 1.3, 13, TIMBER, 40, 6.5, sz * 16, 5));
-      p.push(xf(box(26, 1.4, 40, WOOD), { rz: -0.2, t: [32, 15, 0] }), box(10, 5, 6, 0x3a3a40, 30, 2.5, 0), cyl(5, 5, 2, WOOD, 34, 6, 12, 8));
-      break;
-    case 'stable':
-      p.push(box(88, 13, 3, WOOD, 0, 6.5, -24), box(3, 13, 50, WOOD, -43, 6.5, 0), box(3, 13, 50, WOOD, 43, 6.5, 0));
-      for (let i = -2; i <= 2; i++) p.push(cyl(1.5, 1.5, 15, TIMBER, i * 21, 7.5, 24, 5), box(1.5, 8, 30, WOOD, i * 21, 4, -8));
-      p.push(xf(box(94, 1.6, 58, THATCH), { rx: 0.14, t: [0, 17, 0] }), box(60, 1.4, 1.4, TIMBER, 0, 6, 24));
-      break;
-    case 'granary':
-      p.push(cyl(21, 22, 22, 0xc9b890, 0, 13, 0, 10), cone(26, 17, THATCH, 0, 32.5, 0, 10), cyl(23, 23, 2, STONE_D, 0, 1, 0, 10), box(7, 11, 2, TIMBER, 0, 8, 21.5));
       break;
     case 'tent': {
       const cv = [CANVAS, 0xcfc4a2, 0xe0d8c0, 0xc4b894][variant % 4];
@@ -361,25 +369,25 @@ export function rubbleGeo(w: number, h: number, wood: boolean): G {
   return join(...p);
 }
 
-/** 这种建筑升级后外观有没有变化（没有的话两个等级共用一份模型） */
-export function hasUpgradeLook(key: string): boolean {
-  return key !== 'house' && key !== 'tent' && key !== 'farmhouse';
+/**
+ * 这种建筑在某一级时的外观档位 1–3（同一档共用一份模型）：房屋类升级没有变化，永远是 1；
+ * 其余 2 级起加固，其中炮楼、主堡、哨塔、中军帐 3 级再换上火炮或连弩。
+ */
+export function lookLevel(key: string, lv: number): number {
+  if (key === 'house' || key === 'tent') return 1;
+  return Math.min(lv, BUILDINGS[key]?.tier3 ? 3 : 2);
 }
 
 /** 旗杆顶端相对占地中心地面的高度；0 表示不挂旗 */
-export function flagHeight(key: string, style: string, lv = 0): number {
-  if (lv && (key === 'tower' || key === 'gate_h' || key === 'gate_v')) return key === 'tower' ? 104 : 96;
+export function flagHeight(key: string, style: string, lv = 1): number {
+  if (lv >= 2 && (key === 'tower' || key === 'gate_h' || key === 'gate_v')) return key === 'tower' ? 104 : 96;
   switch (key) {
     case 'keep': return style === 'japan' ? 112 : style === 'china' ? 88 : style === 'rome' ? 70 : 92;
-    case 'citadel': return 84;
     case 'tower': return 66;
     case 'gate_h': case 'gate_v': return 80;
     case 'watchtower': return 48;
-    case 'hall': return 60;
+    case 'keep_town': return 60;
     case 'cmdtent': return 36;
-    case 'granary': return 42;
-    case 'stable': return 24;
-    case 'workshop': return 38;
     case 'barracks': return 32;
     case 'arrowtower': return 62;
     case 'farmstead': return 44;

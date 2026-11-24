@@ -19,10 +19,10 @@ export function teamMoraleFactors(w: World, tm: number): { key: string; label: s
   }
   let own = 0, any = false;
   for (const s of w.sites) {
-    // 只数能占领的正经据点：大本营、资源点、临时据点都不算
-    if (!SITE_INFO[s.type].counts || SITE_INFO[s.type].captureTime <= 0) continue;
+    // 只数城池与营寨：资源点、临时据点都不算
+    if (!SITE_INFO[s.type].counts) continue;
     any = true;
-    if (s.owner === tm && !s.disabled) own++;
+    if (s.owner === tm) own++;
   }
   if (any) {
     if (own === 0) out.push({ key: 'sites', label: '没有据点', value: M.noSite });
@@ -104,7 +104,7 @@ export function updateMorale(w: World): void {
     target -= M.wounded * (1 - w.hp[i] / w.maxHp[i]);
     target -= Math.min(M.contagionMax, M.contagion * rout);
     for (const s of w.sites) {
-      if (s.owner !== tm || s.disabled || !SITE_INFO[s.type].haven) continue;
+      if (s.owner !== tm || !SITE_INFO[s.type].haven) continue;
       const dx = s.x - ux, dy = s.y - uy;
       if (dx * dx + dy * dy < near2) {
         target += M.nearSite;
@@ -141,7 +141,7 @@ function pickRefuge(w: World, i: number): void {
   const tm = w.team[i], ux = w.x[i], uy = w.y[i];
   let best = 1e18, id = -1;
   for (const s of w.sites) {
-    if (s.owner !== tm || s.disabled || !SITE_INFO[s.type].haven) continue;
+    if (s.owner !== tm || !SITE_INFO[s.type].haven) continue;
     const d = (s.x - ux) ** 2 + (s.y - uy) ** 2;
     if (d < best) {
       best = d;
@@ -205,7 +205,7 @@ export function fleeStep(w: World, i: number, cell: number): boolean {
   let site = w.routSite[i];
   if (site >= 0) {
     const s = w.sites[site];
-    if (s.owner !== tm || s.disabled) {
+    if (s.owner !== tm) {
       pickRefuge(w, i);
       site = w.routSite[i];
     }

@@ -4,6 +4,7 @@
  */
 import { A_MELEE, A_PIERCE, DT, RULES, SIZES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL, UnitDef } from '../content';
 import { DIRX, DIRY } from '../nav';
+import { siteContains } from '../siteArea';
 import { FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
 import type { World } from '../world';
 import { attack, damageUnit, spawnProj, windRangeMul } from './combat';
@@ -12,7 +13,7 @@ import { P_NONE, P_POSTED, stepPost } from './garrison';
 import { SLOT, marchSlot } from './march';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
-import { SCAN, findBuilding, scan } from './targeting';
+import { SCAN, canAttackBuilding, findBuilding, scan } from './targeting';
 import { STEP, detourPasses, detourProgress, detourStep, startWait, tryDetour } from './detour';
 
 function arrive(w: World, i: number, atSlot: boolean): void {
@@ -105,7 +106,7 @@ export function updateUnits(w: World): void {
           if (!alive[tgt] || w.uid[tgt] !== w.targetUid[i]) tgt = NONE;
         } else {
           const b = buildings[-tgt - 2];
-          if (!b.alive || b.owner === tm || (b.def.fort && !d.siege)) tgt = NONE;
+          if (!canAttackBuilding(b, tm, d.siege)) tgt = NONE;
         }
         if (tgt === NONE) {
           target[i] = NONE;
@@ -157,7 +158,7 @@ export function updateUnits(w: World): void {
           if (on) w.braceT[i] = C.braceHold;
         }
         const hill = tt === T_HILL && !melee ? 1.12 : 1;
-        // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击（城邦里的自动登城），
+        // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击（城池里的自动登城），
         // 近战的不出据点，只打进了据点的敌人；挨了敌方远程的打才出击追打那个射手
         const guard = ord === O_IDLE && w.sheltered[i] === 1;
         const prov = guard && melee ? provoker(w, i, tm, TICK_RATE * SITE.provoke) : NONE;
@@ -313,7 +314,7 @@ export function updateUnits(w: World): void {
             w.atkAnim[i] = 0.3;
             spawnProj(w, ux, uy, tgt, tx, ty, aux.proj, aux.dmg, A_PIERCE, 0, 0, d.idx, tm, i);
           }
-          // 打建筑：明确下令的走通往它的路线；途中自己盯上的（箭楼、门楼）能直走就直接上前，否则继续沿原路线走
+          // 打建筑：明确下令的走通往它的路线；途中自己盯上的（角楼、哨塔、门楼）能直走就直接上前，否则继续沿原路线走
           if (tgt < 0 ? ord === O_ATTACK || (ord !== O_IDLE && w.lineBlocked(ux, uy, tx - (dx / dist) * 24, ty - (dy / dist) * 24, tm))
             : ord === O_ATTACK && dist > 240) usePath = true;
           else if (w.waitT[i] > 0) {
@@ -411,7 +412,7 @@ export function updateUnits(w: World): void {
                       c2 += DIRX[dr] + DIRY[dr] * mw;
                       if (blk[c2]) {
                         const bid = bldAt[c2];
-                        if (bid >= 0 && buildings[bid].owner !== tm && (!buildings[bid].def.fort || d.siege)) target[i] = -bid - 2;
+                        if (bid >= 0 && canAttackBuilding(buildings[bid], tm, d.siege)) target[i] = -bid - 2;
                         break;
                       }
                     }
@@ -736,10 +737,8 @@ function provoker(w: World, i: number, tm: number, ticks: number): number {
   return NONE;
 }
 
-/** 点是否在据点的圈内（大本营按休整半径） */
+/** 点是否在据点范围内（据点不存在时算在内） */
 function inSite(w: World, site: number, px: number, py: number): boolean {
   const s = w.sites[site];
-  if (!s) return true;
-  const r = s.radius > 0 ? s.radius : RULES.site.hqRadius;
-  return (px - s.x) ** 2 + (py - s.y) ** 2 < r * r;
+  return !s || siteContains(s, px, py);
 }

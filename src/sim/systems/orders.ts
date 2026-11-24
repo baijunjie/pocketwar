@@ -6,6 +6,7 @@ import type { Building, World } from '../world';
 import { formation } from './formation';
 import { P_POSTED, P_SHIFT, leavePost } from './garrison';
 import { createMarch } from './march';
+import { canAttackBuilding } from './targeting';
 
 function obey(w: World, units: number[]): number[] {
   let ok = true;
@@ -163,8 +164,8 @@ export function orderAttackBuilding(w: World, all: number[], b: Building): void 
   if (!b.alive) return;
   for (const s of obey(w, all)) {
     const tm = w.team[s];
-    // 城防工事只有工程类单位打得动
-    if (b.owner === tm || (b.def.fort && !w.defs[w.type[s]].siege)) continue;
+    // 普通建筑不可攻击，城防工事只有工程类单位打得动
+    if (!canAttackBuilding(b, tm, w.defs[w.type[s]].siege)) continue;
     leavePost(w, s);
     w.order[s] = O_ATTACK;
     w.target[s] = w.otarget[s] = -b.id - 2;

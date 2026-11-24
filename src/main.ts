@@ -65,7 +65,7 @@ if (q.has('view')) {
   start({
     seed: Number(q.get('seed')) || 42,
     factions: [pick(q.get('f'), 'china'), pick(q.get('e'), 'japan')],
-    armySize: Number(q.get('size')) || 600,
+    armySize: Number(q.get('size')) || 850,
     difficulty: Number(q.get('d') ?? 1),
     fog: q.get('fog') !== '0',
     spectate: q.get('spectate') === '1',

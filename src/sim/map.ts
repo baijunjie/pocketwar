@@ -1,7 +1,6 @@
-/** 程序化地图生成：地形、河流、据点（城池/营地/村庄等）、道路与植被 */
+/** 程序化地图生成：地形、河流、据点（城池、城镇、营寨、资源点）、道路与植被 */
 import {
-  BUILDINGS, SITE_INFO, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_HQ, SITE_LUMBER, SITE_MINE, SITE_QUARRY, SITE_RANCH, SITE_TOWN, SITE_VILLAGE,
-  SITE_WORKSHOP, TILE,
+  BUILDINGS, SITE_INFO, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_LUMBER, SITE_MINE, SITE_QUARRY, SITE_TOWN, TILE,
   T_BRIDGE, T_DEEP, T_FARM, T_FOREST, T_GRASS, T_HILL, T_MOUNTAIN, T_ROAD, T_SHALLOW,
 } from './defs';
 import { RNG, fbm, hash2, vnoise } from './rng';
@@ -21,7 +20,9 @@ export interface SiteSpec {
   tx: number;
   ty: number;
   owner: number;
-  /** 箭塔位（格坐标），只有资源点有 */
+  /** 开局归某一方的主城（双方各一座）：出兵口、展开位置与开局守备都围着它 */
+  home?: boolean;
+  /** 哨塔位（格坐标），只有资源点有 */
   slots?: [number, number][];
 }
 export interface DeployPoint {
@@ -54,11 +55,9 @@ export interface GameMap {
 
 export const CHUNK = 8;
 
-const VILLAGE_NAMES = ['柳溪村', '石桥村', '麦田村', '青禾村', '白杨村', '枫林村'];
-const CAMP_NAMES = ['前锋营', '北望营', '河湾营', '鹰嘴营', '松岗营', '虎牢营'];
+const HOME_NAME = '都城';
+const CAMP_NAMES = ['前锋营', '北望营', '河湾营', '鹰嘴营', '松岗营', '虎牢营', '柳溪寨', '石桥寨', '麦田寨', '青禾寨', '白杨寨', '枫林寨'];
 const TOWN_NAMES = ['临河镇', '望山镇', '平川镇', '落雁镇'];
-const RANCH_NAMES = ['西风马场', '草甸马场', '云岭马场'];
-const SHOP_NAMES = ['黑石工坊', '铁炉工坊', '赤岩工坊'];
 /** 资源点：名称前缀、主建筑 */
 const RES_SITES: Record<number, { names: string[]; main: string }> = {
   [SITE_FARM]: { names: ['丰谷农庄', '禾丰农庄'], main: 'farmstead' },
@@ -66,18 +65,14 @@ const RES_SITES: Record<number, { names: string[]; main: string }> = {
   [SITE_QUARRY]: { names: ['白石采石场', '苍岩采石场'], main: 'quarry' },
   [SITE_MINE]: { names: ['赤金矿', '沙金矿', '伏牛金矿', '落星金矿'], main: 'goldmine' },
 };
-/** 资源点的四个箭塔位相对中心的格偏移 */
+/** 资源点的四个哨塔位相对中心的格偏移 */
 const TOWER_SLOTS: [number, number][] = [[-4, -4], [3, -4], [-4, 3], [3, 3]];
 
 /** 各类据点的半占地（格） */
 const HALF: Record<number, [number, number]> = {
-  [SITE_HQ]: [13, 11],
   [SITE_CITY]: [15, 13],
   [SITE_TOWN]: [9, 8],
   [SITE_CAMP]: [7, 6],
-  [SITE_VILLAGE]: [8, 8],
-  [SITE_RANCH]: [6, 6],
-  [SITE_WORKSHOP]: [6, 6],
   [SITE_FARM]: [5, 5],
   [SITE_LUMBER]: [5, 5],
   [SITE_QUARRY]: [5, 5],
@@ -166,16 +161,16 @@ export function generateMap(seed: number, size = 320): GameMap {
   }
 
   // ---- 据点选址 ----
-  interface Plan { type: number; fx: number; fy: number; owner: number }
+  interface Plan { type: number; fx: number; fy: number; owner: number; home?: boolean }
   const side: Plan[] = [
-    { type: SITE_HQ, fx: 0.13, fy: 0.87, owner: 1 },
+    { type: SITE_CITY, fx: 0.13, fy: 0.87, owner: 1, home: true },
     { type: SITE_CAMP, fx: 0.29, fy: 0.71, owner: 1 },
     { type: SITE_TOWN, fx: 0.25, fy: 0.42, owner: 0 },
     { type: SITE_CAMP, fx: 0.6, fy: 0.72, owner: 0 },
-    { type: SITE_VILLAGE, fx: 0.1, fy: 0.62, owner: 0 },
-    { type: SITE_VILLAGE, fx: 0.4, fy: 0.9, owner: 0 },
-    { type: SITE_RANCH, fx: 0.08, fy: 0.3, owner: 0 },
-    { type: SITE_WORKSHOP, fx: 0.74, fy: 0.9, owner: 0 },
+    { type: SITE_CAMP, fx: 0.1, fy: 0.62, owner: 0 },
+    { type: SITE_CAMP, fx: 0.4, fy: 0.9, owner: 0 },
+    { type: SITE_CAMP, fx: 0.08, fy: 0.3, owner: 0 },
+    { type: SITE_CAMP, fx: 0.74, fy: 0.9, owner: 0 },
     // 资源点：每方后方各有粮、木、石、金一处，另有一座金矿靠近中线
     { type: SITE_FARM, fx: 0.3, fy: 0.94, owner: 0 },
     { type: SITE_LUMBER, fx: 0.45, fy: 0.79, owner: 0 },
@@ -185,9 +180,9 @@ export function generateMap(seed: number, size = 320): GameMap {
   ];
   const plans: Plan[] = [];
   for (const p of side) {
-    const jx = p.type === SITE_HQ ? 0 : rng.range(-0.025, 0.025), jy = p.type === SITE_HQ ? 0 : rng.range(-0.025, 0.025);
+    const jx = p.home ? 0 : rng.range(-0.025, 0.025), jy = p.home ? 0 : rng.range(-0.025, 0.025);
     plans.push({ ...p, fx: p.fx + jx, fy: p.fy + jy });
-    plans.push({ type: p.type, fx: 1 - p.fx - jx, fy: 1 - p.fy - jy, owner: p.owner ? 3 - p.owner : 0 });
+    plans.push({ ...p, fx: 1 - p.fx - jx, fy: 1 - p.fy - jy, owner: p.owner ? 3 - p.owner : 0 });
   }
   plans.push({ type: SITE_CITY, fx: 0.5, fy: 0.5, owner: 0 });
 
@@ -201,7 +196,7 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
     return true;
   };
-  const names = { v: 0, c: 0, t: 0, r: 0, s: 0 };
+  const names = { c: 0, t: 0 };
   const resNames: Record<number, number> = {};
   const resName = (type: number): string => {
     const list = RES_SITES[type].names, k = resNames[type] ?? 0;
@@ -228,14 +223,11 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
     placed.push({ cx, cy, hw, hh });
     centers.push({ cx, cy });
-    const name = p.type === SITE_HQ ? '大本营' : p.type === SITE_CITY ? '天元城'
+    const name = p.home ? HOME_NAME : p.type === SITE_CITY ? '天元城'
       : p.type === SITE_TOWN ? TOWN_NAMES[names.t++ % TOWN_NAMES.length]
       : p.type === SITE_CAMP ? CAMP_NAMES[names.c++ % CAMP_NAMES.length]
-      : p.type === SITE_VILLAGE ? VILLAGE_NAMES[names.v++ % VILLAGE_NAMES.length]
-      : p.type === SITE_RANCH ? RANCH_NAMES[names.r++ % RANCH_NAMES.length]
-      : RES_SITES[p.type] ? resName(p.type)
-      : SHOP_NAMES[names.s++ % SHOP_NAMES.length];
-    sites.push({ type: p.type, name, tx: cx, ty: cy, owner: p.owner });
+      : resName(p.type);
+    sites.push({ type: p.type, name, tx: cx, ty: cy, owner: p.owner, home: p.home });
   }
 
   // ---- 平整地基 ----
@@ -336,16 +328,6 @@ export function generateMap(seed: number, size = 320): GameMap {
       }
     }
   };
-  const scatter = (si: number, cx: number, cy: number, def: string, count: number, r0: number, r1: number): void => {
-    const d = BUILDINGS[def];
-    for (let n = 0, tries = 0; n < count && tries < 60; tries++) {
-      const a = rng.range(0, Math.PI * 2), r = rng.range(r0, r1);
-      const tx = Math.round(cx + Math.cos(a) * r), ty = Math.round(cy + Math.sin(a) * r);
-      if (!free(tx - 1, ty - 1, d.w + 2, d.h + 2)) continue;
-      put(def, tx, ty, 0, si);
-      n++;
-    }
-  };
   const farms = (cx: number, cy: number): void => {
     for (let n = 0; n < 5; n++) {
       const a = rng.range(0, Math.PI * 2), r = rng.range(8, 12);
@@ -359,7 +341,7 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
   };
 
-  /** 留出箭塔位（资源点、村庄：四角，数量见 SiteInfo.towerSlots） */
+  /** 留出哨塔位（资源点：四角，数量见 SiteInfo.towerSlots） */
   const towerSlots = (s: SiteSpec, cx: number, cy: number): void => {
     s.slots = TOWER_SLOTS.slice(0, SITE_INFO[s.type].towerSlots).map(([ox, oy]) => [cx + ox, cy + oy] as [number, number]);
     for (const [sx, sy] of s.slots) reserve(sx, sy, 1, 1);
@@ -371,21 +353,14 @@ export function generateMap(seed: number, size = 320): GameMap {
     const { cx, cy } = centers[si];
     const [hw, hh] = HALF[s.type];
     switch (s.type) {
-      case SITE_HQ:
+      case SITE_CITY:
         walled(si, cx, cy, hw, hh, false, s.owner);
         mainAt('keep', cx - 2, cy - 6, s.owner, si);
-        if (free(cx + 3, cy + 2, 3, 2)) put('barracks', cx + 3, cy + 2, s.owner, si);
-        if (free(cx - 6, cy + 2, 3, 2)) put('barracks', cx - 6, cy + 2, s.owner, si);
-        fill(si, cx, cy, hw, hh, ['house', 'house', 'barracks'], 0.6, s.owner);
-        break;
-      case SITE_CITY:
-        walled(si, cx, cy, hw, hh, false, 0);
-        mainAt('citadel', cx - 2, cy - 6, 0, si);
-        fill(si, cx, cy, hw, hh, ['house', 'house', 'house', 'barracks'], 0.8, 0);
+        fill(si, cx, cy, hw, hh, ['house', 'house', 'house', 'barracks'], 0.8, s.owner);
         break;
       case SITE_TOWN:
         walled(si, cx, cy, hw, hh, false, 0);
-        mainAt('hall', cx - 1, cy - 5, 0, si);
+        mainAt('keep_town', cx - 1, cy - 5, 0, si);
         fill(si, cx, cy, hw, hh, ['house'], 0.75, 0);
         break;
       case SITE_CAMP:
@@ -393,28 +368,8 @@ export function generateMap(seed: number, size = 320): GameMap {
         mainAt('cmdtent', cx - 1, cy - 4, s.owner, si);
         fill(si, cx, cy, hw, hh, ['tent'], 0.7, s.owner);
         break;
-      case SITE_VILLAGE:
-        reserve(cx - 1, cy - 1, 3, 3);
-        put('granary', cx - 1, cy - 4, 0, si, true);
-        towerSlots(s, cx, cy);
-        scatter(si, cx, cy, 'farmhouse', 7, 3.5, 7.5);
-        farms(cx, cy);
-        dirtDisc(cx, cy, 7, 170);
-        break;
-      case SITE_RANCH:
-        reserve(cx - 1, cy - 1, 3, 3);
-        put('stable', cx - 1, cy - 4, 0, si, true);
-        scatter(si, cx, cy, 'farmhouse', 2, 3.5, 5.5);
-        dirtDisc(cx, cy, 6, 200);
-        break;
-      case SITE_WORKSHOP:
-        reserve(cx - 1, cy - 1, 3, 3);
-        put('workshop', cx - 1, cy - 4, 0, si, true);
-        scatter(si, cx, cy, 'house', 3, 3.5, 5.5);
-        dirtDisc(cx, cy, 6, 220);
-        break;
       default:
-        // 资源点：一座主建筑，四角留出箭塔位
+        // 资源点：一座主建筑，四角留出哨塔位
         reserve(cx - 1, cy - 1, 3, 3);
         put(RES_SITES[s.type].main, cx - 1, cy - 4, 0, si, true);
         towerSlots(s, cx, cy);
@@ -445,7 +400,7 @@ export function generateMap(seed: number, size = 320): GameMap {
   const spawnTiles: { cx: number; cy: number }[] = [];
   for (let si = 0; si < sites.length; si++) {
     const s = sites[si];
-    if (s.type !== SITE_HQ) continue;
+    if (!s.home) continue;
     const { cx, cy } = centers[si];
     const sx = s.owner === 1 ? 9 : W - 10, sy = s.owner === 1 ? H - 10 : 9;
     flatten(sx, sy, 3, 3, 3);
@@ -587,7 +542,7 @@ export function generateMap(seed: number, size = 320): GameMap {
   for (const [a, b] of edges) road(centers[a].cx, centers[a].cy, centers[b].cx, centers[b].cy);
   for (let si = 0; si < nS; si++) {
     const s = sites[si];
-    if (s.type === SITE_HQ) road(spawnTiles[s.owner].cx, spawnTiles[s.owner].cy, centers[si].cx, centers[si].cy);
+    if (s.home) road(spawnTiles[s.owner].cx, spawnTiles[s.owner].cy, centers[si].cx, centers[si].cy);
   }
 
   // ---- 植被与山石 ----

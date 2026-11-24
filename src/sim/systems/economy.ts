@@ -1,12 +1,15 @@
 /**
  * 资源及其用处：资源点自动采集；黄金把兵种升为高级形态，石料 / 木材升级据点，
- * 木材还能给资源点建箭塔、让部队在野外搭临时据点。
+ * 木材还能给资源点建哨塔、让部队在野外搭临时据点。
  */
-import { BUILDINGS, RES_KINDS, RULES, SITE_INFO, SITE_OUTPOST, TILE, T_BRIDGE, T_SHALLOW, UnitDef } from '../content';
+import { BUILDINGS, BuildingDef, RES_KINDS, RULES, SITE_INFO, SITE_OUTPOST, TILE, T_BRIDGE, T_SHALLOW, TowerDef, UnitDef } from '../content';
 import { FX_BUILT, FX_UPGRADE, S_ROUT } from '../state';
+import { siteGap } from '../siteArea';
 import type { Site, World } from '../world';
 
 export const ECON_EVERY = 15;
+/** 据点的最高等级（等级从 1 起，开局都是 1 级），由据点各级加成表的长度定 */
+export const SITE_MAX_LEVEL = RULES.economy.siteLevels.length;
 
 /** 已下令、部队正赶去搭的临时据点（木材下令时就扣，搭不成退还） */
 export interface PendingBuild {
@@ -25,7 +28,7 @@ export function updateEconomy(w: World): void {
   const step = ECON_EVERY / 30;
   for (const k of RES_KINDS) w.income[k][1] = w.income[k][2] = 0;
   for (const s of w.sites) {
-    if (!s.owner || s.disabled) continue;
+    if (!s.owner) continue;
     const y = SITE_INFO[s.type].yields;
     if (!y) continue;
     for (const k of RES_KINDS) {
@@ -114,42 +117,54 @@ export function upgradeUnits(w: World, units: number[]): { count: number; cost: 
 }
 
 // ------------------------------------------------------------------ 据点升级
+/** 把据点升到下一级要花多少（material 那种资源）；不能升级（资源点、已满级、无主）返回 0 */
+export function siteUpgradeCost(s: Site): number {
+  if (s.owner === 0 || s.gone || s.level >= SITE_MAX_LEVEL) return 0;
+  return Math.round(SITE_INFO[s.type].upgradeCost * RULES.economy.siteLevels[s.level].cost);
+}
+
 export function canUpgradeSite(s: Site): boolean {
-  return s.owner !== 0 && !s.disabled && !s.gone && s.level === 0 && SITE_INFO[s.type].upgradeCost > 0;
+  return siteUpgradeCost(s) > 0;
 }
 
 export function upgradeSite(w: World, s: Site): boolean {
-  if (!canUpgradeSite(s)) return false;
-  const info = SITE_INFO[s.type];
-  const st = w.stock[info.material];
-  if (st[s.owner] < info.upgradeCost) return false;
-  st[s.owner] -= info.upgradeCost;
-  setSiteLevel(w, s, 1);
+  const cost = siteUpgradeCost(s);
+  if (cost <= 0) return false;
+  const st = w.stock[SITE_INFO[s.type].material];
+  if (st[s.owner] < cost) return false;
+  st[s.owner] -= cost;
+  setSiteLevel(w, s, s.level + 1);
   w.addFx(FX_BUILT, s.x, s.y, 3);
   return true;
 }
 
-/** 设定据点等级：建筑的生命上限、护甲、箭塔火力跟着变；升级时补上新增的生命 */
+/** 这座建筑在某一级时的火力：2 级起伤害、射程提高；3 级再按 tier3 加箭矢或炮弹。1 级与不放箭的建筑原样返回 */
+export function towerAt(def: BuildingDef, lv: number): TowerDef | null {
+  const t = def.tower;
+  if (!t || lv <= 1) return t;
+  const L = RULES.economy.siteLevels[lv - 1], p = lv >= SITE_MAX_LEVEL ? def.tier3 : undefined;
+  return { range: t.range * L.range, dmg: t.dmg * L.dmg, cd: t.cd, arrows: t.arrows * (p?.arrowMul ?? 1), shells: p?.shells ?? 0 };
+}
+
+/** 设定据点等级（1–3）：建筑的生命上限、护甲、火力跟着变；升级时补上新增的生命 */
 export function setSiteLevel(w: World, s: Site, lv: number): void {
-  const E = RULES.economy;
+  const L = RULES.economy.siteLevels[lv - 1];
   s.level = lv;
   for (const id of s.buildings) {
     const b = w.buildings[id];
-    // 后来搭的箭塔、行营不随据点升级
+    // 后来搭的哨塔、行营不随据点升级
     if (b.extra) continue;
-    const max = Math.round(b.def.hp * (lv ? E.siteHp : 1));
-    if (b.alive) b.hp = lv ? b.hp + (max - b.maxHp) : Math.min(b.hp, max);
+    const max = Math.round(b.def.hp * L.hp);
+    if (b.alive) b.hp = max > b.maxHp ? b.hp + (max - b.maxHp) : Math.min(b.hp, max);
     b.maxHp = max;
     b.lv = lv;
-    b.armor = lv ? E.siteArmor : 0;
-    const t = b.def.tower;
-    b.tower = !lv ? t : t ? { range: t.range * E.towerRange, dmg: t.dmg * E.towerDmg, cd: t.cd, arrows: t.arrows * E.towerArrows } : id === s.main ? { ...E.mainTower, arrows: E.mainTower.arrows * E.towerArrows } : null;
-    if (b.tower && !w.armed.includes(b)) w.armed.push(b);
+    b.armor = L.armor;
+    b.tower = towerAt(b.def, lv);
   }
 }
 
-// ------------------------------------------------------------------ 资源点的箭塔
-/** 据点里还立着的箭塔位数量 */
+// ------------------------------------------------------------------ 资源点的哨塔
+/** 据点里还立着的哨塔位数量 */
 export function towerCount(w: World, s: Site): number {
   let n = 0;
   for (const sl of s.slots) if (sl.bld >= 0 && w.buildings[sl.bld].alive) n++;
@@ -158,7 +173,7 @@ export function towerCount(w: World, s: Site): number {
 
 export function buildTower(w: World, s: Site): boolean {
   const E = RULES.economy;
-  if (!s.owner || s.disabled || s.gone) return false;
+  if (!s.owner || s.gone) return false;
   const slot = s.slots.find(sl => sl.bld < 0 || !w.buildings[sl.bld].alive);
   if (!slot || w.stock.wood[s.owner] < E.towerCost) return false;
   w.stock.wood[s.owner] -= E.towerCost;
@@ -204,8 +219,7 @@ function outpostSpot(w: World, tx: number, ty: number, cx: number, cy: number): 
   }
   for (const s of w.sites) {
     if (s.gone) continue;
-    const r = (s.radius > 0 ? s.radius : RULES.site.hqRadius) + 60;
-    if ((s.x - cx) ** 2 + (s.y - cy) ** 2 < r * r) return 'near';
+    if (siteGap(s, cx, cy) < 60) return 'near';
   }
   for (const p of w.builds) if ((p.x - cx) ** 2 + (p.y - cy) ** 2 < 200 * 200) return 'near';
   return null;

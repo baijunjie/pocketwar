@@ -14,6 +14,7 @@ import { refreshVision } from './systems/vision';
 import { damageBuilding } from './systems/combat';
 import * as economy from './systems/economy';
 import * as garrison from './systems/garrison';
+import * as sites from './systems/sites';
 import type { WallSlot } from './systems/garrison';
 import type { PendingBuild } from './systems/economy';
 import { MAX_CORPSE, MAX_PROJ, MAX_UNITS, COARSE, GRID, NONE, O_IDLE, S_ROUT, VIS_CELL } from './state';
@@ -37,19 +38,21 @@ export interface Building {
   hp: number;
   /** 生命上限（据点升级后高于 def.hp） */
   maxHp: number;
-  /** 所在据点的等级 0 / 1，决定外观 */
+  /** 所在据点的等级 1–3，决定外观 */
   lv: number;
   /** 升级带来的护甲加成 */
   armor: number;
-  /** 此刻的箭塔火力（升级后更强；升级后的主建筑也会有），null 表示不放箭 */
+  /** 此刻的火力（据点升级后更强；3 级起带炮弹或箭矢更多），null 表示不放箭 */
   tower: TowerDef | null;
-  /** 后来用木材搭的（箭塔、行营）：据点易主时不会自动修复 */
+  /** 后来用木材搭的（哨塔、行营）：据点易主时不会自动修复 */
   extra: boolean;
   owner: number;
   alive: boolean;
   /** 倒塌后正在自行重建：立起来了但还没修满，不放箭 */
   down: boolean;
   gate: boolean;
+  /** 能被攻击（取自 BuildingDef.hittable） */
+  hittable: boolean;
   breach: number;
   climb: number;
   site: number;
@@ -75,19 +78,22 @@ export interface Site {
   interval: number;
   buildings: number[];
   main: number;
-  disabled: boolean;
-  /** 圈内各队人数 */
+  /** 据点范围内各队人数（溃兵不算） */
   count: number[];
   /** 旗帜区内各队人数 */
   flag: number[];
-  /** 0 未升级，1 已升级（易主后降回） */
+  /** 据点等级 1–3（易主后降回 1 级） */
   level: number;
-  /** 箭塔位（格坐标）与已建的建筑 id（-1 = 空着） */
+  /** 哨塔位（格坐标）与已建的建筑 id（-1 = 空着） */
   slots: { tx: number; ty: number; bld: number }[];
   /** 临时据点被毁后不再存在 */
   gone: boolean;
-  /** 有城墙或木栅围着：在围墙之内（含墙顶）才算在据点里；没有围墙的按占领圈（大本营按 hqRadius）算 */
-  walled: boolean;
+  /** 围墙矩形（世界坐标，含墙、门本身）；没有围墙的据点为 null，范围是半径 radius 的占领圈。判定见 siteArea.ts */
+  rect: { x0: number; y0: number; x1: number; y1: number } | null;
+  /** 这个据点的援军集结点；null = 没设，援军留在据点里。易主时清除 */
+  rally: { x: number; y: number } | null;
+  /** 营寨出哪个兵种的援军（兵种下标，初级形态）：占领方选定，易主时回到新主人的缺省兵种；城池、城镇、资源点、临时据点与中立营寨为 -1 */
+  pick: number;
 }
 
 export type SimEvent =
@@ -137,13 +143,17 @@ export class World {
   tickCount = 0;
   time = 0;
   winner = 0;
+  /** 各队是否曾经有过城池或营寨（SiteInfo.counts）：没有过的队不会因「没有」而判负（见 checkDefeat） */
+  heldSites = [false, false, false];
   humanTeam = 1;
   fog = true;
   factions: (FactionDef | null)[] = [null, null, null];
   reinfMult = [1, 1, 1];
   unitCap = [0, 900, 900];
-  /** 各队的援军集结点；null = 没设，援军留在各自出兵的据点 */
-  rally: ({ x: number; y: number } | null)[] = [null, null, null];
+  /** 各队占下据点后自动给它设的集结点（电脑用：出发阵地）；null = 不自动设，新占的据点援军留守 */
+  autoRally: ({ x: number; y: number } | null)[] = [null, null, null];
+  /** 各队给自己的营寨选兵种的办法（电脑用）：占下营寨与每出一批援军后调用，返回兵种下标；null = 不自动选，营寨一直出缺省兵种，直到玩家改选 */
+  autoPick: (((s: Site) => number) | null)[] = [null, null, null];
   onReinforce: ((team: number, slots: number[]) => void) | null = null;
   /** 系统管线：可增删、替换其中任意一环 */
   systems: System[] = defaultSystems();
@@ -355,8 +365,6 @@ export class World {
   readonly builds: PendingBuild[] = [];
   /** 单位此刻是否在己方据点里（雪天有遮蔽；sites 系统填写） */
   readonly sheltered = new Uint8Array(MAX_UNITS);
-  /** 每一格在哪个据点的围墙之内（含墙、门本身；-1 = 不在任何围墙里），开局由 sealWalls 圈出 */
-  enclosure = new Int16Array(0);
   /** 出击的守军（被远程射中后追出据点）与它原来的位置：打完回去 */
   readonly sortie = new Uint8Array(MAX_UNITS);
   readonly sortieX = new Float32Array(MAX_UNITS);
@@ -419,7 +427,7 @@ export class World {
       id: this.buildings.length, def, tx, ty, w: def.w, h: def.h,
       x0: tx * TILE, y0: ty * TILE, x1: (tx + def.w) * TILE, y1: (ty + def.h) * TILE,
       cx: (tx + def.w / 2) * TILE, cy: (ty + def.h / 2) * TILE,
-      hp: def.hp, maxHp: def.hp, lv: 0, armor: 0, tower: def.tower, extra: false, owner, alive: true, down: false, gate: def.kind === BK_GATE, breach: def.breach, climb: def.top > 0 ? RULES.siege.climbCost : 0, site,
+      hp: def.hp, maxHp: def.hp, lv: 1, armor: 0, tower: def.tower, extra: false, owner, alive: true, down: false, gate: def.kind === BK_GATE, hittable: def.hittable, breach: def.breach, climb: def.top > 0 ? RULES.siege.climbCost : 0, site,
       cd: this.rng.next(), style, variant: this.rng.int(0, 3), hitTick: -999,
     };
     this.buildings.push(b);
@@ -433,8 +441,8 @@ export class World {
     const info = SITE_INFO[type];
     const s: Site = {
       id: this.sites.length, type, name, x: sx, y: sy, radius: info.radius, owner, capTeam: 0, cap: 0,
-      timer: info.interval, interval: info.interval, buildings: [], main: -1, disabled: false,
-      count: [0, 0, 0], flag: [0, 0, 0], level: 0, slots: [], gone: false, walled: false,
+      timer: info.interval, interval: info.interval, buildings: [], main: -1,
+      count: [0, 0, 0], flag: [0, 0, 0], level: 1, slots: [], gone: false, rect: null, rally: null, pick: -1,
     };
     this.sites.push(s);
     return s;
@@ -567,7 +575,7 @@ export class World {
   orderTorch(units: number[], on: boolean): void {
     orders.orderTorch(this, units, on);
   }
-  /** 让其中的远程步兵登上所在城邦的城墙驻守；返回派上去几人（-1 没有能上墙的兵种，-2 不在自家城邦里，0 垛口满了） */
+  /** 让其中的远程步兵登上所在城池的城墙驻守；返回派上去几人（-1 没有能上墙的兵种，-2 不在自家城池里，0 垛口满了） */
   orderGarrison(units: number[]): number {
     return garrison.orderGarrison(this, units);
   }
@@ -579,11 +587,15 @@ export class World {
   upgradeUnits(units: number[]): { count: number; cost: number } {
     return economy.upgradeUnits(this, units);
   }
-  /** 用石料（城邦）或木材（营寨）升级据点；资源不够或不能升级返回 false */
+  /** 用石料（城池）或木材（营寨）把据点升一级；资源不够或不能再升返回 false */
   upgradeSite(s: Site): boolean {
     return economy.upgradeSite(this, s);
   }
-  /** 在资源点的下一个空位建一座箭塔 */
+  /** 占领方给自己的营寨改选援军兵种（兵种下标）；不是己方营寨或兵种不可选返回 false。改选会重置援军计时 */
+  pickUnit(s: Site, team: number, unit: number): boolean {
+    return sites.pickUnit(this, s, team, unit);
+  }
+  /** 在资源点的下一个空位建一座哨塔 */
   buildTower(s: Site): boolean {
     return economy.buildTower(this, s);
   }
@@ -620,8 +632,7 @@ export class World {
    */
   sealWalls(): void {
     const nav = this.nav, mw = this.map.w;
-    // 围墙之内：各据点的城墙、木栅、城门、营门围出的包围盒（休整回血、雪天遮蔽、守军警戒按这个算）
-    this.enclosure = new Int16Array(mw * this.map.h).fill(-1);
+    // 据点范围：各据点的城墙、木栅、城门、营门围出的包围盒（Site.rect；判定见 siteArea.ts）
     for (const s of this.sites) {
       let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
       for (const id of s.buildings) {
@@ -632,8 +643,7 @@ export class World {
         x1 = Math.max(x1, b.tx + b.w - 1);
         y1 = Math.max(y1, b.ty + b.h - 1);
       }
-      s.walled = x1 >= 0;
-      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) this.enclosure[y * mw + x] = s.id;
+      s.rect = x1 >= 0 ? { x0: x0 * TILE, y0: y0 * TILE, x1: (x1 + 1) * TILE, y1: (y1 + 1) * TILE } : null;
     }
     for (const s of this.sites) {
       let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
@@ -711,7 +721,7 @@ export class World {
     return bi;
   }
 
-  /** @param canFort 攻击者是否为工程类（否则打不动石墙与箭楼） */
+  /** @param canFort 攻击者是否为工程类（否则打不动石质城防，即城墙） */
   damageBuilding(b: Building, raw: number, atk: number, vsBld: number, ateam: number, canFort = true): void {
     damageBuilding(this, b, raw, atk, vsBld, ateam, canFort);
   }

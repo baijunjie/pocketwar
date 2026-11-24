@@ -37,7 +37,7 @@ export function updateVision(w: World): void {
       const r = Math.round((defs[type[i]].vision * (state[i] & S_TORCH ? lit : vm)) / VIS_CELL);
       stamp((w.x[i] / VIS_CELL) | 0, (w.y[i] / VIS_CELL) | 0, r < 1 ? 1 : r);
     }
-    // 建筑有常明的灯火，视野不受昼夜与天气影响；会放箭的箭塔、塔楼站得高，看得远得多
+    // 建筑有常明的灯火，视野不受昼夜与天气影响；会放箭的哨塔、塔楼站得高，看得远得多
     for (const b of w.buildings) {
       if (!b.alive || b.owner !== tm) continue;
       stamp((b.cx / VIS_CELL) | 0, (b.cy / VIS_CELL) | 0, b.tower ? rTower : rBld);

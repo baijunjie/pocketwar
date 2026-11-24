@@ -38,7 +38,8 @@ button.primary:hover { filter: brightness(1.1); }
 .site { position: relative; display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 3px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; }
 .site:hover { background: rgba(255, 255, 255, 0.08); }
 .site .dot { width: 9px; height: 9px; border-radius: 2px; flex: none; border: 1px solid rgba(255, 255, 255, 0.5); }
-.site .nm { flex: 1; }
+.site .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.site .st { flex: none; }
 .site b { font-weight: 500; color: #bfe6a8; font-variant-numeric: tabular-nums; }
 .site i { font-style: normal; color: var(--dim); }
 .site u { position: absolute; left: 0; bottom: 0; height: 2px; }
@@ -136,6 +137,7 @@ button.primary:hover { filter: brightness(1.1); }
 .opts { display: grid; grid-template-columns: repeat(3, auto); gap: 12px 30px; margin: 22px 0 20px; }
 .opt { display: flex; align-items: center; gap: 10px; }
 .opt label { color: var(--dim); min-width: 56px; text-align: right; }
+.opt label[title] { cursor: help; }
 .seg { display: flex; gap: 0; }
 .seg button { border-radius: 0; margin-left: -1px; }
 .seg button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
@@ -213,6 +215,13 @@ button.primary:hover { filter: brightness(1.1); }
 .sdetail .grid span, .sdetail .dim { color: var(--dim); }
 .sdetail .grid b { font-weight: 500; white-space: nowrap; }
 .sdetail .grid i { font-style: normal; color: var(--dim); font-size: 11px; }
+/* 营寨选兵种：一排头像按钮，所选的亮着 */
+.sdetail .picks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.sdetail .picks button { display: flex; flex-direction: column; align-items: center; width: 54px; padding: 3px 2px; font-size: 11px; line-height: 1.25; }
+.sdetail .picks button img { width: 36px; height: 36px; }
+.sdetail .picks button b { font-weight: 500; white-space: nowrap; }
+.sdetail .picks button i { font-style: normal; font-size: 10px; color: var(--dim); }
+.sdetail .picks button.on { color: var(--text); border-color: var(--gold); background: rgba(216, 176, 96, 0.2); }
 .sdetail .acts { display: flex; flex-direction: column; gap: 5px; min-width: 132px; }
 .sdetail .acts button { display: flex; flex-direction: column; align-items: center; padding: 5px 10px; border-color: var(--gold); }
 .sdetail .acts button b { font-weight: 600; }
