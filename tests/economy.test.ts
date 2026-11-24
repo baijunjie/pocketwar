@@ -592,11 +592,12 @@ describe('风', () => {
   it('风不是一直有：雨雪天起风的机会远多于晴天；无风时风力为 0', () => {
     const w = game();
     w.env.enabled = true;
+    // 只看天气，其余系统不跑：整局推进 40 分钟要半分钟以上，会把测试进程卡到超时
+    w.systems = w.systems.filter(s => s.name === 'environment');
     let windyWet = 0, wet = 0, windyDry = 0, dry = 0, calmZero = true;
     for (let t = 0; t < 30 * 60 * 40; t++) {
       w.tick();
       w.events.length = 0;
-      w.fxN = 0;
       if (t % 30) continue;
       const isWet = w.env.raining || w.env.snowing;
       if (isWet) { wet++; if (w.env.windy) windyWet++; } else { dry++; if (w.env.windy) windyDry++; }
@@ -606,7 +607,7 @@ describe('风', () => {
     expect(windyWet / wet).toBeGreaterThan(windyDry / dry);
     expect(windyDry / dry).toBeLessThan(0.6);
     expect(calmZero).toBe(true);
-  }, 120000);
+  });
 });
 
 describe('风与远程', () => {
