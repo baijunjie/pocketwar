@@ -35,7 +35,7 @@ export function showMenu(root: HTMLElement, onStart: (opts: GameOptions) => void
     const css = (c: [number, number, number]): string => `rgb(${c[0]},${c[1]},${c[2]})`;
     menu.innerHTML = `
       <div class="menu-inner">
-        <header><h1>烽烟</h1><p>四方争霸 · 千军会战</p></header>
+        <header><h1>口袋战争</h1><p>四方争霸 · 千军会战</p></header>
         <h2>选择你的阵营</h2>
         <div class="factions">
           ${FACTION_IDS.map(id => {

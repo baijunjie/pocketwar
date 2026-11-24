@@ -1,4 +1,4 @@
-# 烽烟
+# 口袋战争
 
 浏览器里的千人会战即时战略：Vite + TypeScript + three.js，单机。
 

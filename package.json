@@ -1,8 +1,8 @@
 {
-  "name": "fengyan",
+  "name": "pocket-war",
   "private": true,
   "version": "0.1.0",
-  "description": "烽烟 — 浏览器里的千人会战即时战略",
+  "description": "口袋战争 — 浏览器里的千人会战即时战略",
   "author": "Junjie Bai <bjj19851010@gmail.com>",
   "type": "module",
   "scripts": {
