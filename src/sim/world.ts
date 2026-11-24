@@ -185,6 +185,9 @@ export class World {
   readonly homeX = new Float32Array(MAX_UNITS);
   readonly homeY = new Float32Array(MAX_UNITS);
   readonly stuck = new Float32Array(MAX_UNITS);
+  /** 移动指令：离目的地最近到过多远、多久没再靠近（终点附近被挤着来回绕时，靠它判定「到了」） */
+  readonly bestD = new Float32Array(MAX_UNITS);
+  readonly noGain = new Float32Array(MAX_UNITS);
   readonly ignoreT = new Float32Array(MAX_UNITS);
   readonly engaged = new Uint8Array(MAX_UNITS);
   readonly field: (Field | null)[] = new Array(MAX_UNITS).fill(null);
@@ -455,6 +458,8 @@ export class World {
     this.destX[i] = this.homeX[i] = ux;
     this.destY[i] = this.homeY[i] = uy;
     this.stuck[i] = this.ignoreT[i] = 0;
+    this.bestD[i] = 1e9;
+    this.noGain[i] = 0;
     this.engaged[i] = 0;
     this.field[i] = null;
     this.state[i] = 0;

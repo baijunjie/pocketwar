@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDINGS, LEVELS, RULES, SITE_CAMP, SITE_HQ, SITE_INFO, SITE_TOWN, SIZES, TILE, T_MOUNTAIN, UNITS, UNIT_BY_KEY } from '../src/sim/defs';
+import { BUILDINGS, LEVELS, RULES, SITE_CAMP, SITE_HQ, SITE_INFO, SITE_TOWN, SIZES, TILE, T_BRIDGE, T_DEEP, T_MOUNTAIN, UNITS, UNIT_BY_KEY } from '../src/sim/defs';
 import { createGame } from '../src/sim/setup';
 import { damageUnit } from '../src/sim/systems/combat';
 import { P_POSTED } from '../src/sim/systems/garrison';
@@ -1042,4 +1042,86 @@ describe('第六轮反馈', () => {
     for (let t = 0; t < 30 * 90 && men.some(s => w.alive[s] && w.order[s] !== 0); t++) w.tick();
     expect(men.every(s => !w.alive[s] || (w.order[s] === 0 && Math.abs(w.x[s] - (C + 700)) < 200))).toBe(true);
   }, 30000);
+});
+
+describe('编队行军：特殊地形', () => {
+  // 混编的一大队：200 人，带几辆器械
+  const army = (): number[] => [...Array(60).fill(idx('ji')), ...Array(50).fill(idx('dao')), ...Array(60).fill(idx('nu')),
+    ...Array(30).fill(idx('tieqi')), ...Array(4).fill(idx('pili'))];
+  /** 队列位置在自己身后、正原地等着的人数 */
+  const waiting = (w: World, g: number[], gi: number): number => {
+    const m = w.marches[gi];
+    let n = 0;
+    for (const s of g) {
+      if (w.grp[s] !== gi) continue;
+      marchSlot(m, w.offA[s], w.offL[s]);
+      if ((SLOT.x - w.x[s]) * SLOT.hx + (SLOT.y - w.y[s]) * SLOT.hy < -RULES.march.waitAhead) n++;
+    }
+    return n;
+  };
+
+  it('过窄桥：后排原地排队，但领队不为排队的人放慢；过桥后分步展开，领队不停下来等', () => {
+    // 南北向的河，桥 2 格宽
+    const w = flatWorld(140, 7, (t, n) => {
+      for (let x = 60; x <= 64; x++) for (let y = 0; y < n; y++) t[y * n + x] = y === 58 || y === 59 ? T_BRIDGE : T_DEEP;
+    });
+    const g = w.spawnGroup(1, army(), 35 * TILE, 70 * TILE, 1, 0);
+    w.orderMove(g, 105 * TILE, 50 * TILE, false);
+    const gi = w.grp[g[0]], m = w.marches[gi];
+    let frames = 0, slow = 0, stopAfter = 0, maxLagAfter = 0, minW = m.width;
+    for (let t = 0; t < 30 * 200 && !m.arrived; t++) {
+      w.tick();
+      if (t < 30 * 5) continue;
+      frames++;
+      if (m.v < m.speed * 0.5) slow++;
+      minW = Math.min(minW, m.width);
+      // 过了桥、开始展开之后
+      if (m.x > 67 * TILE) {
+        if (m.v === 0) stopAfter++;
+        maxLagAfter = Math.max(maxLagAfter, m.lag);
+      }
+    }
+    expect(m.arrived).toBe(true);
+    // 确实收成了纵队，又展开回原来的横排
+    expect(minW).toBeLessThanOrEqual(3 * TILE);
+    expect(m.width).toBe(m.fullW);
+    expect(slow / frames).toBeLessThan(0.05);
+    expect(stopAfter).toBeLessThan(4);
+    expect(maxLagAfter).toBeLessThan(RULES.march.lagStop * 0.8);
+  }, 60000);
+
+  it('横队绕过障碍拐弯：转弯半径随队宽变大，内侧的人不用原地干等', () => {
+    // 一道南北向的山梁挡在中间，只能从南头绕过去
+    const w = flatWorld(140, 7, (t, n) => {
+      for (let x = 60; x <= 63; x++) for (let y = 0; y < 85; y++) t[y * n + x] = T_MOUNTAIN;
+    });
+    const g = w.spawnGroup(1, army(), 35 * TILE, 60 * TILE, 1, 0);
+    w.orderMove(g, 100 * TILE, 50 * TILE, false);
+    const gi = w.grp[g[0]], m = w.marches[gi];
+    let sum = 0, frames = 0, maxLag = 0;
+    for (let t = 0; t < 30 * 200 && !m.arrived; t++) {
+      w.tick();
+      if (t < 30 * 8 || t % 10) continue;
+      frames++;
+      sum += waiting(w, g, gi) / g.length;
+      maxLag = Math.max(maxLag, m.lag);
+    }
+    expect(m.arrived).toBe(true);
+    expect(sum / frames).toBeLessThan(0.02);
+    expect(maxLag).toBeLessThan(RULES.march.lagStop * 0.4);
+  }, 60000);
+
+  it('到了终点挤不进自己的落点：几秒没再靠近就就地算到，不在人堆边上来回绕', () => {
+    // 真实地图上复现过的一例：全军开进麦田村，有人在流场和直线之间来回绕，永远到不了
+    const w = createGame({ seed: 7, factions: ['china', 'rome'], armySize: 300, difficulty: 1, fog: false, spectate: false, environment: false }).world;
+    const dp = w.map.deploy[1];
+    const g: number[] = [];
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.team[i] === 1 && Math.hypot(w.x[i] - dp.x, w.y[i] - dp.y) < 800) g.push(i);
+    const site = w.sites.find(s => s.name === '麦田村')!;
+    w.orderMove(g, site.x, site.y + 120, false);
+    const moving = (): boolean => g.some(s => w.alive[s] && (w.order[s] === 1 || w.order[s] === 2));
+    let t = 0;
+    for (; t < 30 * 240 && moving(); t++) w.tick();
+    expect(moving()).toBe(false);
+  }, 60000);
 });

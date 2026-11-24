@@ -20,6 +20,8 @@ function arrive(w: World, i: number, atSlot: boolean): void {
   w.homeY[i] = atSlot ? w.destY[i] : w.y[i];
   w.field[i] = null;
   w.stuck[i] = 0;
+  w.bestD[i] = 1e9;
+  w.noGain[i] = 0;
   w.grpSpeed[i] = 0;
   w.grp[i] = -1;
 }
@@ -367,9 +369,18 @@ export function updateUnits(w: World): void {
               }
             }
           }
+          // 离开编队之后迟迟不再靠近目的地（终点附近被列好阵的人挡着，在流场和直线之间来回绕）：就地算到
+          let late = false;
+          if (!inFormation && ord !== O_ATTACK) {
+            if (dd < w.bestD[i] - 4) {
+              w.bestD[i] = dd;
+              w.noGain[i] = 0;
+            } else if (dd < RULES.march.giveUpNear && (w.noGain[i] += DT) > RULES.march.giveUpAfter) late = true;
+          }
           if (inFormation) {
             if (w.stuck[i] > 0) w.stuck[i] = 0;
           } else if (dd < 5 && ord !== O_ATTACK) arrive(w, i, true);
+          else if (late) arrive(w, i, false);
           else {
             let f = w.field[i];
             let direct = true;

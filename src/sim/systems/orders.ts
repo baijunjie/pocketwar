@@ -18,6 +18,8 @@ function obey(w: World, units: number[]): number[] {
 
 function reset(w: World, s: number): void {
   w.stuck[s] = 0;
+  w.bestD[s] = 1e9;
+  w.noGain[s] = 0;
   w.ignoreT[s] = 0;
   w.waitT[s] = 0;
   w.waits[s] = 0;

@@ -73,6 +73,8 @@ export interface March {
   /** 从哪里起两侧一直够宽（走过一个纵深之后才展开），以及这一段里见过的最窄处 */
   wideOdo: number;
   wideMin: number;
+  /** 正在分步展开 */
+  widening: boolean;
   reformTick: number;
 }
 
@@ -173,9 +175,41 @@ function anchor(w: World, g: March, x: number, y: number): void {
   }
   Object.assign(g, {
     x, y, hx, hy, cx: x, cy: y, shift: 0, shiftTo: 0, head: 0, rec: 0, odo: 0, v: 0, lag: M.lagStop,
-    wideOdo: 0, wideMin: g.fullW,
+    wideOdo: 0, wideMin: g.fullW, widening: false,
     field: w.lineBlocked(x, y, g.destX, g.destY, team) ? w.nav.getField(team, g.destCell, w.tickCount) : null,
   });
+}
+
+const AIM = { x: 0, y: 0 };
+
+/**
+ * 沿流场从领队脚下往前数格子，取直线走得通的最远一格（不超过 look 的距离），结果放在 AIM。
+ * 流场只有八个方向，直接照着走是一段段折线；横队跟着折线拐，每拐一下都要整队转一次身。
+ */
+function lookAhead(w: World, g: March, f: Field, cell: number): boolean {
+  const M = RULES.march, mw = w.map.w;
+  const look = Math.max(M.lookMin, g.width * M.lookK);
+  const max = Math.ceil(look / TILE) * 2 + 2;
+  let c = cell, ok = false;
+  for (let k = 0; k < max; k++) {
+    const dir = f.dirs[c];
+    if (dir > 7) {
+      if (dir === DIR_HERE && !w.lineBlocked(g.x, g.y, g.destX, g.destY, g.team)) {
+        AIM.x = g.destX;
+        AIM.y = g.destY;
+        ok = true;
+      }
+      break;
+    }
+    c += DIRX[dir] + DIRY[dir] * mw;
+    const px = (c % mw + 0.5) * TILE, py = (((c / mw) | 0) + 0.5) * TILE;
+    if ((px - g.x) ** 2 + (py - g.y) ** 2 > look * look) break;
+    if (w.lineBlocked(g.x, g.y, px, py, g.team)) break;
+    AIM.x = px;
+    AIM.y = py;
+    ok = true;
+  }
+  return ok;
 }
 
 /** 从 (qx, qy) 沿 (nx, ny) 方向量出多远都走得通（每 16 像素探一次，最多 max） */
@@ -235,17 +269,29 @@ function fit(w: World, g: March): void {
   if (want > g.fullW) want = g.fullW;
   if (want < g.width - 6) {
     reform(w, g, want);
+    g.widening = false;
     g.wideOdo = g.odo;
     g.wideMin = g.fullW;
-  } else if (want > g.width + 6 && (want >= g.fullW || want > g.width * M.widen)) {
+  } else if (want > g.width + 6 && (g.widening || want >= g.fullW || want > g.width * M.widen)) {
     // 够宽了：等整支队伍都走过窄处再展开
     if (want < g.wideMin) g.wideMin = want;
-    if (g.odo - g.wideOdo > g.depth * M.widenAfter) {
-      reform(w, g, g.wideMin);
-      g.wideOdo = g.odo;
-      g.wideMin = g.fullW;
+    if (g.widening || g.odo - g.wideOdo > g.depth * M.widenAfter) {
+      // 一次只展开一点：纵深每次最多缩短 widenStep，后排的位置只往前挪这么多，小跑几步就跟上；
+      // 一下子展开到位的话，后排的位置会前跳几百像素，领队只能停下来等
+      g.widening = true;
+      if (g.lag < M.lagFull && w.tickCount - g.reformTick >= M.widenEvery) {
+        const room = g.depth - M.widenStep;
+        const to = room > g.depth / 2 ? g.width * g.depth / room : g.width * 2;
+        reform(w, g, to < g.wideMin ? to : g.wideMin);
+        if (g.width >= g.wideMin - 6) {
+          g.widening = false;
+          g.wideOdo = g.odo;
+          g.wideMin = g.fullW;
+        }
+      }
     }
   } else {
+    g.widening = false;
     g.wideOdo = g.odo;
     g.wideMin = g.fullW;
   }
@@ -279,9 +325,10 @@ export function updateMarches(w: World): void {
       }
       marchSlot(g, w.offA[i], w.offL[i]);
       const ox = SLOT.x - w.x[i], oy = SLOT.y - w.y[i];
-      let lag = Math.sqrt(ox * ox + oy * oy);
-      // 站在自己位置前面的人不用等：位置会自己走过来
-      if (ox * SLOT.hx + oy * SLOT.hy < 0) lag *= M.aheadLag;
+      // 位置在自己身后的人（收窄成纵队时排到了后面）原地等位置走过来，不算掉队：
+      // 算进去的话领队会为了等他们放慢，位置就走得更慢，整支队伍越等越久
+      if (ox * SLOT.hx + oy * SLOT.hy < -M.waitAhead) continue;
+      const lag = Math.sqrt(ox * ox + oy * oy);
       g.lagSum += lag > 400 ? 400 : lag;
     }
     for (const g of ms) {
@@ -301,10 +348,11 @@ export function updateMarches(w: World): void {
     }
   }
   const mw = w.map.w, terr = w.map.terrain;
-  const rain = w.env.raining ? RULES.env.rainSpeed : 1;
+  // 与 units.ts 里成员的速度用同一个天气系数
+  const rain = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
   // 领队也吃顺风 / 顶风，否则成员和队列位置对不上
   const windK = w.env.wind * RULES.env.windSpeed, windX = Math.cos(w.env.windDir), windY = Math.sin(w.env.windDir);
-  const turn = M.turn * DT;
+  const maxTurn = M.turn * DT;
   for (const g of ms) {
     if (!g.alive || g.arrived) continue;
     const k = (M.lagStop - g.lag) / (M.lagStop - M.lagFull);
@@ -324,28 +372,63 @@ export function updateMarches(w: World): void {
       g.v = 0;
       continue;
     }
-    let mx = ddx / dd, my = ddy / dd;
+    // 往哪儿走：沿路线往前看一段，取看得见的最远一点（八方向流场的折线拉直）；离终点近了就直奔终点
+    let tx = g.destX, ty = g.destY;
     let f = g.field;
+    let fdx = 0, fdy = 0;
     if (f) {
       if (f.dead) f = g.field = w.nav.getField(g.team, g.destCell, tick);
       f.lastUse = tick;
       const dir = f.dirs[cell];
       if (dir < 8) {
         const kk = dir & 1 ? 0.7071 : 1;
-        mx = DIRX[dir] * kk;
-        my = DIRY[dir] * kk;
+        fdx = DIRX[dir] * kk;
+        fdy = DIRY[dir] * kk;
+        if (lookAhead(w, g, f, cell)) {
+          tx = AIM.x;
+          ty = AIM.y;
+        } else {
+          tx = g.x + fdx * TILE;
+          ty = g.y + fdy * TILE;
+        }
       } else if (dir !== DIR_HERE && f.pending) {
         // 路线还没算出来：等一等
         g.v = 0;
         continue;
       }
     }
-    const ml = Math.sqrt(mx * mx + my * my);
-    const wf = windK > 0 && ml > 0 ? 1 + windK * (mx * windX + my * windY) / ml : 1;
+    // 朝向（队列横排的方向）按队宽限制转向：转弯半径不小于半个队宽，否则内侧的位置会往回折、外侧要跑一大圈
+    const ha = Math.atan2(g.hy, g.hx);
+    let da = Math.atan2(ty - g.y, tx - g.x) - ha;
+    if (da > Math.PI) da -= Math.PI * 2;
+    else if (da < -Math.PI) da += Math.PI * 2;
+    const radius = dd < g.width ? 1 : Math.max(M.turnR, g.width / 2);
+    let turn = step / radius;
+    if (turn > maxTurn) turn = maxTurn;
+    const na = ha + (da > turn ? turn : da < -turn ? -turn : da);
+    g.hx = Math.cos(na);
+    g.hy = Math.sin(na);
+    // 脚下的方向：朝向转得慢，领队可以斜着走一点（最多 slide），横队整体侧移着跟上路线
+    let ma = na;
+    const rest = da - (na - ha);
+    if (rest > M.slide) ma += M.slide;
+    else if (rest < -M.slide) ma -= M.slide;
+    else ma += rest;
+    let mx = Math.cos(ma), my = Math.sin(ma);
+    const wf = windK > 0 ? 1 + windK * (mx * windX + my * windY) : 1;
     let nx = g.x + mx * step * wf, ny = g.y + my * step * wf;
-    const nc = ((ny / TILE) | 0) * mw + ((nx / TILE) | 0);
+    let nc = ((ny / TILE) | 0) * mw + ((nx / TILE) | 0);
+    const blk = w.nav.block[g.team];
+    if (nc !== cell && (blk[nc] || !w.nav.canStep(g.team, cell, nc)) && (fdx || fdy)) {
+      // 抄近路撞上了障碍：老老实实沿流场走
+      mx = fdx;
+      my = fdy;
+      nx = g.x + mx * step * wf;
+      ny = g.y + my * step * wf;
+      nc = ((ny / TILE) | 0) * mw + ((nx / TILE) | 0);
+    }
     g.blocked = false;
-    if (nc !== cell && (w.nav.block[g.team][nc] || !w.nav.canStep(g.team, cell, nc))) {
+    if (nc !== cell && (blk[nc] || !w.nav.canStep(g.team, cell, nc))) {
       // 直线走不通：改用寻路；寻路路线上是别人的建筑（城门、木栅）就停下，让成员去打
       if (!g.field) g.field = w.nav.getField(g.team, g.destCell, tick);
       else if (w.nav.bld[nc] >= 0) g.blocked = true;
@@ -355,15 +438,6 @@ export function updateMarches(w: World): void {
     }
     g.x = nx;
     g.y = ny;
-    // 朝向平滑地转向前进方向
-    let da = Math.atan2(my, mx) - Math.atan2(g.hy, g.hx);
-    if (da > Math.PI) da -= Math.PI * 2;
-    else if (da < -Math.PI) da += Math.PI * 2;
-    if (da !== 0) {
-      const a = Math.atan2(g.hy, g.hx) + (da > turn ? turn : da < -turn ? -turn : da);
-      g.hx = Math.cos(a);
-      g.hy = Math.sin(a);
-    }
     if (g.v <= 0) continue;
     // 中线与行迹
     g.shift += (g.shiftTo - g.shift) * M.shiftRate;
