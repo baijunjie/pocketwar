@@ -73,8 +73,6 @@ export class Nav {
   private readonly jobs: Job[] = [];
   private readonly pool: { dist: Uint32Array; hd: Uint32Array; hc: Int32Array }[] = [];
   private readonly off: Int32Array;
-  private readonly offX: Int32Array;
-  private readonly offY: Int32Array;
 
   constructor(readonly w: number, readonly h: number, terrain: Uint8Array) {
     const n = (this.n = w * h);
@@ -85,8 +83,6 @@ export class Nav {
     this.deck = [new Uint8Array(0), new Uint8Array(n), new Uint8Array(n)];
     this.inner = new Uint8Array(n);
     this.off = Int32Array.from(DIRX.map((dx, i) => dx + DIRY[i] * w));
-    this.offX = Int32Array.from(DIRX);
-    this.offY = Int32Array.from(DIRY.map(dy => dy * w));
     for (let i = 0; i < n; i++) this.setTerrain(i, terrain[i]);
     // 紧贴山体、深水的格子略微加价：行军路线会与障碍留出一点余量，不至于全军贴着河岸挤成一线
     const hug = new Uint8Array(n);
@@ -157,6 +153,20 @@ export class Nav {
   canStep(team: number, a: number, b: number): boolean {
     const dk = this.deck[team];
     return dk[a] === dk[b] || (dk[a] === 1 && this.inner[b] === 1);
+  }
+
+  /**
+   * 本队单位能否从 a 格斜着直接走到斜对角的 b 格：两格以及这一步擦过的两个角格都不阻挡（不擦着障碍角穿过），
+   * 且四格同在墙顶或同在地面（上下墙只能正着走）。规则对称，a、b 互换结果相同
+   */
+  canStepDiag(team: number, a: number, b: number): boolean {
+    const blk = this.block[team], dk = this.deck[team];
+    // 两个角格：与 a 同行、与 b 同列的那格，以及与 b 同行、与 a 同列的那格
+    const dx = (b % this.w) - (a % this.w);
+    const c1 = a + dx, c2 = b - dx;
+    if (blk[a] || blk[b] || blk[c1] || blk[c2]) return false;
+    const k = dk[a];
+    return dk[b] === k && dk[c1] === k && dk[c2] === k;
   }
 
   /** 找到离给定格最近的可站立格（墙顶不算） */
@@ -282,10 +292,9 @@ export class Nav {
 
   /** 推进一次搜索，返回剩余预算 */
   private step(job: Job, budget: number): number {
-    const cost = this.cost[job.field.team], blk = this.block[job.field.team];
-    const dk = this.deck[job.field.team], inner = this.inner;
+    const team = job.field.team, cost = this.cost[team];
     const dist = job.dist, dirs = job.dirs;
-    const off = this.off, offX = this.offX, offY = this.offY;
+    const off = this.off;
     let hd = job.hd, hc = job.hc, hs = job.hs;
     while (hs > 0 && budget-- > 0) {
       // 弹出堆顶
@@ -309,21 +318,16 @@ export class Nav {
       if (d > dist[c]) continue;
       const cc = d === 0 ? 10 : cost[c]; // 进入 c 的代价（终点格固定为 10）
       const cd = (cc * 1.4142) | 0;
-      const cBlocked = blk[c];
       for (let dir = 0; dir < 8; dir++) {
         const nc = c + off[dir];
         if (cost[nc] === 0) continue;
         let nd: number;
+        // 搜索是从终点往外扩的：这一步是单位从 nc 走到 c
         if (dir & 1) {
-          // 斜向：不允许擦着障碍角穿过
-          if (cBlocked || blk[nc] || blk[c + offX[dir]] || blk[c + offY[dir]]) continue;
-          // 上下墙只能正着走，也不许擦着墙角斜穿
-          const k = dk[c];
-          if (dk[nc] !== k || dk[c + offX[dir]] !== k || dk[c + offY[dir]] !== k) continue;
+          if (!this.canStepDiag(team, nc, c)) continue;
           nd = d + cd;
         } else {
-          // 搜索是从终点往外扩的：这一步是单位从 nc 走到 c
-          if (dk[c] !== dk[nc] && !(dk[nc] && inner[c])) continue;
+          if (!this.canStep(team, nc, c)) continue;
           nd = d + cc;
         }
         if (nd < dist[nc]) {

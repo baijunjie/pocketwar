@@ -80,14 +80,14 @@ describe('营寨选兵种', () => {
     }
   }, 60000);
 
-  it('罗马营寨选蝎弩：一批出 12 个蝎弩（11.6 份 ÷ 占用 1）', () => {
+  it('罗马营寨选蝎弩：一批只出蝎弩，人数 = 营寨每批份数 × 援军倍率 ÷ 占用 1', () => {
     const w = game('rome');
     clear(w);
     const s = ownCamp(w);
     expect(w.pickUnit(s, 1, idx('scorpio'))).toBe(true);
     const got = batch(w, s);
     expect([...got.keys()]).toEqual([idx('scorpio')]);
-    expect(got.get(idx('scorpio'))).toBe(12);
+    expect(got.get(idx('scorpio'))).toBe(headcount(UNIT_BY_KEY.scorpio, SITE_INFO[SITE_CAMP].reinfForce * w.reinfMult[1]));
   });
 
   it('份数换算：贵的兵种人更少，近战步兵最多；份数再少也有 1 人', () => {

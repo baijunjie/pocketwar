@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { FACTIONS, RULES, SITE_CITY, T_MOUNTAIN, TILE, UNIT_BY_KEY } from '../../../src/sim/defs';
+import { BUILDINGS, FACTIONS, RULES, SITE_CITY, T_MOUNTAIN, TILE, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { siteContains } from '../../../src/sim/siteArea';
 import { S_COMBAT } from '../../../src/sim/world';
-import { NONE, O_IDLE, S_CHARGE, S_ROUT } from '../../../src/sim/state';
+import { NONE, O_ATTACK, O_IDLE, S_CHARGE, S_ROUT } from '../../../src/sim/state';
 import { armyList, createGame } from '../../../src/sim/setup';
+import { WAY_AROUND, WAY_DIRECT, WAY_NONE } from '../../../src/sim/systems/around';
+import { tryDetour } from '../../../src/sim/systems/detour';
 import { kill } from '../../../src/sim/systems/combat';
+import { canAttackBuilding } from '../../../src/sim/systems/targeting';
 import type { World } from '../../../src/sim/world';
 import { flatWorld, run } from '../../helpers';
 
@@ -398,6 +401,44 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
     expect(engaged).toBe(true);
   });
 
+  it('横挪途中正前方空出来：钻进去接敌，「追不上」计时随之清零，不会被残留的计时判成追不上去列队等', () => {
+    const w = flatWorld();
+    const { ps, back } = lineWall(w, 31);
+    const a = w.spawnUnit(idx('legion'), 1, C - 60, C + 3);
+    w.orderAttackUnit([a], back[15]);
+    // 横挪到「追不上」计时攒到一半多，把正前方一段人墙（站定的自己人与他们贴着的敌人）撤掉
+    let cleared = false;
+    for (let t = 0; t < 10 * 30 && !cleared; t++) {
+      w.tick();
+      w.fxN = 0;
+      if (w.stuck[a] <= RULES.combat.blockedAfter / 2) continue;
+      cleared = true;
+      const reach = 8 * w.rad[a];
+      expect(w.engaged[a], '清人墙时还没接敌').toBe(0);
+      expect(w.waitT[a], '清人墙时还没列队等').toBe(0);
+      const near = ps.filter(p => Math.abs(w.y[p] - w.y[a]) < reach);
+      expect(near.length, '正前方有人墙').toBeGreaterThan(0);
+      for (const p of near) w.removeUnit(p);
+      for (let u = 0; u < w.n; u++) {
+        // 前排敌人（后排在更东边）
+        if (w.alive[u] && w.team[u] === 2 && w.x[u] < w.x[back[15]] - w.rad[u] && Math.abs(w.y[u] - w.y[a]) < reach) w.removeUnit(u);
+      }
+    }
+    expect(cleared, '横挪攒下了计时').toBe(true);
+    let engagedAt = -1, waited = false, clearedStuck = false;
+    for (let t = 0; t < 3 * 30 && engagedAt < 0; t++) {
+      w.tick();
+      w.fxN = 0;
+      if (w.waitT[a] > 0) waited = true;
+      if (w.stuck[a] === 0) clearedStuck = true;
+      if (w.engaged[a]) engagedAt = t;
+    }
+    expect(waited, '没有去列队等').toBe(false);
+    expect(engagedAt, '钻进空位接上敌').toBeGreaterThanOrEqual(0);
+    expect(clearedStuck, '走通之后计时清零').toBe(true);
+    expect(w.target[a]).toBe(back[15]);
+  });
+
   it('选贴着的人少的一侧：前面的人偏向哪边，就往另一边绕', () => {
     expect(flankOne(5).maxY).toBeLessThan(-5);
     expect(flankOne(-5).maxY).toBeGreaterThan(5);
@@ -432,23 +473,26 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
   /**
    * 一个人追后排的敌人，被前排站定的自己人堵着够不着：逐帧记下横移速度、面朝与目标方向的夹角、「追不上」计时的增速。
    * 横挪的一段 = 贴着自己人、没交手、在挪动的连续帧（中间断开不超过 6 帧的算同一段）；走近人墙的路上不算。
+   * segs 按时间顺序给出每一段的时长，以及这一段结束之后到下一段开始之前（观察结束时止）有没有进入过列队等。
    */
-  const flankAlongWall = (secs: number): {
-    spellSecs: number; maxDev: number; stuckRate: number; lateralFrames: number; waited: boolean; engagedFrames: number;
+  const flankAlongWall = (secs: number, key = 'legion'): {
+    maxDev: number; stuckRate: number; lateralFrames: number; engagedFrames: number;
+    segs: { secs: number; waitedAfter: boolean }[];
   } => {
     const w = flatWorld();
     const { ps, back } = lineWall(w, 31);
     const mid = back[15];
-    const a = w.spawnUnit(idx('legion'), 1, C - 60, C + 3);
+    const a = w.spawnUnit(idx(key), 1, C - 60, C + 3);
     w.orderAttackUnit([a], mid);
-    let maxDev = 0, spell = 0, best = 0, gap = 0, lateralFrames = 0, prevStuck = 0, waited = false, engagedFrames = 0;
+    let maxDev = 0, spell = 0, gap = 0, lateralFrames = 0, prevStuck = 0, engagedFrames = 0;
     const rates: number[] = [];
+    const segs: { secs: number; waitedAfter: boolean }[] = [];
     for (let t = 0; t < secs * 30; t++) {
       const x0 = w.x[a], y0 = w.y[a];
       w.tick();
       w.fxN = 0;
       const vx = (w.x[a] - x0) * 30, vy = (w.y[a] - y0) * 30;
-      if (w.waitT[a] > 0) waited = true;
+      if (w.waitT[a] > 0 && segs.length > 0) segs[segs.length - 1].waitedAfter = true;
       if (w.engaged[a]) engagedFrames++;
       if (Math.abs(vy) > 20 && Math.abs(vy) > 2 * Math.abs(vx)) {
         lateralFrames++;
@@ -462,14 +506,15 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       prevStuck = w.stuck[a];
       const touching = ps.some(p => Math.hypot(w.x[a] - w.x[p], w.y[a] - w.y[p]) < w.rad[a] + w.rad[p] + RULES.combat.contactSkin + 1);
       if (touching && !w.engaged[a] && Math.hypot(vx, vy) > 9) {
+        if (spell === 0) segs.push({ secs: 0, waitedAfter: false });
         spell++;
+        segs[segs.length - 1].secs = spell / 30;
         gap = 0;
-        best = Math.max(best, spell);
       } else if (++gap > 6) spell = 0;
     }
     rates.sort((p, q) => p - q);
     return {
-      spellSecs: best / 30, maxDev, stuckRate: rates.length ? rates[rates.length >> 1] : 1, lateralFrames, waited, engagedFrames,
+      maxDev, stuckRate: rates.length ? rates[rates.length >> 1] : 1, lateralFrames, engagedFrames, segs,
     };
   };
 
@@ -487,15 +532,21 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
     expect(r.stuckRate).toBeLessThan(RULES.combat.flankStuck * 2);
   });
 
-  it('绕不过去就停下排队：单段横挪有上限，不会一直沿着人墙来回绕', () => {
-    // 上限给得宽：理论上限 blockedAfter ÷ flankStuck 的两倍再加 1 秒，中途被打断重算也不应超过
-    const maxSecs = 2 * RULES.combat.blockedAfter / RULES.combat.flankStuck + 1;
-    const r = flankAlongWall(8);
+  it.each(['legion', 'dao', 'auxilia', 'elephant'])('绕不过去就停下排队：每一段横挪都有上限，横挪攒满之后列队等、等完再试（%s）', key => {
+    // 理论上限 blockedAfter ÷ flankStuck；统计时把走近人墙与刚开始列队等时减速的几帧也算进一段，余 1 秒
+    const full = RULES.combat.blockedAfter / RULES.combat.flankStuck;
+    const r = flankAlongWall(30, key);
     // 够不着目标：整个过程没有交上手
     expect(r.engagedFrames).toBe(0);
-    expect(r.spellSecs).toBeLessThanOrEqual(maxSecs);
-    // 横挪一段之后一定进入原地排队
-    expect(r.waited).toBe(true);
+    const longest = Math.max(...r.segs.map(g => g.secs));
+    expect(longest, `各段横挪（秒）${r.segs.map(g => g.secs.toFixed(2)).join(' ')}`).toBeLessThanOrEqual(full + 1);
+    // 横挪被打断（顿一下抛标枪、收尾的抖动）会把一段切成几截，短的几截后面不一定接着列队等；攒到上限附近的段后面一定进入原地排队。
+    // 最后一段可能还没来得及等，不查
+    const spent = r.segs.filter(g => g.secs >= full - 0.5);
+    const unwaited = r.segs.slice(0, -1).map((g, k) => (g.secs >= full - 0.5 && !g.waitedAfter ? k : -1)).filter(k => k >= 0);
+    expect(unwaited, '攒满之后没进列队等的段号').toEqual([]);
+    // 等完之后还会再试：不是挪一次就彻底停了
+    expect(spent.length, '攒满的横挪段数').toBeGreaterThanOrEqual(3);
   });
 
   it('围攻时非交手单位逐帧反向的比例仍然很低', () => {
@@ -567,48 +618,58 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
 
   describe('近战绕行：追不上时先绕到敌群外缘的空位', () => {
     /** 在 lineWall 的人墙前放一个追击者，追后排正中的敌人；逐帧记下绕行、列队等待、交手的时间点 */
-    const chaseBehindWall = (n: number, secs: number, onDetourStart?: (w: World, a: number) => void) => {
+    const chaseBehindWall = (n: number, secs: number) => {
       const w = flatWorld();
       const { back } = lineWall(w, n);
       const mid = back[(n - 1) >> 1];
       const a = w.spawnUnit(idx('legion'), 1, C - 60, C + 3);
       w.orderAttackUnit([a], mid);
       const backX = w.x[mid];
-      let firstDetour = -1, endDetour = -1, firstWait = -1, firstEngaged = -1, maxXEngaged = -Infinity;
-      let waitAtEnd = false, prev = 0;
+      let firstDetour = -1, firstWait = -1, firstEngaged = -1, maxXEngaged = -Infinity;
       for (let t = 0; t < secs * 30; t++) {
         w.tick();
         w.fxN = 0;
-        const det = w.detourT[a];
-        if (det > 0 && firstDetour < 0) {
-          firstDetour = t;
-          onDetourStart?.(w, a);
-        }
-        if (prev > 0 && det <= 0 && endDetour < 0) {
-          endDetour = t;
-          waitAtEnd = w.waitT[a] > 0;
-        }
-        prev = det;
+        if (w.detourT[a] > 0 && firstDetour < 0) firstDetour = t;
         if (w.waitT[a] > 0 && firstWait < 0) firstWait = t;
         if (w.engaged[a]) {
           if (firstEngaged < 0) firstEngaged = t;
           maxXEngaged = Math.max(maxXEngaged, w.x[a]);
         }
       }
-      return { firstDetour, endDetour, firstWait, firstEngaged, maxXEngaged, waitAtEnd, backX, rad: w.rad[a] };
+      return { firstDetour, firstWait, firstEngaged, maxXEngaged, backX, rad: w.rad[a] };
     };
 
-    it('追不上先绕行、绕不成才列队等：空位被占着走不到，绕行一次最长 detourFor 秒，到点改为列队等', () => {
-      // 17 宽的人墙：绕到后排东面要走很久；起绕那一刻有人站到了空位上
-      const r = chaseBehindWall(17, 25, (w, a) => {
-        const f = w.target[a];
-        w.spawnUnit(idx('legion'), 1, w.x[f] + w.detourX[a], w.y[f] + w.detourY[a]);
-      });
-      expect(r.firstDetour, '绕过行').toBeGreaterThan(0);
-      expect(r.endDetour, '绕行结束了').toBeGreaterThan(r.firstDetour);
-      expect(r.firstWait, '绕行之后才列队等').toBeGreaterThan(r.firstDetour);
-      expect((r.endDetour - r.firstDetour) / 30).toBeLessThanOrEqual(RULES.combat.detourFor + 0.1);
-      expect(r.waitAtEnd, '放弃绕行的这一刻改为列队等').toBe(true);
+    it('先起绕、空位被占着走不到：到点（时限用尽）结束绕行，改为列队等', () => {
+      // 17 宽的人墙，追击者在人墙北端外侧：绕到南端的空位走得通，起绕条件满足；起绕那一刻有人站到了空位上
+      const w = flatWorld();
+      const { back } = lineWall(w, 17);
+      const a = w.spawnUnit(idx('legion'), 1, C - 30, C + 100);
+      w.orderAttackUnit([a], back[8]);
+      for (let t = 0; t < 2; t++) {
+        w.tick();
+        w.fxN = 0;
+      }
+      expect(tryDetour(w, a, w.target[a], w.state[a], w.order[a], w.defs[idx('legion')].speed, 0), '起绕了').toBe(true);
+      expect(w.detourT[a]).toBe(RULES.combat.detourFor);
+      const f = w.target[a];
+      w.spawnUnit(idx('legion'), 1, w.x[f] + w.detourX[a], w.y[f] + w.detourY[a]);
+      // 剩下的时限只够走不到一半的路程：到点时还远没到位
+      const left = RULES.combat.detourFor / 4;
+      w.detourT[a] = left;
+      let end = -1, waitAtEnd = false, engaged = false;
+      for (let t = 0; t < 15 * 30 && end < 0; t++) {
+        w.tick();
+        w.fxN = 0;
+        if (w.engaged[a]) engaged = true;
+        if (w.detourT[a] <= 0) {
+          end = t;
+          waitAtEnd = w.waitT[a] > 0;
+        }
+      }
+      expect(end, '绕行结束了').toBeGreaterThanOrEqual(0);
+      expect((end + 1) / 30, '不晚于时限').toBeLessThanOrEqual(left + 0.1);
+      expect(waitAtEnd, '结束的这一刻改为列队等').toBe(true);
+      expect(engaged, '没到位接敌').toBe(false);
     });
 
     it('绕过去的路程超过 速度 × detourFor：不起绕，照旧横挪与列队等', () => {
@@ -807,11 +868,11 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       });
     });
 
-    /** 11 宽人墙 + 追击者 a（右键指定攻击后排正中的敌人）；跑到 a 起绕为止，返回此时的世界 */
-    const detouringAtWall = (): { w: World; a: number; rr: number } => {
+    /** 11 宽人墙 + 追击者 a（在西边、偏中线 startY 处，右键指定攻击后排正中的敌人）；跑到 a 起绕为止，返回此时的世界 */
+    const detouringAtWall = (startY = 3): { w: World; a: number; rr: number } => {
       const w = flatWorld();
       const { back } = lineWall(w, 11);
-      const a = w.spawnUnit(idx('legion'), 1, C - 60, C + 3);
+      const a = w.spawnUnit(idx('legion'), 1, C - 60, C + startY);
       w.orderAttackUnit([a], back[5]);
       for (let t = 0; t < 20 * 30 && w.detourT[a] <= 0; t++) {
         w.tick();
@@ -822,10 +883,12 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
     };
 
     /**
-     * 绕行者去路上横着摆一排 5 个己方单位（前进方向前方 4 个身位）：步兵在原地待命，骑兵各贴着一个敌人在交手。
-     * 返回绕行者第一次越过这排（沿前进方向越过它们所在的线）时偏离这排中心的距离（身位），以及绕行期间离这排最近的距离占半径和的比例。
+     * 绕行者去路上横着摆一排 5 个己方单位（前进方向前方 4 个身位，间距按这排单位自己的碰撞半径排）：
+     * 步兵在原地待命；骑兵各贴着一个敌人在交手，敌人在骑兵的前方（远离绕行者一侧）。
+     * 返回绕行者第一次越过这排（沿前进方向越过它们所在的线）时偏离这排中心的距离（身位）、
+     * 绕行期间离这排最近的距离占半径和的比例，以及绕行期间这排里有人没在交手的帧数。
      */
-    const crossRow = (kind: 'inf' | 'cav'): { crossLat: number | null; minRatio: number } => {
+    const crossRow = (kind: 'inf' | 'cav'): { crossLat: number | null; minRatio: number; idleFrames: number } => {
       const { w, a, rr } = detouringAtWall();
       let px = w.x[a], py = w.y[a];
       for (let k = 0; k < 10; k++) {
@@ -837,16 +900,20 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       const vx = w.x[a] - px, vy = w.y[a] - py, l = Math.hypot(vx, vy) || 1;
       const hx = vx / l, hy = vy / l;
       const ox = w.x[a] + hx * 4 * rr, oy = w.y[a] + hy * 4 * rr;
+      const probe = w.spawnUnit(idx(kind === 'inf' ? 'legion' : 'equites'), 1, 0, 0);
+      const rq = w.rad[probe];
+      w.removeUnit(probe);
       const row: number[] = [];
       for (let k = -2; k <= 2; k++) {
-        const qx = ox - hy * k * 2 * rr * 0.95, qy = oy + hx * k * 2 * rr * 0.95;
+        const qx = ox - hy * k * 2 * rq * 0.95, qy = oy + hx * k * 2 * rq * 0.95;
         if (kind === 'inf') {
           const q = w.spawnUnit(idx('legion'), 1, qx, qy);
           w.orderStop([q], true);
           row.push(q);
         } else {
-          // 骑兵西边（远离人墙一侧）贴着一个站着不动的敌人，交手时脚下可以动，但不是站定
-          const f = w.spawnUnit(idx('legion'), 2, qx - 2.2 * rr, qy);
+          // 骑兵前方（前进方向）贴着一个站着不动的敌人，交手时脚下可以动，但不是站定
+          const dist = (rq + rr) * 1.1;
+          const f = w.spawnUnit(idx('legion'), 2, qx + hx * dist, qy + hy * dist);
           w.hp[f] = w.maxHp[f] = 1e9;
           w.orderStop([f], true);
           const q = w.spawnUnit(idx('equites'), 1, qx, qy);
@@ -854,16 +921,17 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
           row.push(q);
         }
       }
-      let crossLat: number | null = null, minRatio = Infinity;
+      let crossLat: number | null = null, minRatio = Infinity, idleFrames = 0;
       for (let t = 0; t < 12 * 30; t++) {
         w.tick();
         w.fxN = 0;
         if (w.detourT[a] <= 0) continue;
+        if (row.some(q => !w.engaged[q])) idleFrames++;
         const along = (w.x[a] - ox) * hx + (w.y[a] - oy) * hy;
         if (crossLat === null && along > 0) crossLat = Math.abs(-(w.x[a] - ox) * hy + (w.y[a] - oy) * hx) / rr;
         for (const q of row) minRatio = Math.min(minRatio, Math.hypot(w.x[a] - w.x[q], w.y[a] - w.y[q]) / (w.rad[a] + w.rad[q]));
       }
-      return { crossLat, minRatio };
+      return { crossLat, minRatio, idleFrames };
     };
 
     it('绕行的人从待命的己方步兵中间穿过去', () => {
@@ -876,15 +944,17 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
 
     it('绕行的人不穿过正在交手的己方骑兵：绕行期间越不过这排，也不深度重叠', () => {
       const r = crossRow('cav');
+      expect(r.idleFrames, '绕行期间这排骑兵一直在交手').toBe(0);
       expect(r.crossLat, '绕行期间没越过这排').toBeNull();
       expect(r.minRatio).toBeGreaterThan(0.6);
     });
 
-    it.each([[60, 0], [0, 40]])('空位跟着所属敌兵走：绕行途中敌兵挪了 (%i, ±%i)（纵向朝空位所在的一侧挪），落点贴着它的新位置', (dx, dy) => {
-      const { w, a } = detouringAtWall();
+    it.each([[60, 0, 3], [0, 40, 80]])('空位跟着所属敌兵走：绕行途中敌兵挪了 (%i, ±%i)（纵向朝空位所在的一侧挪；追击者初始偏 %i），落点贴着它的新位置', (dx, dy, startY) => {
+      const { w, a } = detouringAtWall(startY);
       const f = w.target[a];
       const oldX = w.x[f] + w.detourX[a], oldY = w.y[f] + w.detourY[a];
-      // 战线上下对称，绕行者往哪一侧绕取决于细微的差别；纵向挪动朝空位所在的一侧，空位才不会被挪到敌兵的另一面
+      // 战线上下对称，绕行者往哪一侧绕取决于细微的差别；纵向挪动朝空位所在的一侧，空位才不会被挪到敌兵的另一面。
+      // 纵向挪得多时，绕行圆心跟着挪，追击者得已经在那一侧（startY 偏大），才不会改从另一侧绕、被交手的自己人堵住
       w.x[f] += dx;
       w.y[f] += dy * (Math.sign(w.detourY[a]) || 1);
       w.px[f] = w.homeX[f] = w.x[f];
@@ -1085,5 +1155,505 @@ describe('单位分离：一帧内的推开量', () => {
     // 同类邻居各担一半：a 这一侧的修正量是最深重叠的一半
     expect(moved).toBeGreaterThan(0.1);
     expect(moved).toBeLessThanOrEqual(deepest * 0.5 + 1e-3);
+  });
+});
+
+/** 格子 (t) 中心的像素坐标 */
+const mid = (t: number): number => (t + 0.5) * TILE;
+/** 画一道南北向的矿山墙：第 x 列，格子 y0..y1 */
+const wallV = (t: Uint8Array, n: number, x: number, y0: number, y1: number): void => {
+  for (let y = y0; y <= y1; y++) t[y * n + x] = T_MOUNTAIN;
+};
+/** 血量无限、原地坚守的敌兵（队伍 2） */
+const dummy = (w: World, x: number, y: number, key = 'legion'): number => {
+  const e = w.spawnUnit(idx(key), 2, x, y);
+  w.hp[e] = w.maxHp[e] = 1e9;
+  w.orderStop([e], true);
+  return e;
+};
+/** 血量无限的己方单位（队伍 1） */
+const mine = (w: World, x: number, y: number, key = 'dao'): number => {
+  const s = w.spawnUnit(idx(key), 1, x, y);
+  w.hp[s] = w.maxHp[s] = 1e9;
+  return s;
+};
+const step = (w: World, ticks: number, each?: (t: number) => void): void => {
+  for (let t = 0; t < ticks; t++) {
+    w.tick();
+    w.fxN = 0;
+    each?.(t);
+  }
+};
+
+describe('追击时直线不通就绕过去', () => {
+  /** 己方近战在 (56, 60) 格，敌兵在 (65, 60) 格（9 格，在警戒距离内），中间 (60..61, 59..60) 格是一座己方民房 */
+  const houseScene = () => {
+    const w = flatWorld(120, 7);
+    w.addBuilding(BUILDINGS.house, 60, 59, 1, -1);
+    const me = mine(w, mid(56), mid(60));
+    const foe = dummy(w, mid(65), mid(60));
+    return { w, me, foe };
+  };
+  const inBlocked = (w: World, s: number): boolean => w.nav.block[1][w.cellAt(w.x[s], w.y[s])] === 1;
+
+  it('攻击移动：隔着民房（直线不通）、绕过去不超过 chaseDetour 的敌兵照样挑，并绕过去交上手，全程不走进不可通行格', () => {
+    const { w, me, foe } = houseScene();
+    expect(w.lineBlocked(w.x[me], w.y[me], w.x[foe], w.y[foe], 1)).toBe(true);
+    w.orderMove([me], mid(90), mid(60), true);
+    let pickedAt = -1, entered = false, engaged = false;
+    step(w, 30 * 20, t => {
+      if (pickedAt < 0 && w.target[me] === foe) pickedAt = t;
+      if (inBlocked(w, me)) entered = true;
+      if (w.engaged[me] && w.target[me] === foe) engaged = true;
+    });
+    // 一轮索敌（8 帧）内就挑中了，那时人还没走出多远，直线依旧不通
+    expect(pickedAt).toBeGreaterThanOrEqual(0);
+    expect(pickedAt).toBeLessThan(16);
+    expect(entered).toBe(false);
+    // 绕过去交上了手
+    expect(engaged).toBe(true);
+  });
+
+  it('隔着民房的敌兵，被挑中那一帧己方还在原地附近（不是先走到直线看得见才挑）', () => {
+    const { w, me, foe } = houseScene();
+    const x0 = w.x[me], y0 = w.y[me];
+    w.orderMove([me], mid(90), mid(60), true);
+    let at = -1;
+    for (let t = 0; t < 16 && at < 0; t++) {
+      step(w, 1);
+      if (w.target[me] === foe) at = t;
+    }
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(Math.hypot(w.x[me] - x0, w.y[me] - y0)).toBeLessThan(16);
+    expect(w.lineBlocked(w.x[me], w.y[me], w.x[foe], w.y[foe], 1)).toBe(true);
+  });
+
+  it('隔着绕不过去的长墙：不挑这个敌兵，几秒内少挑它（avoidT 机制），也不因此丢进 1.5 秒不索敌（ignoreT 不被设置）', () => {
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 64, 44, 76));
+    const me = mine(w, mid(60), mid(60));
+    const foe = dummy(w, mid(67), mid(60));
+    w.orderMove([me], mid(60), mid(30), true);
+    let picked = false, ignored = false, avoided = false;
+    step(w, 60, () => {
+      if (w.target[me] === foe) picked = true;
+      if (w.ignoreT[me] > 0) ignored = true;
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[foe]) avoided = true;
+    });
+    expect(picked).toBe(false);
+    expect(avoided).toBe(true);
+    expect(ignored).toBe(false);
+  });
+
+  it('已经盯着的目标途中变成绕不过去：放弃并少挑它，ignoreT 不被设置，旁边别的够得着的敌兵马上换去打', () => {
+    // 墙在 64 列；己方在墙西 (62, 60)，被盯着的敌兵在墙东 (66, 60)，另一个敌兵在西侧开阔地 (62, 69)
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 64, 44, 76));
+    const me = mine(w, mid(62), mid(60));
+    const behind = dummy(w, mid(66), mid(60));
+    const open = dummy(w, mid(62), mid(69));
+    w.orderMove([me], mid(62), mid(30), true);
+    w.target[me] = behind;
+    w.targetUid[me] = w.uid[behind];
+    let ignored = false, avoided = false, switchedAt = -1;
+    step(w, 45, t => {
+      if (w.ignoreT[me] > 0) ignored = true;
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[behind]) avoided = true;
+      if (switchedAt < 0 && w.target[me] === open) switchedAt = t;
+    });
+    expect(avoided).toBe(true);
+    expect(ignored).toBe(false);
+    // 远小于 1.5 秒（45 帧）：下一轮索敌就换了
+    expect(switchedAt).toBeGreaterThanOrEqual(0);
+    expect(switchedAt).toBeLessThan(24);
+  });
+
+  it('玩家指定攻击某个敌兵：近处隔着民房能绕就绕，目标不变，最终交上手', () => {
+    const { w, me, foe } = houseScene();
+    w.orderAttackUnit([me], foe);
+    let dropped = false, entered = false, engaged = false;
+    step(w, 30 * 20, () => {
+      if (w.target[me] !== foe) dropped = true;
+      if (inBlocked(w, me)) entered = true;
+      if (w.engaged[me]) engaged = true;
+    });
+    expect(dropped).toBe(false);
+    expect(entered).toBe(false);
+    expect(engaged).toBe(true);
+  });
+
+  it('玩家指定攻击隔着长墙的敌兵：不放弃目标，改走寻路绕过墙端', () => {
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 64, 44, 76));
+    const me = mine(w, mid(62), mid(60));
+    const foe = dummy(w, mid(66), mid(60));
+    w.orderAttackUnit([me], foe);
+    const y0 = w.y[me];
+    let dropped = false;
+    step(w, 30 * 6, () => {
+      if (w.target[me] !== foe) dropped = true;
+    });
+    expect(dropped).toBe(false);
+    expect(w.order[me]).toBe(O_ATTACK);
+    // 在沿着墙往墙端走，不是原地顶着墙
+    expect(Math.abs(w.y[me] - y0)).toBeGreaterThan(TILE * 2);
+    expect(w.ignoreT[me]).toBe(0);
+  });
+
+  it('开阔地上直线本来就通：不绕，沿直线走向目标，判断结果是直走', () => {
+    const w = flatWorld(120, 7);
+    const me = mine(w, mid(56), mid(60));
+    const foe = dummy(w, mid(64), mid(60));
+    w.orderMove([me], mid(90), mid(60), true);
+    const y0 = w.y[me];
+    let off = 0;
+    step(w, 45, () => { off = Math.max(off, Math.abs(w.y[me] - y0)); });
+    expect(w.target[me]).toBe(foe);
+    expect(w.wayUid[me]).toBe(w.uid[foe]);
+    expect(w.wayMode[me]).toBe(WAY_DIRECT);
+    expect(off).toBeLessThan(1);
+    expect(w.x[me]).toBeGreaterThan(mid(56) + TILE);
+  });
+
+  it('远程兵追击时同样会绕：直线被墙挡住、凑不进射程时沿路点绕过墙端，最终进了射程开火，目标不变', () => {
+    // 一堵 5 格高的矿山墙紧贴在射手前面：直接往前走够不着射程，要绕到墙端
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 57, 58, 62));
+    const me = mine(w, mid(56), mid(60), 'nu');
+    const foe = dummy(w, mid(65), mid(60));
+    const range = w.defs[w.type[me]].range;
+    expect(w.lineBlocked(w.x[me], w.y[me], w.x[foe], w.y[foe], 1)).toBe(true);
+    expect(Math.hypot(w.x[foe] - w.x[me], w.y[foe] - w.y[me])).toBeGreaterThan(range + TILE);
+    w.orderMove([me], mid(56), mid(40), true);
+    const y0 = w.y[me];
+    let around = false, entered = false, engaged = false, dropped = false, off = 0;
+    step(w, 30 * 12, () => {
+      if (w.target[me] === foe && w.wayMode[me] === WAY_AROUND) around = true;
+      if (w.target[me] !== foe && w.target[me] !== NONE) dropped = true;
+      if (inBlocked(w, me)) entered = true;
+      if (w.engaged[me]) engaged = true;
+      off = Math.max(off, Math.abs(w.y[me] - y0));
+    });
+    expect(around).toBe(true);
+    expect(dropped).toBe(false);
+    expect(entered).toBe(false);
+    // 确实沿着路点往墙端走了一段，而不是顶着墙
+    expect(off).toBeGreaterThan(TILE * 2);
+    expect(engaged).toBe(true);
+  });
+
+  it('远程兵追击时绕不过去（隔着长墙）：照旧朝目标直线走，不放弃目标、不少挑它', () => {
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 57, 44, 76));
+    const me = mine(w, mid(56), mid(60), 'nu');
+    const foe = dummy(w, mid(65), mid(60));
+    expect(Math.hypot(w.x[foe] - w.x[me], w.y[foe] - w.y[me])).toBeGreaterThan(w.defs[w.type[me]].range + TILE);
+    w.orderMove([me], mid(56), mid(40), true);
+    let none = false, dropped = false, avoided = false, ignored = false, seen = false;
+    step(w, 30 * 6, () => {
+      if (w.target[me] === foe && w.wayMode[me] === WAY_NONE) none = true;
+      if (w.target[me] === foe) seen = true;
+      else if (seen) dropped = true;
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[foe]) avoided = true;
+      if (w.ignoreT[me] > 0) ignored = true;
+    });
+    expect(none).toBe(true);
+    expect(dropped).toBe(false);
+    expect(avoided).toBe(false);
+    expect(ignored).toBe(false);
+    // 朝着目标直线走，贴到了墙边（墙的西沿在 57 列起点）
+    expect(w.x[me]).toBeGreaterThan(mid(56) + 8);
+  });
+});
+
+describe('挑目标：判出绕不过去之后的重试间隔（chaseRetry）', () => {
+  /**
+   * 己方近战 (60, 60) 站着不动；墙在 62 列（长墙，绕不过去），敌兵 A 在墙东 (63, 60)，比 B 近；
+   * 一座 2×2 民房在 (59..60, 57..58)，敌兵 B 在房后 (60, 56)：绕得过去，但直线不通
+   */
+  const scene = (withA: boolean) => {
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 62, 44, 76));
+    w.addBuilding(BUILDINGS.house, 59, 57, 1, -1);
+    const me = mine(w, mid(60), mid(60));
+    const a = withA ? dummy(w, mid(63), mid(60)) : NONE;
+    const b = dummy(w, mid(60), mid(56));
+    expect(w.lineBlocked(w.x[me], w.y[me], w.x[b], w.y[b], 1)).toBe(true);
+    return { w, me, a, b };
+  };
+
+  it('对照：没有绕不过去的 A 时，隔着民房的 B 很快就被挑中', () => {
+    const { w, me, b } = scene(false);
+    let at = -1;
+    step(w, 30, t => {
+      if (at < 0 && w.target[me] === b) at = t;
+    });
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(16);
+  });
+
+  it('刚判出 A 绕不过去：chaseRetry 秒内直线不通的 B 不挑（即使绕得过去）；过了这段时间恢复，挑中并绕过去交上手', () => {
+    const { w, me, a, b } = scene(true);
+    const window = Math.floor(RULES.combat.chaseRetry * 30);
+    let early = false, judged = false;
+    // 第一次判断最早在第 0 帧、最晚在第 7 帧，重试间隔从那时起算：前 window 帧一定还在间隔里
+    step(w, window, () => {
+      if (w.target[me] === b) early = true;
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[a]) judged = true;
+    });
+    expect(judged).toBe(true);
+    expect(early).toBe(false);
+    // A 没了，间隔过去之后 B 就能被挑中：挑中的时刻不早于间隔结束，也不晚于间隔结束后一轮索敌（8 帧）加一点余量
+    w.removeUnit(a);
+    let at = -1, expired = -1, engaged = false;
+    step(w, 30 * 5, t => {
+      if (expired < 0 && w.wayNoT[me] <= 0) expired = t;
+      if (at < 0 && w.target[me] === b) at = t;
+      if (w.engaged[me] && w.target[me] === b) engaged = true;
+    });
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(expired).toBeGreaterThanOrEqual(0);
+    expect(at).toBeGreaterThanOrEqual(expired);
+    expect(at - expired).toBeLessThanOrEqual(10);
+    expect(engaged).toBe(true);
+  });
+
+  it('间隔内被跳过的 B 不会被罚得比间隔更久：间隔一结束，比直线通的 D 更近的 B 就先被挑中', () => {
+    const { w, me, a, b } = scene(true);
+    // D 一开始在索敌距离之外
+    const d = dummy(w, mid(60), mid(69));
+    let judged = false;
+    for (let t = 0; t < 30 && !judged; t++) {
+      step(w, 1);
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[a]) judged = true;
+    }
+    expect(judged).toBe(true);
+    expect(w.wayNoT[me]).toBeGreaterThan(0);
+    // A 拿走，只剩间隔在走：期间每轮索敌 B 都被跳过（进少挑名单），但不被挑
+    w.removeUnit(a);
+    let skipped = false, picked = false;
+    for (let t = 0; t < 200 && w.wayNoT[me] > 0; t++) {
+      step(w, 1);
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[b]) skipped = true;
+      if (w.target[me] === b) picked = true;
+    }
+    expect(w.wayNoT[me]).toBeLessThanOrEqual(0);
+    expect(skipped).toBe(true);
+    expect(picked).toBe(false);
+    // 间隔刚结束时 D 走进来：直线通、比 B 远一点。B 更近，少挑名单若还罚着 B 就会先挑 D
+    w.y[d] = mid(65);
+    let first = NONE;
+    step(w, 16, () => {
+      if (first === NONE && w.target[me] !== NONE) first = w.target[me];
+    });
+    expect(first).toBe(b);
+    expect(first).not.toBe(d);
+  });
+
+  it('间隔期内直线走得通的候选照挑：隔着民房的 B 不挑，改挑直线通的 C；不在间隔里时先挑更近的 B', () => {
+    const mk = (retry: number) => {
+      const w = flatWorld(120, 7);
+      w.addBuilding(BUILDINGS.house, 59, 57, 1, -1);
+      const me = mine(w, mid(60), mid(60));
+      // B：隔着民房、更近；C：直线通、略远
+      const b = dummy(w, mid(60), mid(56));
+      const c = dummy(w, mid(60), mid(65));
+      expect(w.lineBlocked(w.x[me], w.y[me], w.x[b], w.y[b], 1)).toBe(true);
+      expect(w.lineBlocked(w.x[me], w.y[me], w.x[c], w.y[c], 1)).toBe(false);
+      w.wayNoT[me] = retry;
+      return { w, me, b, c };
+    };
+    const a = mk(RULES.combat.chaseRetry);
+    let pickedB = false, pickedC = -1;
+    step(a.w, 30, t => {
+      if (a.w.target[a.me] === a.b) pickedB = true;
+      if (pickedC < 0 && a.w.target[a.me] === a.c) pickedC = t;
+    });
+    expect(pickedB).toBe(false);
+    expect(pickedC).toBeGreaterThanOrEqual(0);
+    expect(pickedC).toBeLessThan(16);
+    const b = mk(0);
+    let first = NONE;
+    step(b.w, 16, () => {
+      if (first === NONE && b.w.target[b.me] !== NONE) first = b.w.target[b.me];
+    });
+    expect(first).toBe(b.b);
+  });
+});
+
+describe('没被挑中的候选不留绕行记录', () => {
+  /** 墙在 62 列（长墙）；敌兵 X 在墙东 (64, 60)，己方 (60, 60)：X 被判成绕不过去，没有别的可打 */
+  const judged = (key: string) => {
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 62, 44, 76));
+    const me = mine(w, mid(60), mid(60), key);
+    const x = dummy(w, mid(64), mid(60));
+    let at = -1;
+    step(w, 30, t => {
+      if (at < 0 && w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[x]) at = t;
+    });
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(w.target[me]).toBe(NONE);
+    // 判断过 X 但没挑它：单位身上没有「在追 X」的走法记录
+    expect(w.wayUid[me]).not.toBe(w.uid[x]);
+    return { w, me, x };
+  };
+  /** X 走到了己方这一侧的开阔地：直线通了；少挑名单也让它到期，免得和这次的结果混在一起 */
+  const comeOver = (w: World, me: number, x: number): void => {
+    w.x[x] = mid(60);
+    w.y[x] = mid(65);
+    w.avoidT[me] = 0;
+  };
+
+  it('目标换成先前判过绕不过去、此刻直线已通的敌兵：照常追击并交上手，不被放弃、不被记进少挑名单', () => {
+    const { w, me, x } = judged('dao');
+    comeOver(w, me, x);
+    let seen = false, dropped = false, engaged = false, avoided = false;
+    step(w, 30 * 6, () => {
+      if (w.target[me] === x) {
+        seen = true;
+        if (w.wayMode[me] !== WAY_DIRECT) dropped = true;
+      } else if (seen && w.engaged[me] === 0) dropped = true;
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[x]) avoided = true;
+      if (w.engaged[me] && w.target[me] === x) engaged = true;
+    });
+    expect(seen).toBe(true);
+    expect(dropped).toBe(false);
+    expect(avoided).toBe(false);
+    expect(engaged).toBe(true);
+  });
+
+  it('冲锋盯上先前判过绕不过去的敌兵、且那时直线已通：照常追击并交上手，不被放弃', () => {
+    const { w, me, x } = judged('tieqi');
+    comeOver(w, me, x);
+    let charged = false, dropped = false, engaged = false, avoided = false;
+    step(w, 30 * 6, () => {
+      if (w.state[me] & S_CHARGE && w.target[me] === x) charged = true;
+      if (charged && w.target[me] !== x && w.engaged[me] === 0) dropped = true;
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[x]) avoided = true;
+      if (w.engaged[me] && w.target[me] === x) engaged = true;
+    });
+    expect(charged).toBe(true);
+    expect(dropped).toBe(false);
+    expect(avoided).toBe(false);
+    expect(engaged).toBe(true);
+  });
+
+  it('盯着 Y 追的时候判了绕不过去的 X：单位的追击记录仍是 Y，不被改写', () => {
+    // Y 在南侧开阔地、较远但正盯着；X 在墙东、近得多，绕不过去，每轮索敌都会被判一次
+    const w = flatWorld(120, 7, (t, n) => wallV(t, n, 61, 44, 76));
+    const me = mine(w, mid(60), mid(60));
+    const x = dummy(w, mid(63), mid(60));
+    const y = dummy(w, mid(60), mid(65));
+    w.target[me] = y;
+    w.targetUid[me] = w.uid[y];
+    let wrote = false, judgedX = false;
+    step(w, 30, () => {
+      if (w.avoidT[me] > 0 && w.avoidUid[me] === w.uid[x]) judgedX = true;
+      if (w.target[me] === y && w.wayUid[me] !== 0 && w.wayUid[me] !== w.uid[y]) wrote = true;
+    });
+    expect(judgedX).toBe(true);
+    expect(wrote).toBe(false);
+    expect(w.target[me]).toBe(y);
+    expect(w.wayUid[me]).toBe(w.uid[y]);
+  });
+});
+
+describe('近战横挪时贴着民房', () => {
+  it('被自己人堵在窄道里往侧面横挪、撞上民房：按被自己人挡住处理（换目标或列队等），不因此 1.5 秒不索敌', () => {
+    // 一条一格宽的通道（上下两排民房），敌兵、站定的己方兵各两个并排堵满通道；后面赶来的 a 横挪时一侧就是民房
+    const w = flatWorld(120, 7);
+    for (const tx of [57, 59, 61]) for (const ty of [58, 61]) w.addBuilding(BUILDINGS.house, tx, ty, 1, -1);
+    const es = [-8, 8].map(o => dummy(w, mid(61), mid(60) + o));
+    const rr = w.rad[es[0]];
+    for (const e of es) {
+      const p = mine(w, w.x[e] - 2 * rr + 2, w.y[e], 'legion');
+      w.orderAttackUnit([p], e);
+    }
+    const a = mine(w, mid(58), mid(60), 'legion');
+    w.orderMove([a], mid(80), mid(60), true);
+    let ignored = false, handled = false, engaged = false, held = 0;
+    step(w, 30 * 8, t => {
+      if (w.ignoreT[a] > 0) ignored = true;
+      // 按被自己人挡住处理：把当前目标记进少挑名单，换了目标或原地列队等
+      if (w.avoidT[a] > 0 && es.some(e => w.uid[e] === w.avoidUid[a])) handled = true;
+      if (w.engaged[a]) engaged = true;
+      if (t >= 30 && (w.target[a] !== NONE || w.waitT[a] > 0 || w.detourT[a] > 0)) held++;
+    });
+    // 场景有效：a 一直被堵在后面没能交手
+    expect(engaged).toBe(false);
+    expect(handled).toBe(true);
+    expect(ignored).toBe(false);
+    // 一直保持着目标、列队或绕行，没有进入「不索敌」的空窗
+    expect(held).toBeGreaterThan(30 * 7 - 5);
+  });
+});
+
+describe('近战够不着隔墙的敌兵：转去打可攻击的建筑', () => {
+  /**
+   * 己方近战 (60, 60)，行营（可被人形单位攻击）在 (56..57, 56..57)；敌兵 A 在 (64, 60)，
+   * wall 为真时中间隔着 62 列的长墙（绕不过去），否则开阔
+   */
+  const scene = (wall: boolean, how: 'amove' | 'idle') => {
+    const w = flatWorld(120, 7, wall ? (t, n) => wallV(t, n, 62, 44, 76) : undefined);
+    const bld = w.addBuilding(BUILDINGS.outpost, 56, 56, 2, -1);
+    expect(canAttackBuilding(bld, 1, false)).toBe(true);
+    const me = mine(w, mid(60), mid(60));
+    const a = dummy(w, mid(64), mid(60));
+    if (how === 'amove') w.orderMove([me], mid(60), mid(30), true);
+    expect(w.lineBlocked(w.x[me], w.y[me], w.x[a], w.y[a], 1)).toBe(wall);
+    return { w, me, a, bid: -bld.id - 2 };
+  };
+
+  for (const how of ['amove', 'idle'] as const) {
+    it(`${how === 'amove' ? '攻击移动' : '到位后待命'}：敌兵隔着长墙绕不过去，去打旁边的行营，而不是既不打人也不打建筑地站着`, () => {
+      const { w, me, a, bid } = scene(true, how);
+      let at = -1, engaged = false, onFoe = false;
+      step(w, 30 * 4, t => {
+        if (at < 0 && w.target[me] === bid) at = t;
+        if (w.target[me] === a) onFoe = true;
+        if (w.engaged[me] && w.target[me] === bid) engaged = true;
+      });
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(at).toBeLessThan(30);
+      expect(onFoe).toBe(false);
+      expect(engaged).toBe(true);
+    });
+
+    it(`${how === 'amove' ? '攻击移动' : '到位后待命'}对照：敌兵直线可通时照旧先打敌兵，不去打建筑`, () => {
+      const { w, me, a, bid } = scene(false, how);
+      let onBld = false, engaged = false;
+      step(w, 30 * 4, () => {
+        if (w.target[me] === bid) onBld = true;
+        if (w.engaged[me] && w.target[me] === a) engaged = true;
+      });
+      expect(onBld).toBe(false);
+      expect(engaged).toBe(true);
+    });
+  }
+
+  it('对照：敌兵隔着民房、绕得过去时，也先去打敌兵，不去打建筑', () => {
+    const w = flatWorld(120, 7);
+    const bld = w.addBuilding(BUILDINGS.outpost, 56, 56, 2, -1);
+    w.addBuilding(BUILDINGS.house, 59, 57, 1, -1);
+    const me = mine(w, mid(60), mid(60));
+    const b = dummy(w, mid(60), mid(56));
+    expect(w.lineBlocked(w.x[me], w.y[me], w.x[b], w.y[b], 1)).toBe(true);
+    let onBld = false, engaged = false;
+    step(w, 30 * 5, () => {
+      if (w.target[me] === -bld.id - 2) onBld = true;
+      if (w.engaged[me] && w.target[me] === b) engaged = true;
+    });
+    expect(onBld).toBe(false);
+    expect(engaged).toBe(true);
+  });
+});
+
+describe('追击判断的状态记录', () => {
+  it('追击记录跟着目标走：追敌兵时记下它的 uid，目标没了就清零', () => {
+    const w = flatWorld();
+    const a = mine(w, mid(56), mid(60));
+    const foe = dummy(w, mid(62), mid(60));
+    w.orderMove([a], mid(90), mid(60), true);
+    step(w, 20);
+    expect(w.target[a]).toBe(foe);
+    expect(w.wayUid[a]).toBe(w.uid[foe]);
+    w.removeUnit(foe);
+    step(w, 2);
+    expect(w.target[a]).toBe(NONE);
+    expect(w.wayUid[a]).toBe(0);
   });
 });

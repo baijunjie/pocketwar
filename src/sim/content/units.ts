@@ -97,7 +97,7 @@ U('china', 'pili', '霹雳车', 'siege', { lv: { hp: 3, out: 1, rng: 1, splash: 
 
 // 日本：精锐近战与铁炮
 U('japan', 'yari', '足轻枪兵', 'inf', { lv: { hp: -4, armM: -1, armP: -2, spd: 1 }, traits: [['polearm', { cav: 2.5 }]] }, '长枪足轻，克制骑兵');
-U('japan', 'samurai', '武士', 'inf', { lv: { hp: 3, cad: 5, out: 12, armM: 2, spd: 1, disc: 5 }, traits: ['bushido'] }, '精锐剑士，愈战愈勇');
+U('japan', 'samurai', '武士', 'inf', { lv: { hp: 1, cad: 5, out: 12, armM: 2, spd: 1, disc: 5 }, traits: ['bushido'] }, '精锐剑士，愈战愈勇');
 U('japan', 'yumi', '弓足轻', 'ranged', { lv: { rng: 3 } }, '和弓射程最远');
 U('japan', 'teppo', '铁炮足轻', 'ranged', { lv: { hp: -5, cad: 8, out: 12, spd: -2, rng: -3, pen: 8 }, proj: P_BULLET, vsBld: 0.5 }, '火绳枪威力巨大，装填极慢');
 U('japan', 'kiba', '骑马武者', 'cav', { lv: { cad: 1, out: 4, spd: 1, disc: 4 }, traits: ['bushido'] }, '骑乘武士，突击凶猛');
@@ -105,7 +105,7 @@ U('japan', 'sohei', '僧兵', 'inf', { lv: { hp: 1, cad: 2, out: 6, armM: -1, ar
 U('japan', 'ozutsu', '大筒', 'siege', { lv: { hp: -1, cad: 1, out: 2, splash: -4 }, minRange: 90, proj: P_BALL, vsBld: 3.5 }, '火炮轰击城墙');
 
 // 罗马：重装军团与攻城器械
-U('rome', 'legion', '军团步兵', 'inf', { lv: { cad: 2, out: 7, armM: 2, armP: 2, spd: -2, disc: 5, block: 14 }, traits: ['testudo', 'pilum'] }, '大盾重甲，接敌前投掷重标枪');
+U('rome', 'legion', '军团步兵', 'inf', { lv: { out: 5, armM: 2, armP: 2, spd: -2, disc: 5, block: 14 }, traits: ['testudo', 'pilum'] }, '大盾重甲，接敌前投掷重标枪');
 U('rome', 'auxilia', '辅助矛兵', 'inf', { lv: { hp: -3, cad: -1, out: -3, armP: -1, block: 11 }, traits: ['polearm'] }, '辅助军团，掩护侧翼');
 U('rome', 'velites', '投矛散兵', 'ranged', { lv: { hp: 2, cad: 3, out: 6, spd: 4, rng: -6 }, proj: P_JAVELIN, traits: ['javelin'] }, '轻装标枪手，克制战象');
 U('rome', 'sagitt', '弓箭手', 'ranged', { lv: { cad: -1, out: -2, rng: 1 } }, '辅助弓兵');
@@ -114,7 +114,7 @@ U('rome', 'scorpio', '蝎弩', 'bolt', { lv: { pen: 8 }, vsBld: 0.5, radius: 10,
 U('rome', 'onager', '投石机', 'siege', { lv: { hp: 3, out: -1, rng: 1, splash: 1 }, minRange: 110, proj: P_STONE, vsBld: 4 }, '野驴投石机，攻城利器');
 
 // 波斯：骑兵、弓手与战象
-U('persia', 'spara', '持盾矛兵', 'inf', { lv: { hp: -3, cad: -2, out: -6, armM: -1, block: 13 }, traits: ['polearm'] }, '藤盾矛兵，人数众多');
+U('persia', 'spara', '持盾矛兵', 'inf', { lv: { hp: -3, cad: -1, out: -6, block: 13 }, traits: ['polearm'] }, '藤盾矛兵，人数众多');
 U('persia', 'immortal', '不死军', 'inf', { traits: ['sidebow'], lv: { hp: -1, cad: 2, out: 8, armM: 1, spd: 1, disc: 4, block: 11 } }, '王家卫队，弓矛兼备');
 U('persia', 'kamandar', '弓箭手', 'ranged', { lv: { hp: -1, cad: -1, rng: 1 } }, '箭如飞蝗');
 U('persia', 'asvaran', '骑射手', 'cavr', { lv: {} }, '边走边射，来去如风');

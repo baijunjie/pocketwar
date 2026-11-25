@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { RULES, SITE_CAMP, TILE, T_MOUNTAIN, UNIT_BY_KEY } from '../../../src/sim/defs';
+import { BUILDINGS, RULES, SITE_CAMP, TILE, T_MOUNTAIN, UNIT_BY_KEY } from '../../../src/sim/defs';
+import { O_IDLE, O_MOVE, S_ROUT } from '../../../src/sim/state';
+import { startRout } from '../../../src/sim/systems/morale';
 import { createGame } from '../../../src/sim/setup';
 import { SLOT, marchSlot } from '../../../src/sim/systems/march';
 import type { March } from '../../../src/sim/systems/march';
@@ -8,6 +10,7 @@ import { flatWorld, run } from '../../helpers';
 
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;
 const M = RULES.march;
+const C = (120 * TILE) / 2;
 
 /** 一队 n 个刀盾（默认 80 个），围着 (cx, cy) 摆好，朝 (dx, dy) */
 const squad = (w: World, cx: number, cy: number, dx = 1, dy = 0, n = 80): number[] => w.spawnGroup(1, Array(n).fill(idx('dao')), cx, cy, dx, dy);
@@ -350,4 +353,269 @@ describe('marchSlot：队列位置的契约', () => {
     expect(turned).toBeGreaterThan(0);
     expect(shifted).toBeGreaterThan(0);
   }, 60000);
+});
+
+describe('队伍的 battle：队伍在和敌兵打', () => {
+  /** 80 个刀盾从 (C-600, C) 往东攻击移动；一个血量无限、原地坚守的敌兵站在 (C, C) */
+  const scene = (opts: { foe?: boolean } = {}) => {
+    const w = flatWorld();
+    const g = squad(w, C - 600, C);
+    for (const s of g) w.hp[s] = w.maxHp[s] = 1e9;
+    let foe = -1;
+    if (opts.foe !== false) {
+      foe = w.spawnUnit(idx('legion'), 2, C, C);
+      w.hp[foe] = w.maxHp[foe] = 1e9;
+      w.orderStop([foe], true);
+    }
+    w.orderMove(g, C + 700, C, true);
+    const m = w.marches[w.grp[g[0]]];
+    expect(m.amove).toBe(true);
+    return { w, g, m, foe };
+  };
+  const tick = (w: World, n: number, each?: () => void): void => {
+    for (let t = 0; t < n; t++) {
+      w.tick();
+      w.fxN = 0;
+      each?.();
+    }
+  };
+
+  it('没有敌兵：battleT 一直为 0', () => {
+    const { w, m } = scene({ foe: false });
+    let on = false;
+    tick(w, 30 * 6, () => { if (m.battleT > 0 || m.cFoe > 0) on = true; });
+    expect(on).toBe(false);
+  });
+
+  it('有成员以没溃逃的敌兵为目标：battleT 大于 0，cFoe 统计这样的成员数', () => {
+    const { w, g, m } = scene();
+    let on = false, foes = 0;
+    tick(w, 30 * 20, () => {
+      if (m.battleT > 0) {
+        on = true;
+        foes = Math.max(foes, m.cFoe);
+      }
+    });
+    expect(on).toBe(true);
+    expect(foes).toBeGreaterThan(0);
+    expect(foes).toBeLessThanOrEqual(g.length);
+  });
+
+  it('敌兵没了之后再保持 linger 秒才复位：保持期内一直为真，过了才变假', () => {
+    const { w, m, foe } = scene();
+    let t = 0;
+    while (t++ < 30 * 30 && !(m.battleT > 0)) tick(w, 1);
+    expect(m.battleT > 0).toBe(true);
+    tick(w, 8);
+    w.removeUnit(foe);
+    // 去掉敌兵后最多还差一次统计（8 帧）才发现没人打了：保持期按 linger 算，留出一次统计与一点余量
+    const slack = 12;
+    let early = false;
+    tick(w, RULES.combat.linger * 30 - slack, () => { if (!(m.battleT > 0)) early = true; });
+    expect(early).toBe(false);
+    tick(w, slack * 2 + 8);
+    expect(m.battleT > 0).toBe(false);
+    expect(m.cFoe).toBe(0);
+  });
+
+  it('只以溃兵为目标不算：成员追着溃兵打时 battleT 保持为 0', () => {
+    const { w, g, m, foe } = scene();
+    startRout(w, foe);
+    let on = false, chasing = false;
+    tick(w, 30 * 12, () => {
+      // 把溃兵钉在原地、士气压到最低，免得它跑掉或当场恢复
+      w.x[foe] = C;
+      w.y[foe] = C;
+      w.morale[foe] = 0;
+      if (m.battleT > 0 || m.cFoe > 0) on = true;
+      if (g.some(s => w.target[s] === foe)) chasing = true;
+    });
+    expect(w.state[foe] & S_ROUT).toBe(S_ROUT);
+    // 确有成员盯上了溃兵（场景有效），但队伍没算在打仗
+    expect(chasing).toBe(true);
+    expect(on).toBe(false);
+  });
+
+  it('只是在打建筑的不算：battleT 保持为 0', () => {
+    const w = flatWorld();
+    const g = squad(w, C - 600, C, 1, 0, 40);
+    for (const s of g) w.hp[s] = w.maxHp[s] = 1e9;
+    for (let k = 0; k < 8; k++) w.addBuilding(BUILDINGS.outpost, Math.floor((C - 400) / TILE) + k * 3, Math.floor(C / TILE) - 4, 2, -1);
+    w.orderMove(g, C + 700, C, true);
+    const m = w.marches[w.grp[g[0]]];
+    let on = false, burning = false;
+    tick(w, 30 * 15, () => {
+      if (m.battleT > 0) on = true;
+      if (g.some(s => w.target[s] < -1)) burning = true;
+    });
+    expect(burning).toBe(true);
+    expect(on).toBe(false);
+  });
+});
+
+describe('队伍里的个人：队伍在打仗时的走法', () => {
+  const tick = (w: World, n: number, each?: () => void): void => {
+    for (let t = 0; t < n; t++) {
+      w.tick();
+      w.fxN = 0;
+      each?.();
+    }
+  };
+
+  describe('队列位置落在自己身后', () => {
+    /** 6 个刀盾往东行军（普通移动），其中一个被挪到队列前面 200 像素：它的队列位置就落在它身后 */
+    const ahead = (battle: boolean) => {
+      const w = flatWorld();
+      const g = squad(w, C - 400, C, 1, 0, 6);
+      const m = order(w, g, C + 600, C);
+      const r = g[0];
+      w.x[r] += 200;
+      if (battle) m.battleT = 1000;
+      // 先让统计跑一轮（battleT 设得足够大，统计时扣掉的那点不影响）
+      tick(w, 9);
+      const x0 = w.x[r], y0 = w.y[r];
+      // 逐帧的速度（像素/秒）最大值
+      let peak = 0, px = x0, py = y0;
+      tick(w, 15, () => {
+        peak = Math.max(peak, Math.hypot(w.x[r] - px, w.y[r] - py) * 30);
+        px = w.x[r];
+        py = w.y[r];
+      });
+      return { w, m, r, peak, moved: Math.hypot(w.x[r] - x0, w.y[r] - y0), dx: w.x[r] - x0 };
+    };
+
+    it('队伍没在打：原地等位置走过来，不往回跑也不往前走', () => {
+      const { m, moved } = ahead(false);
+      expect(m.battleT > 0).toBe(false);
+      expect(moved).toBeLessThan(4);
+    });
+
+    it('队伍在打：不原地等，沿路线往前走', () => {
+      const { m, moved, dx } = ahead(true);
+      expect(m.battleT > 0).toBe(true);
+      expect(dx).toBeGreaterThan(8);
+      expect(moved).toBeGreaterThan(8);
+    });
+
+    it('队伍在打：往前走不提速追赶，速度不超过不在战斗状态时的行军速度', () => {
+      const { w, r, peak } = ahead(true);
+      const d = w.defs[w.type[r]];
+      const march = Math.min(w.grpSpeed[r] > 0 ? w.grpSpeed[r] : d.walk, d.walk);
+      expect(march).toBeLessThan(d.speed);
+      expect(peak).toBeGreaterThan(8);
+      expect(peak).toBeLessThanOrEqual(march * 1.02);
+    });
+  });
+
+  describe('队伍在打时沿路线往前走的成员：不被提前判到达、脱离队伍', () => {
+    const DEST = C - 100;
+    /** 6 个刀盾从远处往东行军，终点 (DEST, C)；其中一个被挪到队列前面 600 像素，队列位置在它身后，battleT 手动置大 */
+    const scene = () => {
+      const w = flatWorld();
+      const g = squad(w, C - 1000, C, 1, 0, 6);
+      for (const s of g) w.hp[s] = w.maxHp[s] = 1e9;
+      const m = order(w, g, DEST, C);
+      const r = g[0];
+      // 他自己的落点（队列里的位置决定，与下令的终点差一点）
+      const destX = w.destX[r], destY = w.destY[r];
+      const gi = w.grp[r];
+      w.x[r] += 600;
+      m.battleT = 1000;
+      return { w, g, m, r, gi, destX, destY };
+    };
+    /**
+     * 队伍还在很远的地方（队列位置在他身后很远），他自己站在障碍西侧，终点在障碍另一侧不远处。
+     * wall：一堵 5 格长的矿山墙（60 列），终点在墙东；pocket：终点被一圈矿山完全围住，哪儿都进不去。
+     * fight 为假时队伍没在打。他的流场置空，和刚被挪到这里的人一样
+     */
+    const beyond = (kind: 'wall' | 'pocket', fight: boolean) => {
+      const w = flatWorld(120, 7, (t, n) => {
+        if (kind === 'wall') wall(t, n, 60, 60, 58, 62);
+        else for (const [x0, x1, y0, y1] of [[59, 65, 57, 57], [59, 65, 63, 63], [59, 59, 57, 63], [65, 65, 57, 63]]) wall(t, n, x0, x1, y0, y1);
+      });
+      const g = squad(w, 420, C, 1, 0, 6);
+      for (const s of g) w.hp[s] = w.maxHp[s] = 1e9;
+      const m = order(w, g, kind === 'wall' ? 62.5 * TILE : 62 * TILE, 60.5 * TILE);
+      const r = g[0];
+      const gi = w.grp[r];
+      const destX = w.destX[r], destY = w.destY[r];
+      w.x[r] = (kind === 'wall' ? 59.3 : 58.3) * TILE;
+      w.y[r] = 60.5 * TILE;
+      w.field[r] = null;
+      m.battleT = fight ? 1000 : 0;
+      return { w, m, r, gi, destX, destY };
+    };
+    const still = (w: World, r: number, gi: number): boolean => w.order[r] === O_MOVE && w.grp[r] === gi;
+
+    it('走到离落点很近之后也不判到达：命令仍是移动、仍属这支队伍（队伍没到、也没散）', () => {
+      const { w, m, r, gi, destX, destY } = scene();
+      // 先走到落点
+      let near = false, broke = false;
+      tick(w, 30 * 14, () => {
+        if (Math.hypot(w.x[r] - destX, w.y[r] - destY) < 12) near = true;
+        if (!still(w, r, gi)) broke = true;
+      });
+      expect(near).toBe(true);
+      // 在落点上再停留比「迟迟不靠近就地算到达」的等待还久，队伍依旧没到
+      tick(w, (M.giveUpAfter + 3) * 30, () => {
+        if (!still(w, r, gi)) broke = true;
+      });
+      expect(m.arrived).toBe(false);
+      expect(m.alive).toBe(true);
+      expect(broke).toBe(false);
+    });
+
+    it('被障碍顶住不会一直顶着：绕过墙到落点附近，全程命令仍是移动、仍属这支队伍；到了之后继续停留也不判到达', () => {
+      const { w, m, r, gi, destX, destY } = beyond('wall', true);
+      let broke = false, near = false, minY = Infinity;
+      tick(w, 30 * 18, () => {
+        if (!still(w, r, gi)) broke = true;
+        minY = Math.min(minY, w.y[r]);
+        if (Math.hypot(w.x[r] - destX, w.y[r] - destY) < 12) near = true;
+      });
+      // 绕过了墙：走到过墙的北端之外，最后停在墙东的落点上
+      expect(minY).toBeLessThan(58 * TILE);
+      expect(near).toBe(true);
+      expect(w.x[r]).toBeGreaterThan(61 * TILE);
+      // 在落点上再停留比「迟迟不靠近就地算到达」的等待还久
+      tick(w, (M.giveUpAfter + 3) * 30, () => {
+        if (!still(w, r, gi)) broke = true;
+      });
+      expect(Math.hypot(w.x[r] - destX, w.y[r] - destY)).toBeLessThan(12);
+      expect(m.arrived).toBe(false);
+      expect(broke).toBe(false);
+    });
+
+    it('对照：队伍没在打时，同一处墙边他原地等位置，不去绕墙', () => {
+      const { w, r, gi } = beyond('wall', false);
+      const x0 = w.x[r], y0 = w.y[r];
+      let broke = false;
+      tick(w, 30 * 10, () => {
+        if (!still(w, r, gi)) broke = true;
+      });
+      expect(Math.hypot(w.x[r] - x0, w.y[r] - y0)).toBeLessThan(4);
+      expect(broke).toBe(false);
+    });
+
+    it('落点被障碍完全围住、哪儿都去不了：队伍在打期间他留在围外，不判到达、仍属这支队伍', () => {
+      const { w, m, r, gi } = beyond('pocket', true);
+      let broke = false, inside = false;
+      tick(w, 30 * 14, () => {
+        if (!still(w, r, gi)) broke = true;
+        if (w.x[r] > 59 * TILE) inside = true;
+      });
+      expect(inside).toBe(false);
+      expect(m.arrived).toBe(false);
+      expect(broke).toBe(false);
+    });
+
+    it('队伍到达之后：他照常到达，转为待命', () => {
+      const { w, m, r } = scene();
+      // battleT 一直不减（置得很大），队伍走到终点后他也不再算队伍的人
+      tick(w, 30 * 40);
+      expect(m.arrived).toBe(true);
+      expect(w.order[r]).toBe(O_IDLE);
+      expect(w.grp[r]).toBe(-1);
+    });
+  });
 });

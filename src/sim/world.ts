@@ -257,6 +257,16 @@ export class World {
   readonly detourStall = new Float32Array(MAX_UNITS);
   /** 放弃绕行改列队等之后的这段时间里不当站定的人，让重叠的自己人把他推开 */
   readonly detourLoose = new Float32Array(MAX_UNITS);
+  /**
+   * 追击绕开小障碍：上次为哪个目标（uid）判断过、判断结果（WAY_DIRECT / WAY_AROUND / WAY_NONE），
+   * 以及要绕时朝着走的路点
+   */
+  readonly wayUid = new Uint32Array(MAX_UNITS);
+  readonly wayMode = new Uint8Array(MAX_UNITS);
+  readonly wayX = new Float32Array(MAX_UNITS);
+  readonly wayY = new Float32Array(MAX_UNITS);
+  /** 挑目标时刚判过一个绕不过去的：这么多秒内直线不通的候选一律不再试（不反复为墙后的敌兵寻路） */
+  readonly wayNoT = new Float32Array(MAX_UNITS);
   /** 正有多少近战敌人以它为目标 */
   readonly crowd = new Uint8Array(MAX_UNITS);
   /** 被哪些队伍看见（位 1、2） */
@@ -500,6 +510,7 @@ export class World {
     this.avoidT[i] = this.waitT[i] = 0;
     this.waits[i] = this.crowd[i] = 0;
     this.detourT[i] = this.detourLoose[i] = 0;
+    this.wayUid[i] = this.wayMode[i] = this.wayNoT[i] = 0;
     this.seen[i] = 0;
     this.sheltered[i] = 0;
     for (let k = 0; k < AURA_KINDS.length; k++) this.aura[k][i] = AURA_KINDS[k].neutral;

@@ -235,10 +235,10 @@ describe('营寨每批人数：campBatch', () => {
     expect(campBatch(w, s, 1, d)).toBe(headcount(d, per * w.reinfMult[1]));
   });
 
-  it('直射器械的占用为 1：营寨选蝎弩每批 12 人（11.6 份 ÷ 1），难度倍率照乘', () => {
+  it('直射器械的占用为 1：营寨选蝎弩每批人数 = 营寨每批份数 × 援军倍率，难度倍率照乘（11.6 份 × 2 ÷ 1 = 23）', () => {
     const w = game();
     const s = ownSite(w, SITE_CAMP, 1);
-    expect(campBatch(w, s, 1, UNIT_BY_KEY.scorpio)).toBe(12);
+    expect(campBatch(w, s, 1, UNIT_BY_KEY.scorpio)).toBe(headcount(UNIT_BY_KEY.scorpio, SITE_INFO[SITE_CAMP].reinfForce * w.reinfMult[1]));
     w.reinfMult[1] = 2;
     expect(campBatch(w, s, 1, UNIT_BY_KEY.scorpio)).toBe(23);
   });

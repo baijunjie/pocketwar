@@ -13,12 +13,13 @@
 
 ## 模拟层
 
-- 新常量放 `src/sim/state.ts`（它不依赖任何模块），不放进 `src/sim/world.ts`；系统文件对 `world.ts` 只做 `import type`：
+- `src/sim/world.ts` 要用到的常量放 `src/sim/state.ts`（它不依赖任何模块），不放进 `world.ts`；只在系统之间用的，可以留在定义它的系统文件里。
+  系统文件对 `world.ts` 只做 `import type`：
   否则形成循环引用，浏览器按另一种顺序加载时报 `Cannot access '…' before initialization`，而 Node 里的测试碰巧能过。
 - 先用 64 位中间值做判断（比如下一步落在哪一格）、再存进 `Float32Array` 字段的，判断之前先 `Math.fround`：
   否则贴着格线时判断用的值还在本格，存进去却被舍入到隔壁格，绕过了检查。
-- 改「相邻两格之间能不能直接走」的规则（墙顶、城内、城外这类），`src/sim/nav.ts` 的 `canStep`（位移碰撞与绕行前瞻都调它）与流场搜索、
-  `src/sim/world.ts` 的 `lineBlocked` 三处同改：漏一处，寻路、直线判断与实际位移就对不上。
+- 改「相邻两格之间能不能直接走」的规则（墙顶、城内、城外这类），`src/sim/nav.ts` 的 `canStep` / `canStepDiag`（位移碰撞、绕行前瞻、流场搜索、追击绕行都调它们）
+  与 `src/sim/world.ts` 的 `lineBlocked` 两处同改：漏一处，寻路、直线判断与实际位移就对不上。
 - 改移动速度的系数（天气、风、地形之类），`src/sim/systems/units.ts` 的单位期望速度与 `src/sim/systems/march.ts` 的领队步长两处同改：
   只改一处，编队成员与队列位置会对不上。
 - 新增下令函数、或在 `src/sim/systems/orders.ts` 之外改单位的命令或目的地时，先调 `leavePost`（腾垛口、取消出击与预留的站位），

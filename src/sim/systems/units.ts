@@ -15,6 +15,7 @@ import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
 import { SCAN, canAttackBuilding, findBuilding, scan } from './targeting';
 import { STEP, detourPasses, detourProgress, detourStep, startWait, tryDetour } from './detour';
+import { WAY_AROUND, WAY_DIRECT, WAY_NONE, chaseWay, findAround, keepWay } from './around';
 
 function arrive(w: World, i: number, atSlot: boolean): void {
   w.order[i] = O_IDLE;
@@ -83,6 +84,9 @@ export function updateUnits(w: World): void {
     if (w.avoidT[i] > 0) w.avoidT[i] -= DT;
     if (w.waitT[i] > 0) w.waitT[i] -= DT;
     if (w.detourLoose[i] > 0) w.detourLoose[i] -= DT;
+    if (w.wayNoT[i] > 0) w.wayNoT[i] -= DT;
+    // 目标不再是敌兵（清空或换成建筑，不论在哪里换的）：追击绕行的判断跟着作废
+    if (target[i] < 0) w.wayUid[i] = 0;
     let st = state[i];
     let ord = order[i];
     let tgt = target[i];
@@ -217,14 +221,31 @@ export function updateUnits(w: World): void {
         } else if (auto && (tgt === NONE || (tgt < 0 && !d.siege) || (tgt >= 0 && melee && !w.engaged[i] && w.waitT[i] <= 0 && w.detourT[i] <= 0))) {
           let e = SCAN.pick;
           if (e !== NONE && guard && melee && !inSite(w, w.shelterSite[i], x[e], y[e])) e = NONE;
-          if (e !== NONE) {
-            // 人形单位先打敌兵：手头盯着的是建筑也换过去
-            if (e !== tgt && (!melee || !w.lineBlocked(ux, uy, x[e], y[e], tm))) {
+          // 人形单位先打敌兵：手头盯着的是建筑也换过去。
+          // 近战隔着民房这类小障碍（直线不通）的，绕得过去才挑（追击时沿局部路线绕）；绕不过去的几秒内不再挑它，下次换别人
+          let took = e !== NONE && e === tgt;
+          if (e !== NONE && !took) {
+            const blocked = melee && w.lineBlocked(ux, uy, x[e], y[e], tm);
+            if (!blocked || (ord !== O_HOLD && w.wayNoT[i] <= 0 && findAround(w, i, x[e], y[e]))) {
               tgt = target[i] = e;
               w.targetUid[i] = w.uid[e];
               w.waitT[i] = 0;
+              took = true;
+              // 挑中了才记下走法（没挑中的候选不留记录），要绕的直接用刚算出的路点
+              if (blocked) keepWay(w, i, w.uid[e], WAY_AROUND);
+            } else if (ord !== O_HOLD) {
+              w.avoidUid[i] = w.uid[e];
+              if (w.wayNoT[i] > 0) {
+                // 重试间隔内没寻路就跳过的：未必绕不过去，少挑它不超过剩下的间隔，间隔一过照常再试
+                w.avoidT[i] = w.wayNoT[i] < C.avoidFor ? w.wayNoT[i] : C.avoidFor;
+              } else {
+                // 刚为它寻过路又绕不过去的：一小段时间内直线不通的候选都不再试，免得墙外的人每次索敌都为墙后另一个敌兵白找一次
+                w.avoidT[i] = C.avoidFor;
+                w.wayNoT[i] = C.chaseRetry;
+              }
             }
-          } else if (tgt === NONE && seekB && !d.siege) {
+          }
+          if (!took && tgt === NONE && seekB && !d.siege) {
             const b = findBuilding(w, i, ux, uy, tm, acqR > C.bldSeek ? acqR : C.bldSeek, d, bLeash);
             if (b >= 0) tgt = target[i] = -b - 2;
           }
@@ -321,10 +342,29 @@ export function updateUnits(w: World): void {
             // 挤不进战线：在原地面朝敌人列队，等前面空出位置
             aim = Math.atan2(dy, dx);
           } else {
-            chasing = true;
-            wx = (dx / dist) * spd;
-            wy = (dy / dist) * spd;
-            if (w.detourT[i] > 0 && tgt >= 0 && detourStep(w, i, tgt, ord, spd, cell, ord === O_IDLE ? idleLeash2(w, i, d, tgt) : 0, guardKeep(w, i, d, ord))) {
+            // 与目标之间直线不通（隔着民房这类小障碍）：朝局部路线上看得见的最远一点走（远程也一样，绕过房子凑进射程）
+            const way = tgt >= 0 ? chaseWay(w, i, tgt, tx, ty) : WAY_DIRECT;
+            let ax = dx, ay = dy, al = dist;
+            if (way === WAY_AROUND) {
+              ax = w.wayX[i] - ux;
+              ay = w.wayY[i] - uy;
+              al = Math.sqrt(ax * ax + ay * ay) || 0.001;
+            } else if (way === WAY_NONE && d.range === 0) {
+              // 近战绕不过去（隔着城墙、深水）：玩家指定的目标改走寻路，自己挑的放弃，几秒内不再挑它。
+              // 远程绕不过去照旧直线走、不放弃：隔着墙也射得着，凑近到射程就行
+              if (ord === O_ATTACK) usePath = true;
+              else {
+                w.avoidUid[i] = w.targetUid[i];
+                w.avoidT[i] = C.avoidFor;
+                target[i] = tgt = NONE;
+              }
+            }
+            if (tgt !== NONE && !usePath) {
+              chasing = true;
+              wx = (ax / al) * spd;
+              wy = (ay / al) * spd;
+            }
+            if (chasing && w.detourT[i] > 0 && tgt >= 0 && detourStep(w, i, tgt, ord, spd, cell, ord === O_IDLE ? idleLeash2(w, i, d, tgt) : 0, guardKeep(w, i, d, ord))) {
               wx = STEP.wx;
               wy = STEP.wy;
               detouring = true;
@@ -343,6 +383,8 @@ export function updateUnits(w: World): void {
           const dd = Math.sqrt(ddx * ddx + ddy * ddy);
           // 编队行军：跟着自己在队列里的位置走
           let inFormation = false;
+          // 队伍在打、位置落在身后的成员：自己沿路线往前走，但仍是队伍的人，不按下面的到达判断提前改成待命
+          let pushOn = false;
           const gi = w.grp[i];
           if (gi >= 0 && tgt === NONE) {
             const g = marches[gi];
@@ -352,13 +394,17 @@ export function updateUnits(w: World): void {
               marchSlot(g, w.offA[i], w.offL[i]);
               const px = SLOT.x, py = SLOT.y;
               const pc = ((py / TILE) | 0) * mw + ((px / TILE) | 0);
-              if (px > 8 && py > 8 && px < maxX && py < maxY && !blk[pc] && !w.lineBlocked(ux, uy, px, py, tm)) {
+              const behind = (px - ux) * SLOT.hx + (py - uy) * SLOT.hy < -RULES.march.waitAhead;
+              if (behind && g.battleT > 0) {
+                // 位置在自己身后、队伍里又有人在打敌兵：不等位置，交给下面沿路线往前去接敌（多是走在队列前面的人）。
+                // 不看位置够不够得着（走到障碍另一侧后位置常被挡住），也不像够不着位置时那样提速：他们已经在自己的位置前面，没有要追的
+                pushOn = true;
+              } else if (px > 8 && py > 8 && px < maxX && py < maxY && !blk[pc] && !w.lineBlocked(ux, uy, px, py, tm)) {
                 // 瞄准位置前方一小段：到位后正好与领队同速，落后了就跑步追
                 const ex = px + SLOT.hx * g.v * 0.4 - ux, ey = py + SLOT.hy * g.v * 0.4 - uy;
                 const ed = Math.sqrt(ex * ex + ey * ey);
-                // 位置在自己身后（变阵收窄后排到了更后面）：原地站着等它走过来，不往回跑
-                const behind = (px - ux) * SLOT.hx + (py - uy) * SLOT.hy < -RULES.march.waitAhead;
                 if (behind) {
+                  // 位置在自己身后（变阵收窄后排到了更后面）：原地站着等它走过来，不往回跑
                   wx = wy = 0;
                 } else if (ed > 0.5) {
                   let v = ed / 0.4;
@@ -376,7 +422,7 @@ export function updateUnits(w: World): void {
           }
           // 离开编队之后迟迟不再靠近目的地（终点附近被列好阵的人挡着，在流场和直线之间来回绕）：就地算到
           let late = false;
-          if (!inFormation && ord !== O_ATTACK) {
+          if (!inFormation && !pushOn && ord !== O_ATTACK) {
             if (dd < w.bestD[i] - 4) {
               w.bestD[i] = dd;
               w.noGain[i] = 0;
@@ -384,7 +430,7 @@ export function updateUnits(w: World): void {
           }
           if (inFormation) {
             if (w.stuck[i] > 0) w.stuck[i] = 0;
-          } else if (dd < 5 && ord !== O_ATTACK) arrive(w, i, true);
+          } else if (dd < 5 && ord !== O_ATTACK && !pushOn) arrive(w, i, true);
           else if (late) arrive(w, i, false);
           else {
             let f = w.field[i];
@@ -426,7 +472,16 @@ export function updateUnits(w: World): void {
               wy = ddy * k;
               const sk = w.stuck[i];
               if (sk > 1.2 && ord !== O_ATTACK) {
-                if (dd < 140 || sk > 3.5) arrive(w, i, false);
+                if (pushOn) {
+                  // 队伍在打、往前走的人卡住了（多是顶在前面交手的自己人或小障碍上）：只换走法、不判到达，
+                  // 没流场就申请、有就转回走流场；计时清零重新累计，免得攒到 3.5 秒、一离开这条路就被判到达。
+                  // 流场也走不通的就留在原地，等队伍打完再随队走
+                  if (!f) {
+                    w.field[i] = w.nav.getField(tm, w.destCell[i], tick);
+                    w.seekR[i] = 40;
+                  } else w.seekR[i] = 0.001;
+                  w.stuck[i] = 0;
+                } else if (dd < 140 || sk > 3.5) arrive(w, i, false);
                 else if (!f) {
                   w.field[i] = w.nav.getField(tm, w.destCell[i], tick);
                   w.seekR[i] = 40;
@@ -483,6 +538,11 @@ export function updateUnits(w: World): void {
     // 只约束正冲着目标去的人（挤战线的那批）；回原位、赶路、溃逃的照旧能把没站定的自己人挤开
     const press = tgt !== NONE && !firm && !charging && !(st & S_ROUT) && !detouring;
     const skin = C.contactSkin, passK = C.passPush;
+    // 近战追击的人另看稍远一圈：正前方让不开的自己人只是把他弹开了一两像素、没贴着了，也还算顶在人墙上（「追不上」计时不回落）。
+    // 只看近战，与下面往两侧绕的限定一致；远程不做这一圈
+    const fwl = press && chasing && d.range === 0 ? Math.sqrt(wx * wx + wy * wy) : 0;
+    const wallSkin = fwl > 0 && C.stuckSkin > skin ? C.stuckSkin : skin;
+    let walled = false;
     let braced = NONE;
     for (let cy = gy - 1; cy <= gy + 1; cy++) {
       if (cy < 0 || cy >= gh) continue;
@@ -508,9 +568,9 @@ export function updateUnits(w: World): void {
               if (!alive[j]) continue;
             }
           }
-          const rs = rr + skin;
+          const rs = rr + skin, rf = rr + wallSkin;
           // 先按距离剔除：周围格子里的人大多离得远，别为他们去读别的数组
-          if (d2 >= rs * rs) continue;
+          if (d2 >= rf * rf) continue;
           const mate = team[j] === tm, pj = planted[j];
           // 不打仗时自己人之间可以互相穿过
           const pass = mate && ((calm && pj === 0 && !(state[j] & S_COMBAT) && (marching || order[j] === O_MOVE || order[j] === O_AMOVE))
@@ -521,14 +581,20 @@ export function updateUnits(w: World): void {
             d2 = ox * ox + oy * oy + 0.01;
           }
           const dd = Math.sqrt(d2);
-          // 贴着（差一点就碰上）的自己人：记下方向和它离开的速度，下面让自己朝它走得不比它让得快
-          if (mate && press && !pass && nc < CN) {
+          if (mate && press && !pass) {
             const nx = -ox / dd, ny = -oy / dd;
             const away = pj === 0 ? vx[j] * nx + vy[j] * ny : 0;
-            cnx[nc] = nx;
-            cny[nc] = ny;
-            cnv[nc++] = away > 0 ? away : 0;
+            if (d2 >= rs * rs) {
+              // 外面那一圈：只看正前方让不开的。判据与下面起横挪的 blocked 是同一句（夹角、让开速度不到一半），改一处另一处同改
+              if (fwl > 0 && (nx * wx + ny * wy) > C.flankCos * fwl && away < fwl * 0.5) walled = true;
+            } else if (nc < CN) {
+              // 贴着（差一点就碰上）的自己人：记下方向和它离开的速度，下面让自己朝它走得不比它让得快
+              cnx[nc] = nx;
+              cny[nc] = ny;
+              cnv[nc++] = away > 0 ? away : 0;
+            }
           }
+          if (d2 >= rs * rs) continue;
           if (dd >= rr) continue;
           // 站定的人只有被压得太狠才让一点；别人撞上站定的人，自己全让
           if (firm && dd > rr * give && (plant || mate)) continue;
@@ -574,7 +640,7 @@ export function updateUnits(w: World): void {
         const fx = wx / wl, fy = wy / wl;
         let blocked = false, lat = 0;
         for (let c = 0; c < nc; c++) {
-          // 正前方的人自己也在往前走、让得开的不算堵住
+          // 正前方的人自己也在往前走、让得开的不算堵住（与上面外圈 walled 的判据同改）
           if (fx * cnx[c] + fy * cny[c] > C.flankCos && cnv[c] < wl * 0.5) blocked = true;
           lat += fx * cny[c] - fy * cnx[c];
         }
@@ -647,8 +713,9 @@ export function updateUnits(w: World): void {
     } else if (want > 8 && (chasing ? mvx * cwx + mvy * cwy < want * want * DT * 0.3 : moved < want * DT * 0.3)) {
       // 追击时看的是有没有朝目标靠近：贴着人墙横着滑不算前进
       w.stuck[i] += DT;
-    } else if (w.stuck[i] > 0 && nc === 0) {
-      // 还贴着冲不过去的自己人时，往目标斜着凑近一点不算走通了，计时不回落，否则会沿着人墙左右来回绕
+    } else if (w.stuck[i] > 0 && nc === 0 && !walled) {
+      // 还贴着冲不过去的自己人时，往目标斜着凑近一点不算走通了，计时不回落，否则会沿着人墙左右来回绕；
+      // 被前排弹开一两像素、刚好没贴着的那几帧也算还顶在人墙上（walled）
       w.stuck[i] = Math.max(0, w.stuck[i] - DT * 2);
     }
     if (detouring) {
@@ -658,8 +725,9 @@ export function updateUnits(w: World): void {
     }
     if (chasing && d.range === 0 && w.stuck[i] > C.blockedAfter) {
       w.stuck[i] = 0;
-      if (blockedByTerrain) {
-        // 被地形挡住：放弃这个目标，稍后重新索敌
+      if (blockedByTerrain && !flank) {
+        // 被地形挡住：放弃这个目标，稍后重新索敌。
+        // 往两侧横挪时撞上的不算：那是被自己人挡在后面、横挪的一侧正好贴着房子，照被自己人挡住处理
         if (ord !== O_ATTACK) target[i] = NONE;
         w.ignoreT[i] = 1.5;
       } else {

@@ -54,14 +54,14 @@ export const UNIT_POINT_LIMITS: [number, number] = [-2, 5];
  * 阵营点数预算：每个阵营的阵营点数（tools/measure/faction.ts 的 factionPoints）不超过它。
  * 取现有四阵营阵营点数的中位数（兵员级数取迁移前阵营特色倍率换算的级数）；阵营的差额用兵员级数补
  */
-export const FACTION_BUDGET = 5.433;
+export const FACTION_BUDGET = 3.317;
 
 /**
  * 援军预算：每个阵营的援军点数（tools/measure/faction.ts 的 reinfPoints，全兵种援军表按与开局同一套算法计点）不超过它。
  * 取现有阵营援军点数（援军级数按 0，即援军倍率 1）的中位数；阵营的差额用援军级数补。
  * 价目或兵种表变了（含援军表与阵营增减）按 npm run measure -- reinf --write 重算
  */
-export const REINF_BUDGET = 7.543;
+export const REINF_BUDGET = 6.862;
 
 /** 点数维度上的面板：原型基准。生命是展开前的数（不含全局生命倍率） */
 export interface Panel {

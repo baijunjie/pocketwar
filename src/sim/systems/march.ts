@@ -45,6 +45,13 @@ export interface March {
   blocked: boolean;
   /** 队伍正在打仗（攻击移动时有人交手，或大半人进入战斗状态）：不排队，各自为战；打完再整队 */
   loose: boolean;
+  /**
+   * 队伍「在和敌兵打」的状态还剩多少秒，大于 0 即在打：有成员以没溃逃的敌兵为目标（打建筑、追溃兵的不算），
+   * 最后一次这样之后再保持 RULES.combat.linger 秒。在打时队列位置落在身后的成员不原地等，沿路线往前走
+   */
+  battleT: number;
+  /** 以没溃逃的敌兵为目标的成员数（每 8 帧统计一次） */
+  cFoe: number;
   /** 成员数与平均掉队距离（每 8 帧统计一次） */
   n: number;
   lag: number;
@@ -151,7 +158,7 @@ export function createMarch(w: World, team: number, x: number, y: number, destX:
   if (g.trail.length < cap * TRAIL) g.trail = new Float32Array(cap * TRAIL);
   Object.assign(g, {
     alive: true, team, destX, destY, destCell,
-    speed, run, amove, fight: 0, alert: 0, cFight: 0, cAlert: 0, fx, fy, arrived: false, blocked: false, loose: false, n,
+    speed, run, amove, fight: 0, alert: 0, cFight: 0, cAlert: 0, cFoe: 0, fx, fy, arrived: false, blocked: false, loose: false, battleT: 0, n,
     cnt: 0, lagSum: 0, sx: 0, sy: 0, cap, width, fullW: width, depth, area, reformTick: w.tickCount,
   });
   anchor(w, g, x, y);
@@ -379,7 +386,7 @@ export function updateMarches(w: World): void {
   const tick = w.tickCount;
   if ((tick & 7) === 0) {
     // 统计各队人数与掉队情况
-    for (const g of ms) g.cnt = g.lagSum = g.cFight = g.cAlert = g.sx = g.sy = 0;
+    for (const g of ms) g.cnt = g.lagSum = g.cFight = g.cAlert = g.cFoe = g.sx = g.sy = 0;
     const grp = w.grp;
     for (let i = 0; i < w.n; i++) {
       const gi = grp[i];
@@ -392,7 +399,11 @@ export function updateMarches(w: World): void {
       g.cnt++;
       g.sx += w.x[i];
       g.sy += w.y[i];
-      if (w.target[i] !== NONE) g.cFight++;
+      if (w.target[i] !== NONE) {
+        g.cFight++;
+        const t = w.target[i];
+        if (t >= 0 && !(w.state[t] & S_ROUT)) g.cFoe++;
+      }
       if (w.state[i] & S_COMBAT) {
         // 进入战斗状态的人不排队，也不算掉队
         g.cAlert++;
@@ -400,8 +411,8 @@ export function updateMarches(w: World): void {
       }
       marchSlot(g, w.offA[i], w.offL[i]);
       const ox = SLOT.x - w.x[i], oy = SLOT.y - w.y[i];
-      // 位置在自己身后的人（收窄成纵队时排到了后面）原地等位置走过来，不算掉队：
-      // 算进去的话领队会为了等他们放慢，位置就走得更慢，整支队伍越等越久
+      // 位置在自己身后的人（收窄成纵队时排到了后面）不算掉队：平时他们原地等位置走过来，队伍在打时沿路线往前走，
+      // 都不需要领队等。算进去的话领队会为了等他们放慢，位置就走得更慢，整支队伍越等越久
       if (ox * SLOT.hx + oy * SLOT.hy < -M.waitAhead) continue;
       const lag = Math.sqrt(ox * ox + oy * oy);
       g.lagSum += lag > 400 ? 400 : lag;
@@ -416,6 +427,9 @@ export function updateMarches(w: World): void {
         g.alert = g.cAlert / g.cnt;
         // 打起来了就散开各自为战；打完以大家现在的重心重新整队，不走回头路
         const loose = (g.amove && g.fight > M.holdFight) || g.alert > 0.5;
+        // 统计每 8 帧一次，保持时间按 8 帧扣；零星一个敌兵冒出来又没了，队伍不至于刚散开往前走又马上回去等位置
+        if (g.cFoe > 0) g.battleT = RULES.combat.linger;
+        else if (g.battleT > 0) g.battleT -= DT * 8;
         if (g.loose && !loose && !g.arrived) anchor(w, g, g.sx / g.cnt, g.sy / g.cnt);
         g.loose = loose;
         if (!g.arrived && !loose && g.cnt > 1) fit(w, g);

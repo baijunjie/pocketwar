@@ -73,7 +73,7 @@ describe('开局编制与援军按兵力份数表达', () => {
     }
   });
 
-  it('罗马的蝎弩改按占用 1 换算后，其余兵种的比重整体归一：与蝎弩的比值是原来的比值 ÷ 原占用 6.4；850 份时罗马开局蝎弩约 19 人，比重之和仍为 1', () => {
+  it('罗马的蝎弩改按占用 1 换算后，其余兵种的比重整体归一：与蝎弩的比值是原来的比值 ÷ 原占用 6.4；850 份时罗马开局蝎弩 = 份数 × 兵员倍率 × 比重 ÷ 1，比重之和仍为 1', () => {
     const rome = FACTIONS.rome;
     const share = (k: string): number => rome.army.find(([x]) => x === k)![1];
     // 迁移前的比重（蝎弩按器械占用 6.4 折算）
@@ -81,7 +81,7 @@ describe('开局编制与援军按兵力份数表达', () => {
     expect(share('scorpio') / share('equites')).toBeCloseTo(0.15506 / 0.259587 / 6.4, 4);
     expect(share('onager') / share('legion')).toBeCloseTo(0.088606 / 0.249204, 4);
     expect(rome.army.reduce((n, [, x]) => n + x, 0)).toBeCloseTo(1, 6);
-    expect(countBy(armyList(rome, 850)).scorpio).toBe(19);
+    expect(countBy(armyList(rome, 850)).scorpio).toBe(headcount(UNIT_BY_KEY.scorpio, 850 * manpowerMult(rome) * share('scorpio')));
   });
 
   // 按人头计兵力时（每方兵力 300、600、1000、1500 人）各阵营的开局总人数

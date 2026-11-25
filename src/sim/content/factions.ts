@@ -11,7 +11,7 @@ export const FACTIONS: Record<FactionId, FactionDef> = {
     traits: ['弩兵破甲 60%', '火箭车范围杀伤', '连弩兵速射箭雨'],
     color: [200, 52, 44], altColor: [70, 70, 78],
     army: [['ji', 0.139635], ['dao', 0.139636], ['nu', 0.132654], ['liannu', 0.06898], ['tieqi', 0.340362], ['huojian', 0.111708], ['pili', 0.067025]],
-    manpower: -0.25, reinfLevel: 0.08,
+    manpower: 0.89, reinfLevel: 2.04,
     reinf: [['dao', 5], ['nu', 4.56], ['tieqi', 15], ['huojian', 6.4]],
   },
   japan: {
@@ -20,7 +20,7 @@ export const FACTIONS: Record<FactionId, FactionDef> = {
     traits: ['武士道：生命越低伤害越高', '铁炮破甲 80%', '和弓射程最远'],
     color: [52, 78, 160], altColor: [70, 70, 78],
     army: [['yari', 0.176314], ['samurai', 0.146929], ['yumi', 0.111666], ['teppo', 0.067], ['kiba', 0.330591], ['sohei', 0.073465], ['ozutsu', 0.094035]],
-    manpower: -0.15, reinfLevel: 1.72,
+    manpower: -1.2, reinfLevel: 0.56,
     reinf: [['samurai', 6], ['yumi', 3.04], ['kiba', 15], ['ozutsu', 6.4]],
   },
   rome: {
@@ -29,7 +29,7 @@ export const FACTIONS: Record<FactionId, FactionDef> = {
     traits: ['龟甲阵：所受远程伤害 -35%', '军团步兵接敌前投掷重标枪', '蝎弩远程狙杀'],
     color: [214, 164, 30], altColor: [70, 70, 78],
     army: [['legion', 0.286716], ['auxilia', 0.127429], ['velites', 0.072635], ['sagitt', 0.084741], ['equites', 0.298661], ['scorpio', 0.027875], ['onager', 0.101943]],
-    manpower: -5.67, reinfLevel: -0.09,
+    manpower: -6.21, reinfLevel: -0.55,
     reinf: [['legion', 6], ['sagitt', 3.04], ['equites', 7.5], ['onager', 6.4]],
   },
   persia: {
@@ -38,7 +38,7 @@ export const FACTIONS: Record<FactionId, FactionDef> = {
     traits: ['骑射手可移动射击', '战象践踏并冲毁建筑', '铁甲骑兵最重的冲锋'],
     color: [30, 160, 150], altColor: [70, 70, 78],
     army: [['spara', 0.14882], ['immortal', 0.081174], ['kamandar', 0.113103], ['asvaran', 0.172495], ['cataphract', 0.304404], ['elephant', 0.115065], ['mangonel', 0.064939]],
-    manpower: 1.25, reinfLevel: -1.62,
+    manpower: -0.43, reinfLevel: -2.64,
     reinf: [['immortal', 4], ['kamandar', 2.28], ['cataphract', 7.5], ['mangonel', 6.4]],
   },
 };

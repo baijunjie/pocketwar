@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   ARCHETYPES, DIMS, FACTIONS, FACTION_BUDGET, FACTION_IDS, FactionDef, LEVEL_RANGES, MANPOWER_STEP, PRICES, PriceTable, REINF_BUDGET, REINF_STEP, UNIT_BY_KEY,
-  UNIT_POINT_LIMITS, dimPoints, forceList, headcount, levelRange, manpowerMult, reinforceMult,
+  UNIT_POINT_LIMITS, dimPoints, estimatePoints, forceList, headcount, levelRange, manpowerMult, reinforceMult,
 } from '../src/sim/defs';
 import { derivePrices } from '../tools/measure/price';
 import type { Row } from '../tools/measure/measure';
@@ -105,25 +105,32 @@ describe('阵营点数的计算', () => {
   });
 
   it('兵种点数 = 估算点数：各维度级数 × 价目（加级减级各用各的）+ 兵种自己的特性价目；战略维度只计加级，减级不计不退点', () => {
-    const lv = UNIT_BY_KEY.samurai.lv, inf = table.dims.inf;
-    const want = 3 * inf.hp![0] + 5 * inf.cad![0] + 12 * inf.out![0] + 2 * inf.armM![0] + 1 * inf.spd![0] + 5 * inf.disc![0] + table.traits.inf.bushido;
-    expect(lv).toEqual({ hp: 3, cad: 5, out: 12, armM: 2, spd: 1, disc: 5 });
-    expect(unitPoints('samurai', table)).toBeCloseTo(want, 9);
-    // 铁甲骑兵机动 −4：机动的减级不计；生命、护甲等照常
-    const cav = table.dims.cav, c = UNIT_BY_KEY.cataphract.lv;
-    expect(c).toEqual({ hp: 4, armM: 2, armP: 2, spd: -4, disc: 3, imp: 2 });
-    expect(unitPoints('cataphract', table)).toBeCloseTo(4 * cav.hp![0] + 2 * cav.armM![0] + 2 * cav.armP![0] + 3 * cav.disc![0] + 2 * cav.imp![0], 9);
+    // 步兵位：生命、护甲加级用加级价目，节奏、近战护甲减级用减级价目；机动加级照计，纪律减级（战略维度）不计不退
+    const inf = table.dims.inf;
+    const L = { hp: 2, cad: -2, out: 3, armM: -1, armP: 1, spd: 2, disc: -3 };
+    const want = 2 * inf.hp![0] + -2 * inf.cad![1] + 3 * inf.out![0] + -1 * inf.armM![1] + 1 * inf.armP![0] + 2 * inf.spd![0] + table.traits.inf.testudo;
+    expect(table.traits.inf.testudo).toBeGreaterThan(0);
+    expect(estimatePoints('inf', L, ['testudo'], table)).toBeCloseTo(want, 9);
+    // 骑兵位：机动减级不计；生命、护甲、纪律加级照常
+    const cav = table.dims.cav;
+    expect(estimatePoints('cav', { hp: 4, armM: 2, spd: -4, disc: 3 }, [], table)).toBeCloseTo(4 * cav.hp![0] + 2 * cav.armM![0] + 3 * cav.disc![0], 9);
     expect(dimPoints('spd', -4, [0.1, 0.3])).toBe(0);
     expect(dimPoints('hp', -4, [0.1, 0.3])).toBeCloseTo(-1.2, 9);
+    // 兵种点数就是按它自己的位置、级数与特性估的
+    for (const key of ['samurai', 'cataphract']) {
+      const d = UNIT_BY_KEY[key];
+      expect(unitPoints(key, table), key).toBeCloseTo(estimatePoints(d.position, d.lv, d.ownTraits, table), 9);
+    }
     // 用游戏的价目表时就是兵种定义里的估算点数
     for (const d of contentUnits().filter(u => u.tier === 0)) expect(unitPoints(d.key), d.key).toBeCloseTo(d.points, 9);
   });
 
-  it('蝎弩（直射器械）的点数约 2.09：生命、护甲等级数都是基准，只有破甲 +8 与重弩特性计点', () => {
+  it('蝎弩（直射器械）的点数：生命、护甲等级数都是基准，只有破甲 +8 与重弩特性计点', () => {
     const d = UNIT_BY_KEY.scorpio;
     expect(d.lv).toEqual({ pen: 8 });
     expect(unitPoints('scorpio')).toBeCloseTo(PRICES.dims.bolt.pen![0] * 8 + PRICES.traits.bolt.ballista, 9);
-    expect(unitPoints('scorpio')).toBeCloseTo(2.09, 1);
+    expect(unitPoints('scorpio')).toBeGreaterThanOrEqual(UNIT_POINT_LIMITS[0]);
+    expect(unitPoints('scorpio')).toBeLessThanOrEqual(UNIT_POINT_LIMITS[1]);
   });
 
   it('兵种用到的维度或特性在价目表里没有条目时直接报错（显式记 0 的不算缺格）', () => {

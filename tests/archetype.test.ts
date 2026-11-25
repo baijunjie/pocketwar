@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { A_MELEE, A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, P_BIGBOLT, RULES, TRAITS, UNITS, UNIT_BY_KEY, tagBit, unitKind } from '../src/sim/defs';
+import { A_MELEE, A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, P_BIGBOLT, PRICES, RULES, TRAITS, UNITS, UNIT_BY_KEY, UNIT_POINT_LIMITS, tagBit, unitKind } from '../src/sim/defs';
 import { damageUnit } from '../src/sim/systems/combat';
 import { flatWorld } from './helpers';
 
@@ -95,7 +95,10 @@ describe('直射器械原型与蝎弩', () => {
     expect(scorpio.splash).toBe(0);
     expect(scorpio.proj).toBe(P_BIGBOLT);
     expect(scorpio.ownTraits).toEqual(['ballista']);
-    expect(scorpio.points).toBeCloseTo(2.09, 1);
+    // 点数 = 破甲 +8 的价目 + 重弩特性价目（其余维度都是基准），且在单兵种点数上下限内
+    expect(scorpio.points).toBeCloseTo(PRICES.dims.bolt.pen![0] * 8 + PRICES.traits.bolt.ballista, 9);
+    expect(scorpio.points).toBeGreaterThanOrEqual(UNIT_POINT_LIMITS[0]);
+    expect(scorpio.points).toBeLessThanOrEqual(UNIT_POINT_LIMITS[1]);
     // 抛射器械的兵种仍是攻城伤害与范围杀伤
     expect(UNIT_BY_KEY.onager.atk).toBe(A_SIEGE);
     expect(UNIT_BY_KEY.onager.splash).toBeGreaterThan(0);
