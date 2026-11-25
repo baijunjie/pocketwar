@@ -276,6 +276,249 @@ describe('单位分离：战斗中不往让不开的自己人身上挤', () => {
   });
 });
 
+describe('单位分离：正在走的近战从射击中的己方远程身上穿过去', () => {
+  /** 己方 120 个弓箭手列在中心朝 +x，敌方 120 个步兵在 +330 处不动、血量无限；先跑 2 秒让弓手开始射击 */
+  const archerLine = (): { w: World; archers: number[]; foes: number[] } => {
+    const w = flatWorld(200, 7);
+    const c = (200 * TILE) / 2;
+    const archers = w.spawnGroup(1, Array(120).fill(idx('sagitt')), c, c, 1, 0);
+    const foes = w.spawnGroup(2, Array(120).fill(idx('yari')), c + 330, c, -1, 0);
+    for (const f of foes) w.hp[f] = w.maxHp[f] = 1e9;
+    w.orderStop(foes, true);
+    run(w, 2);
+    return { w, archers, foes };
+  };
+
+  it('射击中的弓手堆里放近战攻击移动：近战走得出去、接上敌，弓手照射不误、位置不动', () => {
+    const { w, archers, foes } = archerLine();
+    expect(archers.filter(s => w.engaged[s] === 1).length, '前排弓手已在射击').toBeGreaterThan(30);
+    const shooters = archers.filter(s => w.engaged[s] === 1);
+    const home = shooters.map(s => [w.x[s], w.y[s]]);
+    // 近战放在弓手堆中间：取一些弓手的位置，错开几个像素叠上去
+    const legions = shooters.filter((_, k) => k % 4 === 1).map(s => w.spawnUnit(idx('legion'), 1, w.x[s] + 3, w.y[s] + 2));
+    expect(legions.length).toBeGreaterThanOrEqual(8);
+    const start = legions.map(s => [w.x[s], w.y[s]]);
+    const tx = w.x[foes[0]], ty = w.y[foes[0]];
+    w.orderMove(legions, tx, ty, true);
+    run(w, 5);
+    legions.forEach((s, k) => {
+      expect(Math.hypot(w.x[s] - start[k][0], w.y[s] - start[k][1]), `近战 ${k} 5 秒内走出去了`).toBeGreaterThan(40);
+    });
+    run(w, 5);
+    const engaged = legions.filter(s => w.alive[s] && w.engaged[s] === 1).length;
+    expect(engaged, `10 秒时接敌的近战 ${engaged}/${legions.length}`).toBeGreaterThanOrEqual(Math.ceil(legions.length * 0.6));
+    // 被穿过的弓手没被挤动，还在射
+    let drift = 0, stillShooting = 0;
+    shooters.forEach((s, k) => {
+      drift = Math.max(drift, Math.hypot(w.x[s] - home[k][0], w.y[s] - home[k][1]));
+      if (w.engaged[s] === 1) stillShooting++;
+    });
+    expect(drift, '弓手被挤动的最大距离').toBeLessThan(10);
+    expect(stillShooting, '弓手仍在射击').toBeGreaterThanOrEqual(Math.floor(shooters.length * 0.9));
+  }, 60000);
+
+  it('近战从弓手线后面攻击移动上来：越过弓手线', () => {
+    const { w, archers } = archerLine();
+    const lineX = archers.map(s => w.x[s]);
+    const front = Math.max(...lineX);
+    const legions = w.spawnGroup(1, Array(40).fill(idx('legion')), Math.min(...lineX) - 90, w.y[archers[0]], 1, 0);
+    const foeX = w.x[archers[0]] + 330;
+    w.orderMove(legions, foeX, w.y[archers[0]], true);
+    run(w, 10);
+    const beyond = legions.filter(s => w.alive[s] && w.x[s] > front).length;
+    expect(beyond, `越过弓手线的近战 ${beyond}/40`).toBeGreaterThanOrEqual(34);
+  }, 60000);
+
+  /**
+   * 一个站定的己方单位 blocker 在 (C, C)，一个己方单位 walker 从西边 100 处沿 x 轴走向东边 150 处，
+   * 敌兵（血量无限、不动）摆在 blocker 射程内且不在路上。blocker 为 'sagitt' 时它在射击；为 'legion' 时敌兵贴着它让它站定交手。
+   */
+  const walkThrough = (blockerKey: string, walkerKey: string, amove = false) => {
+    const w = flatWorld();
+    const blocker = w.spawnUnit(idx(blockerKey), 1, C, C);
+    w.hp[blocker] = w.maxHp[blocker] = 1e9;
+    // 攻击移动的人会去打看得见的敌兵：敌兵放在路线终点附近，路上正好穿过 blocker；普通移动时放在路旁
+    const foe = amove ? w.spawnUnit(idx('yari'), 2, C + 200, C)
+      : w.spawnUnit(idx('yari'), 2, C, C + (blockerKey === 'legion' ? w.rad[blocker] * 2 : 60));
+    w.hp[foe] = w.maxHp[foe] = 1e9;
+    w.orderStop([foe], true);
+    run(w, 1.5);
+    expect(w.engaged[blocker], 'blocker 已在交手').toBe(1);
+    // 走路的人在 blocker 已站定之后才出现，直接下走路命令
+    const walker = w.spawnUnit(idx(walkerKey), 1, C - 100, C);
+    w.orderMove([walker], amove ? C + 200 : C + 150, C, amove);
+    let minDist = Infinity, maxShift = 0, maxX = -Infinity;
+    for (let t = 0; t < 30 * 10; t++) {
+      w.tick();
+      w.fxN = 0;
+      maxX = Math.max(maxX, w.x[walker]);
+      minDist = Math.min(minDist, Math.hypot(w.x[walker] - w.x[blocker], w.y[walker] - w.y[blocker]));
+      maxShift = Math.max(maxShift, Math.hypot(w.x[blocker] - C, w.y[blocker] - C));
+    }
+    return { w, walker, blocker, minDist, maxShift, maxX, sum: w.rad[walker] + w.rad[blocker] };
+  };
+
+  it('近战走路（普通移动）撞上射击中的弓手：穿了过去，弓手仍在射击', () => {
+    const r = walkThrough('sagitt', 'legion');
+    expect(r.minDist, '圆心靠得比半径和近得多').toBeLessThan(r.sum * 0.5);
+    expect(r.maxX, '走到了弓手东边').toBeGreaterThan(C + 100);
+    expect(r.w.engaged[r.blocker]).toBe(1);
+  });
+
+  it('近战攻击移动撞上射击中的弓手：同样穿过去', () => {
+    const r = walkThrough('sagitt', 'legion', true);
+    expect(r.minDist).toBeLessThan(r.sum * 0.5);
+    expect(r.maxX, '走到了弓手东边').toBeGreaterThan(C + 100);
+  });
+
+  it('战象（近战）同样穿过射击中的弓手', () => {
+    const r = walkThrough('sagitt', 'elephant');
+    expect(r.minDist, '圆心靠得比半径和近得多').toBeLessThan(r.sum * 0.5);
+  });
+
+  it.each(['legion', 'elephant'])('被 %s 穿过的射击中的弓手位置不动', walkerKey => {
+    const r = walkThrough('sagitt', walkerKey);
+    expect(r.maxShift, '弓手被挤动的最大距离').toBeLessThan(3);
+    expect(r.w.engaged[r.blocker]).toBe(1);
+  });
+
+  it('远程走路撞上射击中的弓手：不穿过，被挡在外面、不叠在一起', () => {
+    const r = walkThrough('sagitt', 'sagitt');
+    expect(r.minDist).toBeGreaterThan(r.sum * 0.8);
+  });
+
+  it('近战走路撞上正在交手站定的近战：不穿过', () => {
+    const r = walkThrough('legion', 'legion');
+    expect(r.minDist).toBeGreaterThan(r.sum * 0.8);
+  });
+
+  it('交手中的近战骑兵叠在射击中的弓手身上：照常被推开，不一直叠着', () => {
+    const w = flatWorld();
+    const archer = w.spawnUnit(idx('sagitt'), 1, C, C);
+    w.hp[archer] = w.maxHp[archer] = 1e9;
+    // 骑兵与北侧贴着的敌兵先在弓手东边 30 处站着交手，弓手也已在射击
+    const foe = w.spawnUnit(idx('yari'), 2, C + 30, C - 17);
+    w.hp[foe] = w.maxHp[foe] = 1e9;
+    w.orderStop([foe], true);
+    const horse = w.spawnUnit(idx('equites'), 1, C + 30, C);
+    w.hp[horse] = w.maxHp[horse] = 1e9;
+    run(w, 2);
+    expect(w.engaged[archer], '弓手在射击').toBe(1);
+    expect(w.engaged[horse], '骑兵在交手').toBe(1);
+    // 骑兵连同敌兵一起平移到与弓手半叠着的位置（叠得不深：站定的人本来不会被这点重叠推动）
+    for (const [s, dx] of [[horse, -22], [foe, -22]]) {
+      w.x[s] += dx;
+      w.px[s] += dx;
+      w.homeX[s] += dx;
+      w.vx[s] = w.vy[s] = 0;
+    }
+    const gap = (): number => Math.hypot(w.x[horse] - w.x[archer], w.y[horse] - w.y[archer]);
+    const sum = w.rad[horse] + w.rad[archer];
+    expect(gap(), '起点确实叠着').toBeLessThan(sum * 0.7);
+    run(w, 4);
+    expect(w.engaged[horse], '骑兵仍在交手').toBe(1);
+    expect(gap()).toBeGreaterThan(sum * 0.9);
+  });
+
+  describe('待命、坚守的近战原位压在射击中的弓手身上', () => {
+    /** 己方弓手在中心射击（敌兵 30 个在东边 200 处不动），再在弓手旁放一个下了坚守命令的近战（只下待命的话它会去追看得见的敌兵，有了目标就不在本条范围内），原位就在弓手身上 */
+    const standOnArcher = (dx = 2) => {
+      const w = flatWorld();
+      const archer = w.spawnUnit(idx('sagitt'), 1, C, C);
+      const foes = w.spawnGroup(2, Array(30).fill(idx('yari')), C + 200, C, -1, 0);
+      for (const f of foes) w.hp[f] = w.maxHp[f] = 1e9;
+      w.orderStop(foes, true);
+      run(w, 2);
+      expect(w.engaged[archer], '弓手在射击').toBe(1);
+      const m = w.spawnUnit(idx('legion'), 1, C + dx, C);
+      w.orderStop([m], true);
+      return { w, archer, m };
+    };
+
+    it('坚守命令：被推到不重叠后就地站住，原位跟过去，不再来回走', () => {
+      const { w, archer, m } = standOnArcher();
+      run(w, 2);
+      const sum = w.rad[m] + w.rad[archer];
+      const ax = w.x[archer], ay = w.y[archer];
+      const gap = (): number => Math.hypot(w.x[m] - w.x[archer], w.y[m] - w.y[archer]);
+      expect(gap(), '不重叠了').toBeGreaterThanOrEqual(sum * 0.95);
+      let path = 0, minGap = Infinity;
+      for (let t = 0; t < 3 * 30; t++) {
+        const x0 = w.x[m], y0 = w.y[m];
+        w.tick();
+        w.fxN = 0;
+        path += Math.hypot(w.x[m] - x0, w.y[m] - y0);
+        minGap = Math.min(minGap, gap());
+      }
+      expect(path, '这 3 秒近战没有白走').toBeLessThan(2);
+      expect(minGap, '没有再穿进弓手').toBeGreaterThanOrEqual(sum * 0.95);
+      expect(Math.hypot(w.homeX[m] - w.x[m], w.homeY[m] - w.y[m]), '原位跟到了站住的地方').toBeLessThan(2);
+      expect(Math.hypot(w.x[archer] - ax, w.y[archer] - ay), '弓手没动').toBeLessThan(0.5);
+      expect(w.engaged[archer], '弓手仍在射击').toBe(1);
+      expect(w.engaged[m], '近战没在交手').toBe(0);
+    });
+
+    it('近战原位与弓手恰好同一点：同样分开后站住', () => {
+      const { w, archer, m } = standOnArcher(0);
+      run(w, 3);
+      const sum = w.rad[m] + w.rad[archer];
+      expect(Math.hypot(w.x[m] - w.x[archer], w.y[m] - w.y[archer])).toBeGreaterThanOrEqual(sum * 0.95);
+      const p = [w.x[m], w.y[m]];
+      run(w, 2);
+      expect(Math.hypot(w.x[m] - p[0], w.y[m] - p[1]), '站住了').toBeLessThan(2);
+    });
+  });
+
+  describe('绕行起步（tryDetour）：正前方贴着的自己人', () => {
+    /**
+     * 目标 e 与它南北两侧的两个敌人 f1、f2；己方 p、q1、q2（key 指定兵种）各贴着一个敌人站定交手，
+     * 追击者 a 在它们围成的三面里朝 e 去。返回 a 与世界。
+     */
+    const surrounded = (key: string) => {
+      const w = flatWorld();
+      const probe = w.spawnUnit(idx('legion'), 2, 0, 0);
+      const S = 2 * w.rad[probe] + 2;
+      w.removeUnit(probe);
+      const ex = C + 100, ey = C;
+      const e = w.spawnUnit(idx('legion'), 2, ex, ey);
+      const f1 = w.spawnUnit(idx('legion'), 2, ex - 2 * S, ey - 2 * S);
+      const f2 = w.spawnUnit(idx('legion'), 2, ex - 2 * S, ey + 2 * S);
+      for (const f of [e, f1, f2]) w.hp[f] = w.maxHp[f] = 1e9;
+      w.orderStop([e, f1, f2], true);
+      const guards = [
+        w.spawnUnit(idx(key), 1, ex - S + 1, ey),
+        w.spawnUnit(idx(key), 1, ex - 2 * S, ey - S + 1),
+        w.spawnUnit(idx(key), 1, ex - 2 * S, ey + S - 1),
+      ];
+      w.orderAttackUnit([guards[0]], e);
+      w.orderAttackUnit([guards[1]], f1);
+      w.orderAttackUnit([guards[2]], f2);
+      // a 贴着正前方的 p（圆心距略小于半径和加 contactSkin），起绕方向（偏东北）与正东的夹角在 flankCos 之内
+      const a = w.spawnUnit(idx('legion'), 1, ex - S + 1 - 12.5, ey);
+      w.orderAttackUnit([a], e);
+      for (let t = 0; t < 2; t++) {
+        w.tick();
+        w.fxN = 0;
+      }
+      return { w, a, guards, e };
+    };
+
+    it('贴着的是射击中的己方远程：不算堵着，起绕成功', () => {
+      const { w, a, guards, e } = surrounded('sagitt');
+      expect(guards.every(g => w.engaged[g] === 1 && w.planted[g] === 1), '三个弓手都在站定射击').toBe(true);
+      expect(tryDetour(w, a, e, w.state[a], w.order[a], w.defs[idx('legion')].speed, 0)).toBe(true);
+      expect(w.detourT[a]).toBeGreaterThan(0);
+    });
+
+    it('贴着的是正在交手站定的己方近战：仍然放弃绕行', () => {
+      const { w, a, guards, e } = surrounded('legion');
+      expect(guards.every(g => w.engaged[g] === 1 && w.planted[g] === 1), '三个近战都在站定交手').toBe(true);
+      expect(tryDetour(w, a, e, w.state[a], w.order[a], w.defs[idx('legion')].speed, 0)).toBe(false);
+      expect(w.detourT[a]).toBe(0);
+    });
+  });
+});
+
 describe('单位分离：不冲着目标去的人照旧能把没站定的自己人挤开', () => {
   /** 待命的 legion 方阵被 auxilia 攻击，打了 12 秒、再过 20 秒后，数「原位被改到离开战前的值超过 8」的活人 */
   const rehomedAfterFight = (seed: number): { rehomed: number; alive: number; enemiesLeft: number } => {

@@ -14,7 +14,7 @@ import { FOLLOW, FOLLOW_APART, FOLLOW_SLOT, SLOT, marchFollow, marchSlot } from 
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
 import { SCAN, canAttackBuilding, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from './targeting';
-import { STEP, detourPasses, detourProgress, detourStep, startWait, tryDetour } from './detour';
+import { STEP, detourPasses, detourProgress, detourStep, shooting, startWait, tryDetour } from './detour';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE, chaseWay, findAround, keepWay } from './around';
 
 function arrive(w: World, i: number, atSlot: boolean): void {
@@ -568,9 +568,16 @@ export function updateUnits(w: World): void {
     // 只约束正冲着目标去的人（挤战线的那批）；回原位、赶路、溃逃的照旧能把没站定的自己人挤开
     const press = tgt !== NONE && !firm && !charging && !(st & S_ROUT) && !detouring;
     const skin = C.contactSkin, passK = C.passPush;
+    // 近战不被射击中的己方远程挡住：远程射程内有目标就一直站定，又站在战线后面近战要过的地方，
+    // 当成人墙的话，近战会被自己的弓手围死在后面。正在走的近战从他们身上穿过去，停下来的照常被推开
+    const melee = d.range === 0, thru = melee && !firm && (wx !== 0 || wy !== 0);
+    // 反过来，自己是站着射击的远程时，己方近战怎么叠上来都不让位（否则近战从正中穿过时重叠过了让位线，会被一路推着走）；
+    // 边跑边射的不算，它自己在往人堆里走时照常受推
+    const shot = !melee && eng === 1 && wx === 0 && wy === 0;
+    let ousted = false;
     // 近战追击的人另看稍远一圈：正前方让不开的自己人只是把他弹开了一两像素、没贴着了，也还算顶在人墙上（「追不上」计时不回落）。
     // 只看近战，与下面往两侧绕的限定一致；远程不做这一圈
-    const fwl = press && chasing && d.range === 0 ? Math.sqrt(wx * wx + wy * wy) : 0;
+    const fwl = press && chasing && melee ? Math.sqrt(wx * wx + wy * wy) : 0;
     const wallSkin = fwl > 0 && C.stuckSkin > skin ? C.stuckSkin : skin;
     let walled = false;
     let braced = NONE;
@@ -602,9 +609,10 @@ export function updateUnits(w: World): void {
           // 先按距离剔除：周围格子里的人大多离得远，别为他们去读别的数组
           if (d2 >= rf * rf) continue;
           const mate = team[j] === tm, pj = planted[j];
-          // 不打仗时自己人之间可以互相穿过
+          const over = melee && mate && pj !== 0 && shooting(w, j);
+          // 自己人之间可以互相穿过的三种情形：都不在打仗、有一方在行军；绕行中穿过没在交手的；正在走的近战穿过射击中的远程
           const pass = mate && ((calm && pj === 0 && !(state[j] & S_COMBAT) && (marching || order[j] === O_MOVE || order[j] === O_AMOVE))
-            || (detouring && detourPasses(w, i, j)));
+            || (detouring && detourPasses(w, i, j)) || (over && thru));
           if (d2 < 0.01) {
             ox = ((i * 7919) % 13) - 6;
             oy = ((i * 104729) % 11) - 5;
@@ -627,9 +635,12 @@ export function updateUnits(w: World): void {
           if (d2 >= rs * rs) continue;
           if (dd >= rr) continue;
           // 站定的人只有被压得太狠才让一点；别人撞上站定的人，自己全让
-          if (firm && dd > rr * give && (plant || mate)) continue;
+          // 例外：没在出手的近战（列队等的、交手中的骑兵）叠在射击中的己方远程身上时照常被推开，否则穿到一半停下就一直叠着
+          if (firm && dd > rr * give && (plant || mate) && !(over && !plant)) continue;
+          if (shot && mate && defs[type[j]].range === 0) continue;
           let share = !firm && (pj === 1 || (pj === 2 && mate)) ? 1 : (rj * rj) / (r2 + rj * rj);
           if (pass) share *= passK;
+          else if (over) ousted = true;
           const ov = (rr - dd) * share;
           if (ov > pen) pen = ov;
           pxs += (ox / dd) * ov;
@@ -734,6 +745,12 @@ export function updateUnits(w: World): void {
     }
     x[i] = nx;
     y[i] = ny;
+    // 待命、坚守的近战原位压在射击中的己方远程身上：被推开多少原位就跟着挪多少，
+    // 否则走回去穿进去、站住了又被推出来，在原位边上来回跳
+    if (ousted && tgt === NONE && ord !== O_MOVE && ord !== O_AMOVE && ord !== O_ATTACK) {
+      w.homeX[i] = nx;
+      w.homeY[i] = ny;
+    }
     const mvx = nx - ux, mvy = ny - uy;
     const moved = Math.sqrt(mvx * mvx + mvy * mvy);
     const want = Math.sqrt(cwx * cwx + cwy * cwy);

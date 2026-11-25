@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RULES, T_MOUNTAIN, TILE, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { S_ROUT } from '../../../src/sim/state';
-import { OPENING, detourPasses, findOpening } from '../../../src/sim/systems/detour';
+import { OPENING, detourPasses, findOpening, shooting } from '../../../src/sim/systems/detour';
 import type { World } from '../../../src/sim/world';
 import { flatWorld } from '../../helpers';
 
@@ -263,5 +263,33 @@ describe('detourPasses：绕行的人能不能穿过某个自己人', () => {
     expect(detourPasses(w, i, j)).toBe(true);
     w.detourStall[i] = C2.detourStallAfter * C2.detourPassStall * 1.1;
     expect(detourPasses(w, i, j)).toBe(false);
+  });
+});
+
+describe('shooting：是不是正在射击的远程单位', () => {
+  const unit = (key: string, engaged: number) => {
+    const w = flatWorld(N, 7);
+    const j = w.spawnUnit(idx(key), 1, C, C);
+    w.engaged[j] = engaged;
+    return { w, j };
+  };
+
+  it('远程单位射程内有目标、正在交手：是', () => {
+    const { w, j } = unit('sagitt', 1);
+    expect(w.defs[w.type[j]].range).toBeGreaterThan(0);
+    expect(shooting(w, j)).toBe(true);
+  });
+
+  it('远程单位没在交手：不是', () => {
+    const { w, j } = unit('sagitt', 0);
+    expect(shooting(w, j)).toBe(false);
+  });
+
+  it('近战单位即使在交手：不是', () => {
+    for (const key of ['legion', 'equites', 'elephant']) {
+      const { w, j } = unit(key, 1);
+      expect(w.defs[w.type[j]].range, key).toBe(0);
+      expect(shooting(w, j), key).toBe(false);
+    }
   });
 });

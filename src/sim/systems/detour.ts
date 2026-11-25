@@ -216,7 +216,7 @@ function detourVel(ux: number, uy: number, sx: number, sy: number, cx: number, c
   return true;
 }
 
-/** 起步方向的正前方是不是贴着正在交手（站定）的自己人：是的话绕不动 */
+/** 起步方向的正前方是不是贴着正在交手（站定）的自己人：是的话绕不动。射击中的远程不算，近战能从他们身上穿过去 */
 function blockedAhead(w: World, i: number): boolean {
   const l = Math.hypot(STEP.wx, STEP.wy) || 1;
   const fx = STEP.wx / l, fy = STEP.wy / l;
@@ -231,7 +231,7 @@ function blockedAhead(w: World, i: number): boolean {
       const c = cy * gw + cx;
       for (let k = cs[c], e = cs[c + 1]; k < e; k++) {
         const j = items[k];
-        if (j === i || !w.alive[j] || w.team[j] !== tm || w.planted[j] !== 1) continue;
+        if (j === i || !w.alive[j] || w.team[j] !== tm || w.planted[j] !== 1 || shooting(w, j)) continue;
         const ox = w.x[j] - ux, oy = w.y[j] - uy, d = Math.hypot(ox, oy) || 0.001;
         if (d < ri + w.rad[j] + C.contactSkin && (fx * ox + fy * oy) / d > C.flankCos) return true;
       }
@@ -322,4 +322,9 @@ export function detourProgress(w: World, i: number, ux: number, uy: number, nx: 
 export function detourPasses(w: World, i: number, j: number): boolean {
   const C = RULES.combat;
   return w.planted[j] !== 1 && !w.engaged[j] && w.detourT[j] <= 0 && w.detourStall[i] < C.detourStallAfter * C.detourPassStall;
+}
+
+/** j 是不是正在射击的远程单位（射程内有目标） */
+export function shooting(w: World, j: number): boolean {
+  return w.engaged[j] === 1 && w.defs[w.type[j]].range > 0;
 }
