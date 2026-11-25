@@ -10,7 +10,7 @@ import type { World } from '../world';
 import { attack, damageUnit, spawnProj } from './combat';
 import { orderAttackUnit, orderMove } from './orders';
 import { P_NONE, P_POSTED, stepPost } from './garrison';
-import { SLOT, marchSlot } from './march';
+import { FOLLOW, FOLLOW_APART, FOLLOW_SLOT, SLOT, marchFollow, marchSlot } from './march';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
 import { SCAN, canAttackBuilding, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from './targeting';
@@ -71,6 +71,7 @@ export function updateUnits(w: World): void {
     const ux = x[i], uy = y[i];
     w.px[i] = ux;
     w.py[i] = uy;
+    w.apart[i] = 0;
     const cell = ((uy / TILE) | 0) * mw + ((ux / TILE) | 0);
     const tt = terr[cell];
     const under = bldAt[cell];
@@ -417,32 +418,35 @@ export function updateUnits(w: World): void {
             if (!g.alive || g.arrived) w.grp[i] = -1;
             else if (!g.blocked && !g.loose && !inCombat) {
               // 只有不在打仗的时候才排队：自己进入战斗状态、或队伍已经打起来了，就各走各的
-              marchSlot(g, w.offA[i], w.offL[i]);
-              const px = SLOT.x, py = SLOT.y;
-              const pc = ((py / TILE) | 0) * mw + ((px / TILE) | 0);
-              const behind = (px - ux) * SLOT.hx + (py - uy) * SLOT.hy < -RULES.march.waitAhead;
+              const l = w.offL[i];
+              marchSlot(g, w.offA[i], l);
+              // 位置在自己前方多远（沿队列在那里的行进方向量；负数是落到了身后）
+              const behind = (SLOT.x - ux) * SLOT.hx + (SLOT.y - uy) * SLOT.hy < -RULES.march.waitAhead;
               if (behind && g.battleT > 0) {
                 // 位置在自己身后、队伍里又有人在打敌兵：不等位置，交给下面沿路线往前去接敌（多是走在队列前面的人）。
                 // 不看位置够不够得着（走到障碍另一侧后位置常被挡住），也不像够不着位置时那样提速：他们已经在自己的位置前面，没有要追的
                 pushOn = true;
-              } else if (px > 8 && py > 8 && px < maxX && py < maxY && !blk[pc] && !w.lineBlocked(ux, uy, px, py, tm)) {
-                // 瞄准位置前方一小段：到位后正好与领队同速，落后了就跑步追
-                const ex = px + SLOT.hx * g.v * 0.4 - ux, ey = py + SLOT.hy * g.v * 0.4 - uy;
-                const ed = Math.sqrt(ex * ex + ey * ey);
-                if (behind) {
-                  // 位置在自己身后（变阵收窄后排到了更后面）：原地站着等它走过来，不往回跑
-                  wx = wy = 0;
-                } else if (ed > 0.5) {
-                  let v = ed / 0.4;
-                  if (v > run) v = run;
-                  wx = (ex / ed) * v;
-                  wy = (ey / ed) * v;
-                }
-                inFormation = true;
               } else {
-                // 够不着自己的位置（过桥、进门）：沿寻路路线走，略快一点好归队
-                const lim = g.speed * 1.3 > d.walk ? g.speed * 1.3 : d.walk;
-                spd = run < lim ? run : lim;
+                const mode = marchFollow(w, g, l, ux, uy);
+                if (mode !== FOLLOW_SLOT) w.apart[i] = 1;
+                if (mode === FOLLOW_APART) {
+                  // 够不着自己的位置，也看不见本排：不等，跑步沿寻路路线找路过去，过去之后再回到位置上
+                  spd = run;
+                } else {
+                  // 瞄准要跟的那一点前方一小段：到位后正好与领队同速，落后了就跑步追
+                  const ex = FOLLOW.x + SLOT.hx * g.v * 0.4 - ux, ey = FOLLOW.y + SLOT.hy * g.v * 0.4 - uy;
+                  const ed = Math.sqrt(ex * ex + ey * ey);
+                  if (behind) {
+                    // 位置在自己身后（绕路时走到了前面）：原地站着等它走过来，不往回跑
+                    wx = wy = 0;
+                  } else if (ed > 0.5) {
+                    let v = ed / 0.4;
+                    if (v > run) v = run;
+                    wx = (ex / ed) * v;
+                    wy = (ey / ed) * v;
+                  }
+                  inFormation = true;
+                }
               }
             }
           }

@@ -8,7 +8,7 @@ import { lightAt } from '../src/sim/systems/environment';
 import { startRout } from '../src/sim/systems/morale';
 import { initSupply } from '../src/sim/systems/supply';
 import { S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL, World } from '../src/sim/world';
-import { flatWorld, run, spinStats } from './helpers';
+import { breathe, flatWorld, run, spinStats } from './helpers';
 
 const C = (120 * TILE) / 2;
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;
@@ -855,7 +855,7 @@ describe('第六轮反馈', () => {
     seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false, supply: false,
   }).world;
 
-  it('编队行军遇到窄路：横排收窄成纵队，全队过去之后再展开', () => {
+  it('编队行军遇到窄路：队列不收窄成纵队，全队涌过去，过去之后在终点归队', () => {
     // 东西向的山谷：x 50..80 格，谷宽 4 格
     const w = flatWorld(140, 7, (t, n) => {
       for (let x = 50; x <= 80; x++) for (let y = 20; y < 110; y++) if (y < 58 || y > 61) t[y * n + x] = T_MOUNTAIN;
@@ -864,30 +864,29 @@ describe('第六轮反馈', () => {
     const g = w.spawnGroup(1, Array(40).fill(idx('tieqi')), 25 * TILE, cy, 1, 0);
     w.orderMove(g, 115 * TILE, cy, false);
     const m = w.marches[w.grp[g[0]]];
-    const full = m.width, depth0 = m.depth;
-    expect(full).toBeGreaterThan(4 * TILE);
-    let inValley = 0, left = 0, minW = full, maxLag = 0, back = 0;
+    const width = m.width, depth = m.depth;
+    expect(width).toBeGreaterThan(4 * TILE);
+    const blk = w.nav.block[1];
+    let inValley = 0, left = 0, resized = false, inBlock = 0;
     for (let t = 0; t < 30 * 120 && !m.arrived; t++) {
       w.tick();
-      // 变阵收窄时：跟着队列的人不往回跑（沿行进方向的速度不为负），位置在身后就原地等
-      if (t > 30 * 3) for (const s of g) if (w.grp[s] >= 0 && w.vx[s] * m.hx + w.vy[s] * m.hy < -15) back++;
-      // 领队走在谷里的那一段：没有人掉出编队去各自寻路，队列也都跟得上
+      if (m.arrived) break;
+      if (m.width !== width || m.depth !== depth) resized = true;
+      for (const s of g) if (blk[w.cellAt(w.x[s], w.y[s])]) inBlock++;
+      // 领队走在谷里的那一段：没有人掉出编队
       if (m.x > 56 * TILE && m.x < 78 * TILE) {
         inValley++;
         left = Math.max(left, g.filter(s => w.grp[s] < 0).length);
-        minW = Math.min(minW, m.width);
-        maxLag = Math.max(maxLag, m.lag);
       }
     }
-    expect(back).toBe(0);
     expect(inValley).toBeGreaterThan(100);
     expect(left).toBe(0);
-    expect(minW).toBeLessThanOrEqual(4 * TILE);
-    expect(maxLag).toBeLessThan(RULES.march.lagFull);
-    // 出谷后恢复原来的横排
+    // 队宽纵深从下令到到达始终不变，没有人落进山里
+    expect(resized).toBe(false);
+    expect(inBlock).toBe(0);
     expect(m.arrived).toBe(true);
-    expect(m.width).toBe(full);
-    expect(m.depth).toBe(depth0);
+    expect(m.width).toBe(width);
+    expect(m.depth).toBe(depth);
     for (let t = 0; t < 30 * 30 && g.some(s => w.order[s] !== 0); t++) w.tick();
     expect(g.every(s => w.order[s] === 0)).toBe(true);
   }, 30000);
@@ -1046,7 +1045,7 @@ describe('编队行军：特殊地形', () => {
     return n;
   };
 
-  it('过窄桥：后排原地排队，但领队不为排队的人放慢；过桥后分步展开，领队不停下来等', () => {
+  it('过窄桥：队列不变阵，够不着位置的人各自过桥，队列压在桥上的那一段领队不为他们放慢，过桥后全员到达', async () => {
     // 南北向的河，桥 2 格宽
     const w = flatWorld(140, 7, (t, n) => {
       for (let x = 60; x <= 64; x++) for (let y = 0; y < n; y++) t[y * n + x] = y === 58 || y === 59 ? T_BRIDGE : T_DEEP;
@@ -1054,26 +1053,30 @@ describe('编队行军：特殊地形', () => {
     const g = w.spawnGroup(1, army(), 35 * TILE, 70 * TILE, 1, 0);
     w.orderMove(g, 105 * TILE, 50 * TILE, false);
     const gi = w.grp[g[0]], m = w.marches[gi];
-    let frames = 0, slow = 0, stopAfter = 0, maxLagAfter = 0, minW = m.width;
+    const width = m.width, depth = m.depth;
+    const blk = w.nav.block[1];
+    let draped = 0, slow = 0, resized = false, inBlock = 0;
     for (let t = 0; t < 30 * 200 && !m.arrived; t++) {
+      await breathe(t);
       w.tick();
-      if (t < 30 * 5) continue;
-      frames++;
-      if (m.v < m.speed * 0.5) slow++;
-      minW = Math.min(minW, m.width);
-      // 过了桥、开始展开之后
-      if (m.x > 67 * TILE) {
-        if (m.v === 0) stopAfter++;
-        maxLagAfter = Math.max(maxLagAfter, m.lag);
+      if (m.arrived) break;
+      if (m.width !== width || m.depth !== depth) resized = true;
+      for (const s of g) if (blk[w.cellAt(w.x[s], w.y[s])]) inBlock++;
+      // 队列压在障碍上的那些帧：领队不为够不着位置的人放慢（走出障碍之后领队可以放慢等人归队，不在这里断言）
+      if (t > 30 * 5 && m.over > Math.max(1, m.cnt * RULES.march.overMin)) {
+        draped++;
+        if (m.v < m.speed * 0.5) slow++;
       }
     }
     expect(m.arrived).toBe(true);
-    // 确实收成了纵队，又展开回原来的横排
-    expect(minW).toBeLessThanOrEqual(3 * TILE);
-    expect(m.width).toBe(m.fullW);
-    expect(slow / frames).toBeLessThan(0.05);
-    expect(stopAfter).toBeLessThan(4);
-    expect(maxLagAfter).toBeLessThan(RULES.march.lagStop * 0.8);
+    // 没有收成纵队，也没有人掉进水里
+    expect(resized).toBe(false);
+    expect(inBlock).toBe(0);
+    expect(draped).toBeGreaterThan(60);
+    expect(slow / draped).toBeLessThan(0.05);
+    // 过桥之后全员到达
+    for (let t = 0; t < 30 * 60 && g.some(s => w.alive[s] && w.order[s] !== 0); t++) w.tick();
+    expect(g.every(s => !w.alive[s] || w.order[s] === 0)).toBe(true);
   }, 60000);
 
   it('横队绕过障碍拐弯：转弯半径随队宽变大，内侧的人不用原地干等', () => {

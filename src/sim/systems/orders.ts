@@ -87,7 +87,7 @@ export function orderMove(w: World, all: number[], tx: number, ty: number, amove
     let sp2 = 0;
     for (const s of units) sp2 += (w.x[s] - mx) ** 2 + (w.y[s] - my) ** 2;
     if (Math.sqrt(sp2 / n) <= RULES.march.maxSpread && (tx - mx) ** 2 + (ty - my) ** 2 > 60 * 60) {
-      march = createMarch(w, tm, mx, my, tx, ty, destCell, slow, slowRun, amove, fx, fy, n, f.width, f.depth, f.area).id;
+      march = createMarch(w, tm, mx, my, tx, ty, destCell, slow, slowRun, amove, fx, fy, n, f.width, f.depth).id;
     }
   }
   const face = Math.atan2(fy, fx);

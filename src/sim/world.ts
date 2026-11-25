@@ -211,6 +211,8 @@ export class World {
   readonly grp = new Int16Array(MAX_UNITS).fill(-1);
   readonly offA = new Float32Array(MAX_UNITS);
   readonly offL = new Float32Array(MAX_UNITS);
+  /** 编队行军时这一帧够不着队列里自己的位置（每帧重算）：编队统计掉队时，这些人与跟着位置走的人分开算 */
+  readonly apart = new Uint8Array(MAX_UNITS);
   /** 到位后面朝的方向（弧度） */
   readonly faceA = new Float32Array(MAX_UNITS);
   /** 正站定出手（不会被挤动） */
@@ -498,6 +500,7 @@ export class World {
     this.state[i] = 0;
     this.combatT[i] = this.grpSpeed[i] = 0;
     this.grp[i] = -1;
+    this.apart[i] = 0;
     this.faceA[i] = this.dir[i];
     this.planted[i] = 0;
     this.post[i] = -1;
@@ -627,9 +630,16 @@ export class World {
 
   /** 两点之间是否走不通：被本队不可通行的格子挡住，或者要上墙顶、要从城外一侧下墙顶 */
   lineBlocked(ax: number, ay: number, bx: number, by: number, tm: number): boolean {
+    return this.lineReach(ax, ay, bx, by, tm) < 1;
+  }
+
+  /**
+   * 从 a 朝 b 直着走能走到多远：返回走得通的那一段占全程的比例（1 = 一路走得通）。每 16 像素探一处，
+   * 走不通时停在障碍跟前的上一个探点，离障碍还有不到一步
+   */
+  lineReach(ax: number, ay: number, bx: number, by: number, tm: number): number {
     const dx = bx - ax, dy = by - ay;
-    const len = Math.hypot(dx, dy);
-    const steps = Math.ceil(len / 16);
+    const steps = Math.ceil(Math.hypot(dx, dy) / 16);
     const w = this.map.w;
     const blk = this.nav.block[tm], dk = this.nav.deck[tm], inner = this.nav.inner;
     let prev = ((ay / TILE) | 0) * w + ((ax / TILE) | 0);
@@ -637,10 +647,10 @@ export class World {
       const t = k / steps;
       const c = (((ay + dy * t) / TILE) | 0) * w + (((ax + dx * t) / TILE) | 0);
       if (c === prev) continue;
-      if (blk[c] || (dk[c] !== dk[prev] && !(dk[prev] && inner[c]))) return true;
+      if (blk[c] || (dk[c] !== dk[prev] && !(dk[prev] && inner[c]))) return (k - 1) / steps;
       prev = c;
     }
-    return false;
+    return 1;
   }
 
   /**
