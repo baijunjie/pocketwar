@@ -26,7 +26,7 @@ export const PROJ_SPEED = [430, 520, 1200, 340, 300, 380, 560, 620, 210];
 export const PROJ_ARC = [0.16, 0.07, 0, 0.14, 0.42, 0.28, 0.1, 0.03, 0.4];
 
 /** 被动特性（位标志） */
-export const TR_BUSHIDO = 1, TR_TESTUDO = 2, TR_FIREMOVE = 4, TR_TRAMPLE = 8;
+export const TR_BUSHIDO = 1, TR_TESTUDO = 2, TR_FIREMOVE = 4;
 
 export type FactionId = 'china' | 'japan' | 'rome' | 'persia';
 
@@ -87,11 +87,59 @@ export interface Abilities {
   torch?: boolean;
 }
 
+/** 特性上写的副武器：接敌途中投出，不随等级与高级形态加成 */
 export interface AuxAttack {
   dmg: number;
   range: number;
   cd: number;
   proj: number;
+}
+
+// ---------- 武器 ----------
+/** 武器的用途：决定何时用它 */
+export const WR_MAIN = 0; // 主武器：持续交战用，决定站位（够不着就上前，够着了停下打）
+export const WR_AUX = 1; // 副武器：按距离选用
+export const WR_BUILDING = 2; // 对建筑：目标是建筑时代替主武器（人形单位的火把）
+
+export interface Weapon {
+  role: number;
+  /** 近战：出手直接结算；否则发投射物 */
+  melee: boolean;
+  /** 伤害类型 A_* */
+  atk: number;
+  /** 攻击距离：自己与目标身体边缘的间距不超过它就够得着（建筑按贴边的点算） */
+  range: number;
+  minRange: number;
+  proj: number;
+  pen: number;
+  /** 范围杀伤半径，0 是单体；近战武器大于 0 时出手即以目标为中心杀伤 */
+  splash: number;
+  /** 按等级展开的单次伤害与间隔，下标为等级 */
+  lvDmg: number[];
+  lvCd: number[];
+}
+
+/** 特性改主武器的字段：伤害类型、范围杀伤半径 */
+export interface MainTweak {
+  atk?: number;
+  splash?: number;
+}
+
+/** 副武器：穿刺、单体，各等级数值相同 */
+export function auxWeapon(a: AuxAttack, levels: number): Weapon {
+  return {
+    role: WR_AUX, melee: false, atk: A_PIERCE, range: a.range, minRange: 0, proj: a.proj, pen: 0, splash: 0,
+    lvDmg: Array(levels).fill(a.dmg), lvCd: Array(levels).fill(a.cd),
+  };
+}
+
+/** 武器表与按用途取好的引用 */
+export function linkWeapons(weapons: Weapon[]): Pick<UnitDef, 'weapons' | 'main' | 'aux' | 'torch' | 'melee'> {
+  const main = weapons.find(w => w.role === WR_MAIN);
+  if (!main) throw new Error('兵种没有主武器');
+  return {
+    weapons, main, aux: weapons.find(w => w.role === WR_AUX) ?? null, torch: weapons.find(w => w.role === WR_BUILDING) ?? null, melee: main.melee,
+  };
 }
 
 // ---------- 标签 ----------
@@ -121,7 +169,7 @@ export interface ArchetypeDef {
   idx: number;
   key: string;
   name: string;
-  /** 远程（兵种的射程必须大于 0），否则近战 */
+  /** 主武器是远程武器（兵种的射程必须大于 0）；否则是近战武器，攻击距离是贴身距离（RULES.combat.meleeContact）加面板的攻击距离 */
   ranged: boolean;
   /** 兵力占用：基准状态下每人占几份兵力（近战步兵为 1）；开局兵力与援军都按份数计，人数 = 份数 ÷ 兵力占用 */
   force: number;
@@ -237,8 +285,8 @@ export interface TraitDef {
   hitMod: MultTable;
   /** 副武器（接敌途中投出的重标枪、弓） */
   aux?: AuxAttack;
-  /** 改变主攻击的伤害类型（A_*），如抛射器械的穿刺攻击 */
-  atk?: number;
+  /** 改主武器的字段：伤害类型（如抛射器械的穿刺攻击）、范围杀伤半径（如战象的践踏） */
+  main?: MainTweak;
   /** 光环：让身边的己方单位获得加成 */
   aura?: AuraSpec;
   /**
@@ -256,7 +304,7 @@ export interface TraitSpec {
   counter?: MultTable;
   hitMod?: MultTable;
   aux?: AuxAttack;
-  atk?: number;
+  main?: MainTweak;
   aura?: AuraSpec;
   priceAt?: string[];
 }
@@ -266,7 +314,7 @@ export function defineTrait(key: string, t: TraitSpec): void {
   if (t.aura) checkAura(key, t.aura);
   for (const pos of t.priceAt ?? []) if (!POSITIONS[pos]) throw new Error(`特性 ${key}：未知位置 ${pos}`);
   TRAITS[key] = {
-    key, name: t.name, flag: t.flag ?? 0, tags: t.tags ?? [], abilities: t.abilities, counter: t.counter ?? {}, hitMod: t.hitMod ?? {}, aux: t.aux, atk: t.atk,
+    key, name: t.name, flag: t.flag ?? 0, tags: t.tags ?? [], abilities: t.abilities, counter: t.counter ?? {}, hitMod: t.hitMod ?? {}, aux: t.aux, main: t.main,
     ...(t.aura ? { aura: { ...t.aura } } : {}), priceAt: t.priceAt ?? [],
   };
 }
@@ -290,7 +338,7 @@ export interface UnitSpec {
   vsBld?: number;
   /** 特性（原型的缺省特性在前，兵种自己的在后） */
   traits?: TraitUse[];
-  /** 各点数维度（生命、输出、节奏、护甲、机动、射程、纪律、冲击、破甲、范围杀伤、举盾）相对原型基准的级数 */
+  /** 各点数维度（生命、输出、节奏、护甲、机动、射程、攻击距离、纪律、冲击、破甲、范围杀伤、举盾）相对原型基准的级数 */
   lv?: Levels;
   abilities?: Abilities;
   vision?: number;
@@ -344,23 +392,24 @@ export interface UnitDef {
   /** 行军速度 */
   walk: number;
   forestMul: number;
-  dmg: number;
-  atk: number;
-  range: number;
-  minRange: number;
-  cd: number;
+  /** 武器表：兵种出手只按武器，数值都在这里 */
+  weapons: Weapon[];
+  /** 主武器（必有） */
+  main: Weapon;
+  /** 副武器 */
+  aux: Weapon | null;
+  /** 对建筑武器（人形单位的火把） */
+  torch: Weapon | null;
+  /** 主武器是近战 */
+  melee: boolean;
   armM: number;
   armP: number;
-  pen: number;
-  splash: number;
-  proj: number;
   /**
    * [目标兵种下标] 本兵种打它的克制倍率（原型固定克制 × 命中的克制 × 目标命中的受击修正，全部相乘）。
    * 展开兵种时预先算好，出手与索敌只查表；新增兵种后用 linkMatchups 补齐。
    */
   vs: number[];
   vsBld: number;
-  aux: AuxAttack | null;
   traits: number;
   /** 光环（来自特性）：系统只读这里，不认兵种 */
   auras: UnitAura[];
@@ -391,10 +440,8 @@ export interface UnitDef {
   basic: number;
   // ---- 按等级展开的数值，下标为等级 0..N-1 ----
   lvHp: number[];
-  lvDmg: number[];
   lvArmM: number[];
   lvArmP: number[];
-  lvCd: number[];
   /** 士气低于此值即溃逃；负数表示死战不退 */
   lvRout: number[];
 }
@@ -442,24 +489,24 @@ export interface XpValueRules {
 
 /** 原型加上特性之后的标签、克制、受击修正、被动特性标志与特殊动作 */
 export function composeTraits(arch: ArchetypeDef, uses: TraitUse[]): {
-  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined; auras: UnitAura[];
+  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; main: MainTweak; auras: UnitAura[];
 } {
   const mix = traitMix(uses);
   return {
     tags: tagBit(arch.key) | mix.tags, counter: [...multList(arch.counter), ...mix.counter], hitMod: [...multList(arch.hitMod), ...mix.hitMod],
-    flags: mix.flags, abilities: mix.abilities, aux: mix.aux, atk: mix.atk, auras: mix.auras,
+    flags: mix.flags, abilities: mix.abilities, aux: mix.aux, main: mix.main, auras: mix.auras,
   };
 }
 
 /** 一组特性给兵种带来的标签、克制、受击修正、被动特性标志与特殊动作 */
 export function traitMix(uses: TraitUse[]): {
-  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined; auras: UnitAura[];
+  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; main: MainTweak; auras: UnitAura[];
 } {
   let tags = 0, flags = 0;
   const counter: Mult[] = [], hitMod: Mult[] = [];
   const abilities: Abilities = {};
   let aux: AuxAttack | null = null;
-  let atk: number | undefined;
+  const main: MainTweak = {};
   const auras: UnitAura[] = [];
   for (const u of uses) {
     const [key, over] = typeof u === 'string' ? [u, {}] : u;
@@ -471,10 +518,10 @@ export function traitMix(uses: TraitUse[]): {
     hitMod.push(...multList(t.hitMod));
     Object.assign(abilities, t.abilities);
     if (t.aux) aux = t.aux;
-    if (t.atk !== undefined) atk = t.atk;
+    if (t.main) Object.assign(main, t.main);
     if (t.aura) auras.push({ name: t.name, kind: AURA_KINDS.findIndex(k => k.key === t.aura!.kind), radius: t.aura.radius, value: t.aura.value });
   }
-  return { tags, counter, hitMod, flags, abilities, aux, atk, auras };
+  return { tags, counter, hitMod, flags, abilities, aux, main, auras };
 }
 
 /** 攻击方 a 打目标 t 的倍率：原型固定克制 × a 命中 t 标签的克制 × t 命中 a 标签的受击修正 */
@@ -510,6 +557,10 @@ export interface ExpandRules {
   hpScale: number;
   elite: EliteRules;
   xp: XpValueRules;
+  /** 近战武器的攻击距离（贴身距离） */
+  meleeContact: number;
+  /** 对建筑武器（火把）的距离、伤害、间隔 */
+  torch: { range: number; dmg: number; cd: number };
 }
 
 /** 原型基准的战力估值（面板的估值式，不含位置价目） */
@@ -526,7 +577,7 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
   const ai = ARCHETYPE_INDEX[p.arch];
   if (ai === undefined) throw new Error(`未知原型：${p.arch}`);
   const arch = ARCHETYPES[ai], base = arch.base, s = p.spec;
-  for (const k of ['hp', 'dmg', 'cd', 'armM', 'armP', 'pace', 'range', 'discipline', 'impact', 'pen', 'splash']) {
+  for (const k of ['hp', 'dmg', 'cd', 'armM', 'armP', 'pace', 'range', 'reach', 'discipline', 'impact', 'pen', 'splash']) {
     if (k in s) throw new Error(`${p.key}：${k} 是点数维度，兵种只填级数（lv）`);
   }
   if (s.abilities?.shield) throw new Error(`${p.key}：举盾是点数维度，兵种只填级数（lv.block）`);
@@ -556,8 +607,6 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
   const sz = SIZES[size];
   const range = panel.range, pace = panel.pace;
   const speed = Math.round(pace * sz.speedMul);
-  const cd = panel.cd;
-  const splash = panel.splash;
   const siege = m.siege ?? false;
   const n = R.levels.thresholds.length;
   const xpBase = R.xp.value[arch.key];
@@ -568,16 +617,15 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
   const ownTraits = traitKeys.filter(t => !carried.includes(t));
   const points = estimatePoints(pos, L, ownTraits);
   const power0 = powerFromPoints(archetypePower(arch), pos, points);
-  const base0: UnitDef = {
+  const base0: Omit<UnitDef, 'weapons' | 'main' | 'aux' | 'torch' | 'melee'> = {
     idx: UNITS.length, key: p.key, name: p.name, faction: p.faction, arch: ai, position: pos, lv: { ...L }, ownTraits, points,
     tags: mix.tags, counter: mix.counter, hitMod: mix.hitMod, size,
     radius: m.radius ?? sz.radius,
     // 近战在前、远程在后，同一档里快的在前；器械殿后
-    row: m.row ?? (speed < 45 ? 4 : (range > 0 ? 2 : 0) + (speed >= 85 ? 0 : 1)),
+    row: m.row ?? (speed < 45 ? 4 : (arch.ranged ? 2 : 0) + (speed >= 85 ? 0 : 1)),
     hp: 0, pace, speed, walk: Math.round(speed * (m.marchMul ?? 0.65)), forestMul: sz.forestMul,
-    dmg: 0, atk: mix.atk ?? m.atk ?? (range > 0 ? A_PIERCE : A_MELEE), range, minRange: m.minRange ?? 0, cd,
-    armM: 0, armP: 0, pen: panel.pen, splash, proj: m.proj ?? P_ARROW,
-    vs: [], vsBld: m.vsBld ?? 1, aux: mix.aux,
+    armM: 0, armP: 0,
+    vs: [], vsBld: m.vsBld ?? 1,
     traits: mix.flags,
     auras: mix.auras,
     abilities,
@@ -586,9 +634,9 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
     power: 0, upkeep: sz.upkeep, xpValue: 0,
     discipline: panel.discipline, humanoid: m.humanoid ?? true, siege, mobile: m.mobile ?? false, model: m.model ?? p.key, desc: p.desc,
     tier: 0, elite: -1, basic: -1,
-    lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [], lvRout: R.levels.rout.slice(0, n),
+    lvHp: [], lvArmM: [], lvArmP: [], lvRout: R.levels.rout.slice(0, n),
   };
-  base0.acq = range > 0 ? range + (siege ? 0 : 40) : m.acq ?? 170;
+  base0.acq = arch.ranged ? range + (siege ? 0 : 40) : m.acq ?? 170;
   base0.alert = Math.max(m.alert ?? 300, base0.acq);
   // 初级与高级两个形态：除了生命、攻击、护甲、名称与模型，其余完全一样；等级与高级形态是全兵种统一的倍率，不计点
   const out: UnitDef[] = [];
@@ -597,11 +645,20 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
     const hp0 = panel.hp * (tier ? E.hp : 1), dmg = panel.dmg * (tier ? E.dmg : 1);
     const armM = panel.armM + (tier ? E.armor : 0), armP = panel.armP + (tier ? E.armor : 0);
     const hp = Math.round(hp0 * R.hpScale);
+    // 武器在两个形态之间各造各的：只有主武器吃高级形态的攻击倍率，副武器与火把不吃
+    const main: Weapon = {
+      role: WR_MAIN, melee: !arch.ranged, atk: mix.main.atk ?? m.atk ?? (arch.ranged ? A_PIERCE : A_MELEE),
+      range: arch.ranged ? range : R.meleeContact + panel.reach, minRange: m.minRange ?? 0, proj: m.proj ?? P_ARROW, pen: panel.pen,
+      splash: mix.main.splash ?? panel.splash, ...weaponLevels(dmg, panel.cd, lv),
+    };
+    const weapons = [main];
+    if (mix.aux) weapons.push(auxWeapon(mix.aux, n));
+    if (base0.humanoid) weapons.push(torchWeapon(R.torch, lv));
     const d: UnitDef = {
-      ...base0, hp, dmg, armM, armP, tier,
+      ...base0, ...linkWeapons(weapons), hp, armM, armP, tier,
       power: power0 * (tier ? Math.sqrt(E.hp * E.dmg) : 1),
       xpValue: Math.round(xpBase * (tier ? R.xp.elite : 1)),
-      lvHp: [], lvDmg: [], lvArmM: [], lvArmP: [], lvCd: [],
+      lvHp: [], lvArmM: [], lvArmP: [],
     };
     if (tier) {
       d.key = `${p.key}_e`;
@@ -617,18 +674,34 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
 /** 是否正式兵种：兵种表里除了兵种定义展开的，还有测量工具登记的基准单位与变体（带 probe 标记），据点出兵、界面列表、价目与指纹只认正式兵种 */
 export const isContentUnit = (d: UnitDef): boolean => !d.probe;
 
-/** 按等级展开的数值（下标为等级）：生命、攻击、护甲、攻击间隔按等级规则逐级加成 */
-export function levelTables(d: Pick<UnitDef, 'hp' | 'dmg' | 'armM' | 'armP' | 'cd'>, lv: LevelRules):
-  Pick<UnitDef, 'lvHp' | 'lvDmg' | 'lvArmM' | 'lvArmP' | 'lvCd'> {
-  const t = { lvHp: [] as number[], lvDmg: [] as number[], lvArmM: [] as number[], lvArmP: [] as number[], lvCd: [] as number[] };
+/** 按等级展开的生命与护甲（下标为等级） */
+export function levelTables(d: Pick<UnitDef, 'hp' | 'armM' | 'armP'>, lv: LevelRules): Pick<UnitDef, 'lvHp' | 'lvArmM' | 'lvArmP'> {
+  const t = { lvHp: [] as number[], lvArmM: [] as number[], lvArmP: [] as number[] };
   for (let l = 0; l < lv.thresholds.length; l++) {
     t.lvHp.push(Math.round(d.hp * (1 + lv.hp * l)));
-    t.lvDmg.push(d.dmg * (1 + lv.dmg * l));
     t.lvArmM.push(d.armM + lv.armor * l);
     t.lvArmP.push(d.armP + lv.armor * l);
-    t.lvCd.push(d.cd * (1 - lv.cd * l));
   }
   return t;
+}
+
+/** 主武器按等级展开的单次伤害与间隔（下标为等级）：按等级规则逐级加成 */
+export function weaponLevels(dmg: number, cd: number, lv: LevelRules): Pick<Weapon, 'lvDmg' | 'lvCd'> {
+  const t = { lvDmg: [] as number[], lvCd: [] as number[] };
+  for (let l = 0; l < lv.thresholds.length; l++) {
+    t.lvDmg.push(dmg * (1 + lv.dmg * l));
+    t.lvCd.push(cd * (1 - lv.cd * l));
+  }
+  return t;
+}
+
+/** 对建筑武器（火把）：伤害随等级加成，不乘高级形态倍率，间隔各级相同 */
+export function torchWeapon(t: ExpandRules['torch'], lv: LevelRules): Weapon {
+  const n = lv.thresholds.length;
+  return {
+    role: WR_BUILDING, melee: false, atk: A_FIRE, range: t.range, minRange: 0, proj: P_TORCH, pen: 0, splash: 0,
+    lvDmg: Array.from({ length: n }, (_, l) => t.dmg * (1 + lv.dmg * l)), lvCd: Array(n).fill(t.cd),
+  };
 }
 
 /** 把展开好的兵种登记进兵种表：排在已有兵种之后，并补齐克制倍率表。高级形态跟在初级形态后面传入 */
@@ -678,14 +751,26 @@ export const BK_WALL = 0, BK_GATE = 1, BK_TOWER = 2, BK_KEEP = 3, BK_HOUSE = 4, 
  */
 export const BR_MILITARY = 0, BR_DEFENSE = 1, BR_COMMON = 2;
 export type BuildingRole = typeof BR_MILITARY | typeof BR_DEFENSE | typeof BR_COMMON;
+/** 防御建筑的一把武器：每轮齐射 burst 发 */
+export interface TowerWeapon {
+  /** 伤害类型 A_* */
+  atk: number;
+  dmg: number;
+  /** 投射物种类 P_* */
+  proj: number;
+  pen: number;
+  /** 范围杀伤半径，0 是单体 */
+  splash: number;
+  /** 一轮放几发 */
+  burst: number;
+  /** 真：各发由近及远各射一个目标，目标不够时余下的都射最近那个；假：全打最近的敌人 */
+  fan: boolean;
+}
+/** 防御建筑的火力：整座建筑共用一个射程与冷却，到点就把武器表里的武器依次齐射一轮 */
 export interface TowerDef {
   range: number;
-  dmg: number;
   cd: number;
-  /** 一轮同时放几支箭（各射一个目标，由近及远；目标不够时余下的都射最近那个） */
-  arrows: number;
-  /** 一轮另外加几发炮弹（范围伤害，打最近的敌人）；缺省 0。据点 3 级的炮楼、主堡才有 */
-  shells?: number;
+  weapons: TowerWeapon[];
 }
 /** 某一级的据点加成（建筑的生命、护甲、箭伤、射程，以及升到这一级的花费） */
 export interface SiteLevelSpec {

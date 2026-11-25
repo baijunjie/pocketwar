@@ -1,56 +1,64 @@
 /** 战斗结算：出手、伤害、阵亡、经验与升级、投射物、防御建筑（角楼、哨塔、主堡等）放箭 */
 import {
-  AU_RANGED_TAKEN, A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_INFO, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
-  T_FOREST, T_HILL, UnitDef,
+  AU_RANGED_TAKEN, A_FIRE, A_MELEE, A_PIERCE, BK_TOWER, DT, LEVELS, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_INFO, TR_BUSHIDO, TR_TESTUDO,
+  T_FOREST, T_HILL, UnitDef, WR_AUX, WR_BUILDING, WR_MAIN, Weapon,
 } from '../content';
-import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
+import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, ENG_CLOSE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
 import type { Building, World } from '../world';
 import { canAttackBuilding, windRangeMul } from './targeting';
 
 /** 防御建筑（角楼、哨塔、主堡等）开火时使用的「攻击者」数据 */
 const TOWER_ATTACKER = { vs: null, vsBld: 0, siege: false };
 
-export function attack(w: World, i: number, d: UnitDef, tgt: number, tt: number): void {
+/** 出手时枪口的烟：火药类投射物才有，返回烟的大小，0 表示不冒烟 */
+function smokeSize(proj: number): number {
+  return proj === P_BULLET ? 1 : proj === P_BALL || proj === P_ROCKET ? 2.2 : 0;
+}
+
+/** 按武器出手：主武器与对建筑武器共用 w.cd，副武器用 w.auxCd */
+export function strike(w: World, i: number, d: UnitDef, wp: Weapon, tgt: number, tt: number): void {
   const lv = w.level[i];
+  const main = wp.role === WR_MAIN;
   let dm = 1;
-  if (d.traits & TR_BUSHIDO) dm += 0.5 * (1 - w.hp[i] / w.maxHp[i]);
-  w.cd[i] = d.lvCd[lv] * (0.9 + w.rng.next() * 0.2);
+  // 加伤与高地加成只有主武器吃
+  if (main && d.traits & TR_BUSHIDO) dm += 0.5 * (1 - w.hp[i] / w.maxHp[i]);
+  const cd = wp.lvCd[lv] * (0.9 + w.rng.next() * 0.2);
+  if (wp.role === WR_AUX) w.auxCd[i] = cd;
+  else w.cd[i] = cd;
   w.atkAnim[i] = 0.3;
   const tm = w.team[i];
-  const base = d.lvDmg[lv];
-  if (tgt < 0 && d.humanoid) {
-    // 人打建筑：扔火把
-    const S = RULES.siege;
-    const b = w.buildings[-tgt - 2];
-    const ux = w.x[i], uy = w.y[i];
-    w.cd[i] = S.torchCd * (0.9 + w.rng.next() * 0.2);
-    spawnProj(w, ux, uy, tgt, ux < b.x0 ? b.x0 + 6 : ux > b.x1 ? b.x1 - 6 : ux, uy < b.y0 ? b.y0 + 6 : uy > b.y1 ? b.y1 - 6 : uy,
-      P_TORCH, S.torchDmg * (1 + LEVELS.dmg * lv), A_FIRE, 0, 0, d.idx, tm, i);
-    return;
-  }
-  if (d.range > 0) {
-    if (tt === T_HILL) dm *= 1.15;
+  const base = wp.lvDmg[lv];
+  if (!wp.melee) {
+    if (main && tt === T_HILL) dm *= 1.15;
     let tx: number, ty: number;
     if (tgt >= 0) {
       tx = w.x[tgt];
       ty = w.y[tgt];
     } else {
       const b = w.buildings[-tgt - 2];
-      tx = b.cx;
-      ty = b.cy;
+      if (wp.role === WR_BUILDING) {
+        // 扔火把：落在贴着自己的那一边
+        const ux = w.x[i], uy = w.y[i];
+        tx = ux < b.x0 ? b.x0 + 6 : ux > b.x1 ? b.x1 - 6 : ux;
+        ty = uy < b.y0 ? b.y0 + 6 : uy > b.y1 ? b.y1 - 6 : uy;
+      } else {
+        tx = b.cx;
+        ty = b.cy;
+      }
     }
-    spawnProj(w, w.x[i], w.y[i], tgt, tx, ty, d.proj, base * dm, d.atk, d.splash, d.pen, d.idx, tm, i);
-    w.addFx(FX_SHOT, w.x[i], w.y[i], d.proj);
-    if (d.proj === P_BULLET || d.proj === P_BALL || d.proj === P_ROCKET) {
-      w.addFx(FX_SMOKE, w.x[i] + w.facing[i] * 8, w.y[i] - 10, d.proj === P_BULLET ? 1 : 2.2);
+    spawnProj(w, w.x[i], w.y[i], tgt, tx, ty, wp.proj, base * dm, wp.atk, wp.splash, wp.pen, d.idx, tm, i);
+    if (main) {
+      w.addFx(FX_SHOT, w.x[i], w.y[i], wp.proj);
+      const smoke = smokeSize(wp.proj);
+      if (smoke > 0) w.addFx(FX_SMOKE, w.x[i] + w.facing[i] * 8, w.y[i] - 10, smoke);
     }
   } else {
     const dmg = base * dm;
     if (tgt >= 0) {
       if ((w.uid[i] + w.tickCount) % 3 === 0) w.addFx(FX_HIT, (w.x[i] + w.x[tgt]) / 2, (w.y[i] + w.y[tgt]) / 2 - 8, 0);
-      if (d.traits & TR_TRAMPLE) splashDamage(w, w.x[tgt], w.y[tgt], 28, dmg, A_MELEE, 0, d, tm, i, false);
-      else damageUnit(w, tgt, dmg, A_MELEE, 0, d.vs, tm, i);
-    } else damageBuilding(w, w.buildings[-tgt - 2], dmg, A_MELEE, d.vsBld, tm, d.siege);
+      if (wp.splash > 0) splashDamage(w, w.x[tgt], w.y[tgt], wp.splash, dmg, wp.atk, wp.pen, d, tm, i, false);
+      else damageUnit(w, tgt, dmg, wp.atk, wp.pen, d.vs, tm, i);
+    } else damageBuilding(w, w.buildings[-tgt - 2], dmg, wp.atk, d.vsBld, tm, d.siege);
   }
 }
 
@@ -77,7 +85,7 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
     if (sh) {
       if (w.state[j] & S_SHIELD) dmg *= 1 - sh.block;
       // 挨了箭就把盾举起来（正在近战肉搏的腾不出手）
-      if (!w.engaged[j] || td.range > 0) w.shieldT[j] = RULES.combat.shieldHold;
+      if (w.engaged[j] !== ENG_CLOSE || !td.melee) w.shieldT[j] = RULES.combat.shieldHold;
     }
     if (w.map.terrain[w.cellAt(w.x[j], w.y[j])] === T_FOREST) dmg *= 0.75;
     // 城墙上有垛口掩护
@@ -109,11 +117,11 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
   if (w.target[j] !== NONE || w.order[j] === O_MOVE || w.order[j] === O_ATTACK || w.ignoreT[j] > 0 || w.state[j] & S_ROUT) return;
   if (live) {
     // 待命的近战单位不去追岗位之外的射手，免得被一路引走
-    if (w.order[j] === O_IDLE && td.range === 0
+    if (w.order[j] === O_IDLE && td.melee
       && (w.x[aslot] - w.homeX[j]) ** 2 + (w.y[aslot] - w.homeY[j]) ** 2 > RULES.combat.leash ** 2) return;
     w.target[j] = aslot;
     w.targetUid[j] = w.uid[aslot];
-  } else if (aslot < NONE && w.order[j] !== O_HOLD && (td.range === 0 || td.humanoid || td.vsBld >= 2)) {
+  } else if (aslot < NONE && w.order[j] !== O_HOLD && (td.melee || td.humanoid || td.vsBld >= 2)) {
     // 被哨塔射中：打得动它、离岗位又不远，就上去拆
     const b = w.buildings[-aslot - 2];
     if (!canAttackBuilding(b, w.team[j], td.siege)) return;
@@ -373,29 +381,23 @@ export function updateTowers(w: World): void {
       continue;
     }
     b.cd = tw.cd;
-    // 多支箭各射一个目标：由近及远往外找（minRange 取上一个目标的距离），射程内找不到更多的就都射最近那个
-    let tgt = e, near = 0;
-    for (let k = 0; k < tw.arrows; k++) {
-      spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, tgt, w.x[tgt], w.y[tgt], 0, tw.dmg, A_PIERCE, 0, 0, -1, b.owner, -b.id - 2);
-      if (k + 1 >= tw.arrows) break;
-      near = Math.hypot(w.x[tgt] - b.cx, w.y[tgt] - b.cy) + 0.01;
-      let nx = near < maxR ? towerFind(w, b, maxR, near) : NONE;
-      if (nx !== NONE) {
-        const dx = w.x[nx] - b.cx, dy = w.y[nx] - b.cy;
-        if (dx * dx + dy * dy > (tw.range * windRangeMul(w, dx, dy)) ** 2) nx = NONE;
+    for (const wp of tw.weapons) {
+      // fan：各发由近及远往外找（minRange 取上一个目标的距离），射程内找不到更多的就都射最近那个
+      let tgt = e;
+      for (let k = 0; k < wp.burst; k++) {
+        spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, tgt, w.x[tgt], w.y[tgt], wp.proj, wp.dmg, wp.atk, wp.splash, wp.pen, -1, b.owner, -b.id - 2);
+        if (!wp.fan || k + 1 >= wp.burst) continue;
+        const near = Math.hypot(w.x[tgt] - b.cx, w.y[tgt] - b.cy) + 0.01;
+        let nx = near < maxR ? towerFind(w, b, maxR, near) : NONE;
+        if (nx !== NONE) {
+          const dx = w.x[nx] - b.cx, dy = w.y[nx] - b.cy;
+          if (dx * dx + dy * dy > (tw.range * windRangeMul(w, dx, dy)) ** 2) nx = NONE;
+        }
+        tgt = nx !== NONE ? nx : e;
       }
-      tgt = nx !== NONE ? nx : e;
-    }
-    w.addFx(FX_SHOT, b.cx, b.cy, 0);
-    // 3 级的炮楼与主堡：箭矢之外再放炮弹，全打最近的敌人，爆炸范围伤害
-    const shells = tw.shells ?? 0;
-    if (shells > 0) {
-      const sh = RULES.economy.shell;
-      for (let k = 0; k < shells; k++) {
-        spawnProj(w, b.cx, b.y0 - b.def.tall * 0.6, e, w.x[e], w.y[e], P_BALL, sh.dmg, A_SIEGE, sh.splash, 0, -1, b.owner, -b.id - 2);
-      }
-      w.addFx(FX_SHOT, b.cx, b.cy, P_BALL);
-      w.addFx(FX_SMOKE, b.cx, b.cy - 10, 2.2);
+      w.addFx(FX_SHOT, b.cx, b.cy, wp.proj);
+      const smoke = smokeSize(wp.proj);
+      if (smoke > 0) w.addFx(FX_SMOKE, b.cx, b.cy - 10, smoke);
     }
   }
 }

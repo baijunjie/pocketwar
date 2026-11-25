@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { POSITIONS } from '../../../src/sim/defs';
 import { Measurer, Row } from '../../../tools/measure/measure';
-import { MANPOWER_PROBE, measurePrices, priceJobs, pricedTraits } from '../../../tools/measure/price';
+import { FLOOR_DIMS, MANPOWER_PROBE, PROBE, measurePrices, priceJobs, pricedTraits } from '../../../tools/measure/price';
 import { Job, Runner } from '../../../tools/measure/runner';
 import { PRICE_ROWS_FILE } from '../../../tools/measure/unitpoints';
 
@@ -42,6 +42,12 @@ describe('价目表的测量清单：priceJobs', () => {
       'bolt:rng=-4', 'bolt:rng=4',
       'bolt:spd=-4', 'bolt:spd=4',
     ].sort());
+  });
+
+  it('攻击距离每个开放它的位置量一格 位置:reach=1（近战步兵、长柄、近战骑兵、载具），只量加级；远程位置与器械没有', () => {
+    expect(PROBE.reach).toEqual([1, null]);
+    expect(labels.filter(l => /:reach=/.test(l)).sort()).toEqual(['cav:reach=1', 'ele:reach=1', 'inf:reach=1', 'spear:reach=1']);
+    expect(FLOOR_DIMS).toContain('reach');
   });
 
   it('抛射器械不再量重弩与穿刺攻击（没有兵种带），要量的特性都是某个位置里有兵种带的', () => {

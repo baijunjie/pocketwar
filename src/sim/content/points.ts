@@ -16,6 +16,7 @@ export interface Levels {
   /** 远程护甲 */ armP?: number;
   /** 机动 */ spd?: number;
   /** 射程 */ rng?: number;
+  /** 攻击距离：近战武器比贴身多够得着几排 */ reach?: number;
   /** 纪律 */ disc?: number;
   /** 冲击：冲撞伤害 */ imp?: number;
   /** 治疗：神职落地后启用，兵种表里还没有治疗量 */ heal?: number;
@@ -24,26 +25,29 @@ export interface Levels {
   /** 举盾：举盾时远程伤害的减免比例（大于 0 才有举盾） */ block?: number;
 }
 export type Dim = keyof Levels;
-export const DIMS: Dim[] = ['hp', 'out', 'cad', 'armM', 'armP', 'spd', 'rng', 'disc', 'imp', 'heal', 'pen', 'splash', 'block'];
+export const DIMS: Dim[] = ['hp', 'out', 'cad', 'armM', 'armP', 'spd', 'rng', 'reach', 'disc', 'imp', 'heal', 'pen', 'splash', 'block'];
 export const DIM_NAMES: Record<Dim, string> = {
-  hp: '生命', out: '输出', cad: '节奏', armM: '近战护甲', armP: '远程护甲', spd: '机动', rng: '射程', disc: '纪律', imp: '冲击', heal: '治疗',
+  hp: '生命', out: '输出', cad: '节奏', armM: '近战护甲', armP: '远程护甲', spd: '机动', rng: '射程', reach: '攻击距离', disc: '纪律', imp: '冲击', heal: '治疗',
   pen: '破甲', splash: '范围杀伤', block: '举盾',
 };
 
 /**
  * 阶梯的步长：护甲每级 +1，其余是倍率（纪律是士气基准的加数）。
- * 破甲、范围杀伤、举盾是加数（基准可以为 0）：破甲每级 +0.1，范围杀伤半径每级 +2，举盾减免每级 +0.05
+ * 破甲、范围杀伤、举盾是加数（基准可以为 0）：破甲每级 +0.1，范围杀伤半径每级 +2，举盾减免每级 +0.05。
+ * 攻击距离也是加数，每级 +15 像素，即多够得着一排：攻击距离的价值不随距离连续变化，只在够得着隔一排自己人的敌人时跳一档
+ * （小型单位贴身站一排约占 14 像素，对面隔着一排自己人的敌人离自己的身体边缘 17…21），所以一级就取一排，不设中间档
  */
-export const STEP = { hp: 1.05, out: 1.05, cad: 1.15, spd: 1.03, rng: 1.04, disc: 2, imp: 1.08, heal: 1.05, pen: 0.1, splash: 2, block: 0.05 };
+export const STEP = { hp: 1.05, out: 1.05, cad: 1.15, spd: 1.03, rng: 1.04, reach: 15, disc: 2, imp: 1.08, heal: 1.05, pen: 0.1, splash: 2, block: 0.05 };
 
 /**
  * 级数范围：兵种每个维度的级数都要落在里面（原型可以为个别维度另行声明，见 levelRange）。
  * 射程由初值 −4…+6 放宽到 −6…+6：现有 14 个开放射程的兵种里有 3 个越限（超过两成），按规则放宽到八成落在范围内，
  * 离得最远的两个（投矛散兵 −14、连弩兵 −11）去掉后下限取火箭车的 −6，这两个仍算越限、收进范围。
- * 破甲 0…8（0…80%）、举盾 0…14（0…70%）、范围杀伤 −15…+5（半径 0…40，抛射器械基准 30）：按现有兵种的分布定，覆盖全部现有兵种
+ * 破甲 0…8（0…80%）、举盾 0…14（0…70%）、范围杀伤 −15…+5（半径 0…40，抛射器械基准 30）：按现有兵种的分布定，覆盖全部现有兵种。
+ * 攻击距离 0…+2（最多隔两排自己人出手）：基准就是贴身，没有负级数
  */
 export const LEVEL_RANGES: Record<Dim, [number, number]> = {
-  hp: [-6, 12], out: [-6, 12], cad: [-8, 8], armM: [-3, 8], armP: [-3, 8], spd: [-4, 6], rng: [-6, 6], disc: [-3, 6], imp: [-3, 6], heal: [-4, 8],
+  hp: [-6, 12], out: [-6, 12], cad: [-8, 8], armM: [-3, 8], armP: [-3, 8], spd: [-4, 6], rng: [-6, 6], reach: [0, 2], disc: [-3, 6], imp: [-3, 6], heal: [-4, 8],
   pen: [0, 8], splash: [-15, 5], block: [0, 14],
 };
 
@@ -54,14 +58,14 @@ export const UNIT_POINT_LIMITS: [number, number] = [-2, 5];
  * 阵营点数预算：每个阵营的阵营点数（tools/measure/faction.ts 的 factionPoints）不超过它。
  * 取现有四阵营阵营点数的中位数（兵员级数取迁移前阵营特色倍率换算的级数）；阵营的差额用兵员级数补
  */
-export const FACTION_BUDGET = 3.803;
+export const FACTION_BUDGET = 6.504;
 
 /**
  * 援军预算：每个阵营的援军点数（tools/measure/faction.ts 的 reinfPoints，全兵种援军表按与开局同一套算法计点）不超过它。
  * 取现有阵营援军点数（援军级数按 0，即援军倍率 1）的中位数；阵营的差额用援军级数补。
  * 价目或兵种表变了（含援军表与阵营增减）按 npm run measure -- reinf --write 重算
  */
-export const REINF_BUDGET = 6.634;
+export const REINF_BUDGET = 6.744;
 
 /** 点数维度上的面板：原型基准。生命是展开前的数（不含全局生命倍率） */
 export interface Panel {
@@ -74,6 +78,8 @@ export interface Panel {
   pace: number;
   /** 0 为近战 */
   range: number;
+  /** 近战武器的攻击距离比贴身距离多出的部分，0 是贴身 */
+  reach: number;
   discipline: number;
   /** 冲撞伤害，0 表示没有冲锋 */
   impact: number;
@@ -99,6 +105,7 @@ export function applyLevels(b: Panel, L: Levels): Panel {
     armP: b.armP + (L.armP ?? 0),
     pace: b.pace * STEP.spd ** (L.spd ?? 0),
     range: b.range > 0 ? Math.round(b.range * STEP.rng ** (L.rng ?? 0)) : 0,
+    reach: b.reach + STEP.reach * (L.reach ?? 0),
     discipline: b.discipline + STEP.disc * (L.disc ?? 0),
     impact: b.impact * STEP.imp ** (L.imp ?? 0),
     pen: round6(b.pen + STEP.pen * (L.pen ?? 0)),

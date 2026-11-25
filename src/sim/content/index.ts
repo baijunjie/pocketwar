@@ -3,7 +3,11 @@ import { ELITE, HP_SCALE, LEVELS, RULES } from './rules';
 import './units';
 import { ARCHETYPES, ExpandRules, TRAITS, UnitDef, finalizeUnits, tagBit } from './types';
 
-export const EXPAND_RULES: ExpandRules = { levels: LEVELS, hpScale: HP_SCALE, elite: ELITE, xp: RULES.xp };
+export const EXPAND_RULES: ExpandRules = {
+  levels: LEVELS, hpScale: HP_SCALE, elite: ELITE, xp: RULES.xp,
+  meleeContact: RULES.combat.meleeContact,
+  torch: { range: RULES.siege.torchRange, dmg: RULES.siege.torchDmg, cd: RULES.siege.torchCd },
+};
 finalizeUnits(EXPAND_RULES);
 
 export * from './types';

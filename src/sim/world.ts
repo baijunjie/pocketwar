@@ -199,6 +199,7 @@ export class World {
   readonly bestD = new Float32Array(MAX_UNITS);
   readonly noGain = new Float32Array(MAX_UNITS);
   readonly ignoreT = new Float32Array(MAX_UNITS);
+  /** 交手状态（state.ts 的 ENG_*）：非 0 就是目标在攻击距离内、正在出手 */
   readonly engaged = new Uint8Array(MAX_UNITS);
   readonly field: (Field | null)[] = new Array(MAX_UNITS).fill(null);
   /** 状态位 S_* */
@@ -486,7 +487,7 @@ export class World {
     this.dir[i] = tm === 1 ? 0 : Math.PI;
     this.order[i] = O_IDLE;
     this.target[i] = this.otarget[i] = NONE;
-    this.cd[i] = this.rng.next() * d.cd;
+    this.cd[i] = this.rng.next() * d.main.lvCd[0];
     this.auxCd[i] = 0;
     this.atkAnim[i] = this.flash[i] = 0;
     this.odo[i] = this.rng.next() * 40;

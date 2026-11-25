@@ -276,7 +276,7 @@ describe('shooting：是不是正在射击的远程单位', () => {
 
   it('远程单位射程内有目标、正在交手：是', () => {
     const { w, j } = unit('sagitt', 1);
-    expect(w.defs[w.type[j]].range).toBeGreaterThan(0);
+    expect(w.defs[w.type[j]].melee).toBe(false);
     expect(shooting(w, j)).toBe(true);
   });
 
@@ -288,7 +288,7 @@ describe('shooting：是不是正在射击的远程单位', () => {
   it('近战单位即使在交手：不是', () => {
     for (const key of ['legion', 'equites', 'elephant']) {
       const { w, j } = unit(key, 1);
-      expect(w.defs[w.type[j]].range, key).toBe(0);
+      expect(w.defs[w.type[j]].melee, key).toBe(true);
       expect(shooting(w, j), key).toBe(false);
     }
   });

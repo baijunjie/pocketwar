@@ -94,11 +94,17 @@ export function auraEffect(a: UnitAura): string {
   return `${AURA_KINDS[a.kind].name} ${auraPct(a)}`;
 }
 
+/** 射程一栏：远程写射程；近战写「近战」，攻击距离比贴身长的再写出距离 */
+function rangeText(d: UnitDef): string {
+  if (!d.melee) return String(d.main.range);
+  return d.main.range > RULES.combat.meleeContact ? `近战 ${d.main.range}` : '近战';
+}
+
 export function unitTip(d: UnitDef): string {
   const lines = [
     `${d.name}（${unitKind(d)}）`, d.desc,
-    `生命 ${d.hp}　攻击 ${d.dmg}${d.splash ? '（范围）' : ''}　攻速 ${d.cd}s`,
-    `射程 ${d.range ? d.range : '近战'}　护甲 ${d.armM}/${d.armP}`,
+    `生命 ${d.hp}　攻击 ${d.main.lvDmg[0]}${d.main.splash ? '（范围）' : ''}　攻速 ${d.main.lvCd[0]}s`,
+    `射程 ${rangeText(d)}　护甲 ${d.armM}/${d.armP}`,
     `体型 ${SIZES[d.size].name}　行军 ${d.walk}　奔跑 ${d.speed}　口粮 ${d.upkeep}`,
   ];
   const ab = d.abilities;
@@ -663,7 +669,7 @@ export class Hud {
     if (ab.shield) perks.push(`举盾 −${Math.round(ab.shield.block * 100)}%`);
     if (d.mobile) perks.push('可边走边打');
     if (d.siege) perks.push('可破城墙');
-    if (d.aux) perks.push(`副武器 ${d.aux.dmg}/${d.aux.range}`);
+    if (d.aux) perks.push(`副武器 ${d.aux.lvDmg[0]}/${d.aux.range}`);
     for (const a of d.auras) perks.push(`${a.name} ${auraPct(a)}`);
     this.selBox.innerHTML = `
       <div class="udetail" title="${unitTip(d).replace(/"/g, '&quot;')}">
@@ -680,9 +686,9 @@ export class Hud {
             <span class="dim">${next ? `经验 ${Math.round(w.xp[s])} / ${next}` : '已满级'}</span></div>
           <div class="grid">
             <span>生命</span><b>${Math.round(w.hp[s])} / ${Math.round(w.maxHp[s])}${pct(LEVELS.hp)}</b>
-            <span>攻击</span><b>${num(d.lvDmg[lv])}${d.splash ? '（范围）' : ''}${pct(LEVELS.dmg)}</b>
-            <span>间隔</span><b>${num(d.lvCd[lv])} 秒${lv > 0 && LEVELS.cd ? ` <i>−${Math.round(LEVELS.cd * lv * 100)}%</i>` : ''}</b>
-            <span>射程</span><b>${d.range ? d.range : '近战'}</b>
+            <span>攻击</span><b>${num(d.main.lvDmg[lv])}${d.main.splash ? '（范围）' : ''}${pct(LEVELS.dmg)}</b>
+            <span>间隔</span><b>${num(d.main.lvCd[lv])} 秒${lv > 0 && LEVELS.cd ? ` <i>−${Math.round(LEVELS.cd * lv * 100)}%</i>` : ''}</b>
+            <span>射程</span><b>${rangeText(d)}</b>
             <span>护甲</span><b>近 ${num(d.lvArmM[lv])} · 远 ${num(d.lvArmP[lv])}${lv > 0 && LEVELS.armor ? ` <i>+${num(LEVELS.armor * lv)}</i>` : ''}</b>
             <span>防御</span><b>×${num(1 + LEVELS.def * lv)}${lv > 0 ? ' <i>受到的伤害按此折算</i>' : ''}</b>
             <span>速度</span><b>行军 ${d.walk} · 奔跑 ${d.speed}</b>

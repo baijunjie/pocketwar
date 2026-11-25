@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDINGS, RULES, SITE_CAMP, SITE_CITY, TILE, T_HILL, UNIT_BY_KEY } from '../../../src/sim/defs';
+import { BUILDINGS, RULES, SIZES, SITE_CAMP, SITE_CITY, TILE, T_HILL, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { S_ROUT, S_WALL } from '../../../src/sim/state';
-import { canAttackBuilding, findWallFoe, foeSiteFighting, foeTargets, wallSpotBad, windRangeMul } from '../../../src/sim/systems/targeting';
+import { SCAN, canAttackBuilding, crowded, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from '../../../src/sim/systems/targeting';
 import { NONE } from '../../../src/sim/world';
 import type { Site, World } from '../../../src/sim/world';
 import { flatWorld, run } from '../../helpers';
@@ -266,7 +266,7 @@ describe('wallSpotBad：风对停下的位置与箭塔射程的影响', () => {
 
   describe('顶风时停下的位置更靠近目标', () => {
     /** 无风时停下的那一点离敌兵多远；顶风时近 range × K 左右（超过一格） */
-    const stopAt = (w: World, e: number, mul: number): number => nu.range * mul + w.rad[e] + nu.radius;
+    const stopAt = (w: World, e: number, mul: number): number => nu.main.range * mul + w.rad[e] + nu.radius;
     /** 在顶风时停下的那一点所在的格子盖一排城墙（无风时停下的点比它靠南一格以上） */
     const wallAtHeadwindStop = (w: World, e: number): void => {
       const ty = ((w.y[e] + stopAt(w, e, 1 - K)) / TILE) | 0;
@@ -276,7 +276,7 @@ describe('wallSpotBad：风对停下的位置与箭塔射程的影响', () => {
     it('同一摆位：无风时安全，顶风时那一点进了城墙而不该去；顺风、侧风不受影响', () => {
       const { w, e, bad } = scene();
       wallAtHeadwindStop(w, e);
-      expect(nu.range * K, '顶风与无风的停点差超过一格').toBeGreaterThan(TILE);
+      expect(nu.main.range * K, '顶风与无风的停点差超过一格').toBeGreaterThan(TILE);
       expect(windRangeMul(w, 0, -1)).toBe(1);
       expect(bad(), '无风').toBe(false);
       wind(w, SIDE, 1);
@@ -291,7 +291,7 @@ describe('wallSpotBad：风对停下的位置与箭塔射程的影响', () => {
       const { w, e, bad } = scene();
       wallAtHeadwindStop(w, e);
       // 风力 0.3：停点只比无风时近 range × K × 0.3，不到一格，仍在盖了城墙的那一格之外
-      expect(nu.range * K * 0.3).toBeLessThan(TILE * 0.5);
+      expect(nu.main.range * K * 0.3).toBeLessThan(TILE * 0.5);
       wind(w, HEAD, 0.3);
       expect(bad()).toBe(false);
     });
@@ -300,7 +300,7 @@ describe('wallSpotBad：风对停下的位置与箭塔射程的影响', () => {
   describe('顺风时箭塔的有效射程更长', () => {
     /** 无风时停下的那一点 (px, py)；在它正西 d 处放一座敌方哨塔（格子中心离那一点的距离落在 [lo, hi] 里的那一格） */
     const towerAt = (w: World, e: number, lo: number, hi: number): void => {
-      const px = w.x[e], py = w.y[e] + nu.range + w.rad[e] + nu.radius;
+      const px = w.x[e], py = w.y[e] + nu.main.range + w.rad[e] + nu.radius;
       const ty = (py / TILE) | 0;
       for (let tx = 0; tx < 60; tx++) {
         const d = Math.hypot(px - (tx + 0.5) * TILE, py - (ty + 0.5) * TILE);
@@ -347,7 +347,7 @@ describe('wallSpotBad：停下的位置按高地算射程', () => {
     w.fxN = 0;
     // 在平地停点与高地停点之间找一个放敌方哨塔的格子：离高地停点在射程内、离平地停点在射程外，且不在弩兵走过去的那条线上
     const R = BUILDINGS.watchtower.tower!.range;
-    const p0 = w.y[e] + nu.range + w.rad[e] + nu.radius, p1 = w.y[e] + nu.range * 1.12 + w.rad[e] + nu.radius;
+    const p0 = w.y[e] + nu.main.range + w.rad[e] + nu.radius, p1 = w.y[e] + nu.main.range * 1.12 + w.rad[e] + nu.radius;
     let found = false;
     for (let ty = 60; ty < 100 && !found; ty++) for (let tx = 40; tx < 80 && !found; tx++) {
       const cx = (tx + 0.5) * TILE, cy = (ty + 0.5) * TILE;
@@ -476,3 +476,93 @@ describe('foeSiteFighting：墙顶敌兵所在的据点正在交战', () => {
   });
 });
 
+
+describe('scan：已围满的目标加惩罚，攻击距离内的长兵器例外', () => {
+  const C = (120 * TILE) / 2;
+  /**
+   * 己方 key 兵种在 (C, C)，敌方目标 A 在正东 dA 处（把它的围攻人数记满）、B 在正东 dB 处（没人围），都不出手；
+   * 返回 scan 挑中的是 A 还是 B
+   */
+  const choose = (key: string, dA: number, dB: number, crowded = true): 'A' | 'B' => {
+    const w = flatWorld();
+    const a = w.spawnUnit(idx(key), 1, C, C);
+    const A = w.spawnUnit(idx('dao'), 2, C + dA, C), B = w.spawnUnit(idx('dao'), 2, C + dB, C + 13);
+    for (const u of [a, A, B]) {
+      w.hp[u] = w.maxHp[u] = 1e5;
+      w.cd[u] = 1e9;
+    }
+    w.orderStop([A, B], true);
+    w.orderStop([a], true);
+    // 走一帧让空间网格与视野登记好
+    w.tick();
+    if (crowded) w.crowd[A] = 250;
+    scan(w, a, 1, w.x[a], w.y[a], 400, 300, UNIT_BY_KEY[key], NONE, 0);
+    expect([A, B]).toContain(SCAN.pick);
+    return SCAN.pick === A ? 'A' : 'B';
+  };
+
+  it('贴身兵种：目标围满就加惩罚，近处围满的目标让给稍远一点没人围的（哪怕已经贴着自己）', () => {
+    expect(choose('dao', 100, 140)).toBe('B');
+    expect(choose('dao', 14, 60)).toBe('B');
+    // 对照：没围满就是挑最近的
+    expect(choose('dao', 100, 140, false)).toBe('A');
+    expect(choose('dao', 14, 60, false)).toBe('A');
+  });
+
+  it('长兵器（攻击距离 22）：目标已在自己的攻击距离内，围满了也不加惩罚，照挑最近的；攻击距离之外的照旧加惩罚', () => {
+    for (const k of ['yari', 'ji', 'auxilia', 'spara']) {
+      // 圆心距 27，身体边缘间距 15，在攻击距离以内
+      expect(choose(k, 27, 60), k).toBe('A');
+      // 圆心距 100，够不着，围满了就让给更远一点没人围的
+      expect(choose(k, 100, 140), k).toBe('B');
+      expect(choose(k, 100, 140, false), k).toBe('A');
+    }
+  });
+
+  it('攻击距离的边界：边缘间距刚好 22 的在攻击距离内，多 1 像素就在外面', () => {
+    const edge = UNIT_BY_KEY.yari.main.range, r = UNIT_BY_KEY.yari.radius + UNIT_BY_KEY.dao.radius;
+    expect(choose('yari', r + edge - 0.5, r + edge + 40)).toBe('A');
+    expect(choose('yari', r + edge + 1, r + edge + 41)).toBe('B');
+  });
+});
+
+describe('crowded：目标算不算围满', () => {
+  const setup = (foeKey = 'dao') => {
+    const w = flatWorld();
+    const j = w.spawnUnit(idx(foeKey), 2, 500, 500);
+    return { w, j, slots: SIZES[UNIT_BY_KEY[foeKey].size].slots };
+  };
+
+  it('围攻人数不到目标体型的位置数就没围满，不论攻击者是谁、多远', () => {
+    const { w, j, slots } = setup();
+    w.crowd[j] = slots - 1;
+    for (const k of ['dao', 'yari']) for (const dist of [10, 27, 200]) expect(crowded(w, UNIT_BY_KEY[k], j, dist), `${k} ${dist}`).toBe(false);
+  });
+
+  it('贴身兵种：围满了就是围满，不管多近', () => {
+    const { w, j, slots } = setup();
+    w.crowd[j] = slots;
+    for (const dist of [10, 27, 200]) expect(crowded(w, UNIT_BY_KEY.dao, j, dist), `${dist}`).toBe(true);
+  });
+
+  it('长兵器：围满了，但目标已在攻击距离内（身体边缘间距 ≤ 22）就不算围满，在攻击距离外才算', () => {
+    const { w, j, slots } = setup();
+    w.crowd[j] = slots + 2;
+    for (const k of ['ji', 'yari', 'auxilia', 'spara']) {
+      const d = UNIT_BY_KEY[k], base = w.rad[j] + d.radius;
+      expect(crowded(w, d, j, base + 15), k).toBe(false);
+      expect(crowded(w, d, j, base + d.main.range), k).toBe(false);
+      expect(crowded(w, d, j, base + d.main.range + 1), k).toBe(true);
+      expect(crowded(w, d, j, base + 100), k).toBe(true);
+    }
+  });
+
+  it('围满的人数跟目标体型走：巨型目标（战象）要 6 个，小型的 3 个', () => {
+    const el = setup('elephant');
+    el.w.crowd[el.j] = SIZES[UNIT_BY_KEY.elephant.size].slots - 1;
+    expect(crowded(el.w, UNIT_BY_KEY.dao, el.j, 50)).toBe(false);
+    el.w.crowd[el.j] += 1;
+    expect(crowded(el.w, UNIT_BY_KEY.dao, el.j, 50)).toBe(true);
+    expect(SIZES[UNIT_BY_KEY.elephant.size].slots).toBeGreaterThan(SIZES[UNIT_BY_KEY.dao.size].slots);
+  });
+});

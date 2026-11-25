@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDINGS, RULES, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_INFO, SITE_OUTPOST, SITE_TOWN } from '../../../src/sim/defs';
+import { A_SIEGE, BUILDINGS, RULES, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_INFO, SITE_OUTPOST, SITE_TOWN } from '../../../src/sim/defs';
 import { canUpgradeSite, setSiteLevel, siteUpgradeCost, towerAt, upgradeSite } from '../../../src/sim/systems/economy';
-import { flatWorld } from '../../helpers';
+import { arrowsOf, flatWorld, shellFire } from '../../helpers';
 
 describe('据点等级表', () => {
   it('1–3 级：2 级生命 ×1.3、护甲 +2、箭矢伤害 ×1.25、射程 ×1.05；3 级 ×1.6、+3、×1.5、×1.1；升到 3 级的花费是升到 2 级的 1.5 倍', () => {
@@ -33,31 +33,34 @@ describe('建筑在某一级的火力', () => {
   it('2 级：伤害与射程按等级表提高，间隔、箭数不变，没有炮弹', () => {
     for (const k of ['tower', 'keep', 'keep_town', 'watchtower', 'cmdtent']) {
       const d = BUILDINGS[k], t = towerAt(d, 2)!;
-      expect(t.dmg, k).toBeCloseTo(d.tower!.dmg * 1.25, 9);
+      expect(arrowsOf(t).dmg, k).toBeCloseTo(arrowsOf(d.tower).dmg * 1.25, 9);
       expect(t.range, k).toBeCloseTo(d.tower!.range * 1.05, 9);
       expect(t.cd, k).toBe(d.tower!.cd);
-      expect(t.arrows, k).toBe(d.tower!.arrows);
-      expect(t.shells ?? 0, k).toBe(0);
+      expect(arrowsOf(t).burst, k).toBe(arrowsOf(d.tower).burst);
+      expect(shellFire(t), k).toBeUndefined();
     }
   });
 
   it('3 级：伤害与射程按 3 级的表；角楼加 1 发炮弹，主堡加 2 发，箭数不变；哨塔、中军帐箭数 ×3，没有炮弹', () => {
     const at = (k: string) => towerAt(BUILDINGS[k], 3)!;
     for (const k of ['tower', 'keep', 'keep_town', 'watchtower', 'cmdtent']) {
-      expect(at(k).dmg, k).toBeCloseTo(BUILDINGS[k].tower!.dmg * L[2].dmg, 9);
+      expect(arrowsOf(at(k)).dmg, k).toBeCloseTo(arrowsOf(BUILDINGS[k].tower).dmg * L[2].dmg, 9);
       expect(at(k).range, k).toBeCloseTo(BUILDINGS[k].tower!.range * L[2].range, 9);
     }
-    expect([at('tower').arrows, at('tower').shells]).toEqual([2, 1]);
-    expect([at('keep').arrows, at('keep').shells]).toEqual([4, 2]);
-    expect([at('keep_town').arrows, at('keep_town').shells]).toEqual([4, 2]);
-    expect([at('watchtower').arrows, at('watchtower').shells ?? 0]).toEqual([3, 0]);
-    expect([at('cmdtent').arrows, at('cmdtent').shells ?? 0]).toEqual([6, 0]);
+    const fire = (k: string) => [arrowsOf(at(k)).burst, shellFire(at(k))?.burst ?? 0];
+    expect(fire('tower')).toEqual([2, 1]);
+    expect(fire('keep')).toEqual([4, 2]);
+    expect(fire('keep_town')).toEqual([4, 2]);
+    expect(fire('watchtower')).toEqual([3, 0]);
+    expect(fire('cmdtent')).toEqual([6, 0]);
+    // 炮弹是固定数值的攻城武器，不吃等级的伤害倍率
+    expect(shellFire(at('tower'))).toMatchObject({ atk: A_SIEGE, dmg: RULES.economy.shell.dmg, splash: RULES.economy.shell.splash, fan: false });
   });
 
   it('没有 3 级特殊能力的放箭建筑（资源点自建的哨塔）3 级也只是按表加伤害与射程', () => {
     const d = BUILDINGS.arrowtower, t = towerAt(d, 3)!;
-    expect(t.arrows).toBe(d.tower!.arrows);
-    expect(t.shells ?? 0).toBe(0);
+    expect(arrowsOf(t).burst).toBe(arrowsOf(d.tower).burst);
+    expect(shellFire(t)).toBeUndefined();
   });
 });
 

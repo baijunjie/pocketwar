@@ -327,7 +327,7 @@ export class StrategicAI implements Commander {
       g.bld = foe.id;
       const hitters = g.slots.filter(sl => {
         const d = w.defs[w.type[sl]];
-        return d.range === 0 || d.vsBld >= 2;
+        return d.melee || d.vsBld >= 2;
       });
       w.orderAttackBuilding(hitters, foe);
       const rest = g.slots.filter(sl => w.order[sl] !== O_ATTACK);

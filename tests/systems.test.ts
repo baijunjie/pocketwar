@@ -19,7 +19,7 @@ describe('兵种定义', () => {
       expect(d.speed).toBe(Math.round(d.pace * SIZES[d.size].speedMul));
       expect(d.walk).toBeLessThanOrEqual(d.speed);
       expect(d.lvHp.length).toBe(LEVELS.thresholds.length);
-      expect(d.lvDmg[4]).toBeCloseTo(d.lvDmg[0] * 3, 5);
+      expect(d.main.lvDmg[4]).toBeCloseTo(d.main.lvDmg[0] * 3, 5);
       expect(d.lvRout[4]).toBeLessThan(0);
     }
     for (let i = 1; i < SIZES.length; i++) expect(SIZES[i].speedMul).toBeLessThan(SIZES[i - 1].speedMul);
@@ -151,7 +151,7 @@ describe('经验与升级', () => {
     expect(w.level[best]).toBeGreaterThan(0);
     const d = UNIT_BY_KEY.samurai;
     expect(w.maxHp[best]).toBeCloseTo(1e5 + d.lvHp[w.level[best]] - d.lvHp[0], 0);
-    expect(d.lvDmg[w.level[best]]).toBeGreaterThan(d.dmg);
+    expect(d.main.lvDmg[w.level[best]]).toBeGreaterThan(d.main.lvDmg[0]);
     // 防御：同样一击，等级越高掉血越少（5 级是 1/3）
     const v = flatWorld();
     const lo = v.spawnUnit(idx('samurai'), 1, C, C), hi = v.spawnUnit(idx('samurai'), 1, C + 40, C);
@@ -470,7 +470,7 @@ describe('据点与建筑', () => {
     expect(w.state[u] & S_WALL).toBe(S_WALL);
     expect(Math.hypot(w.x[u] - sl.x, w.y[u] - sl.y)).toBeLessThan(0.01);
     // 墙外一个刚好在平地射程之外的敌人：墙上够得着
-    const reach = UNIT_BY_KEY.nu.range * RULES.siege.wallRange;
+    const reach = UNIT_BY_KEY.nu.main.range * RULES.siege.wallRange;
     const foe = w.spawnUnit(idx('samurai'), 2, sl.x + Math.cos(sl.face) * (reach - 8), sl.y + Math.sin(sl.face) * (reach - 8));
     w.hp[foe] = w.maxHp[foe] = 1e5;
     w.order[foe] = 4;
@@ -520,7 +520,7 @@ describe('据点与建筑', () => {
     // 同一格里站了不止一个人
     const cells = new Set(men.map(u => w.slots[w.post[u]].cell));
     expect(cells.size).toBeLessThan(men.length);
-    const reach = UNIT_BY_KEY.nu.range * RULES.siege.wallRange;
+    const reach = UNIT_BY_KEY.nu.main.range * RULES.siege.wallRange;
     const fx = far.x + Math.cos(far.face) * 90, fy = far.y + Math.sin(far.face) * 90;
     const foe = w.spawnUnit(idx('samurai'), 2, fx, fy);
     w.hp[foe] = w.maxHp[foe] = 1e6;
@@ -556,7 +556,7 @@ describe('据点与建筑', () => {
     expect(men.every(u => w.pmode[u] === P_POSTED)).toBe(true);
     const g0 = w.slots[w.post[men[0]]].group, ux = w.x[men[0]], uy = w.y[men[0]];
     // 找一处敌人位置：在警戒距离内，本段墙上最近的站位也够不着，另一段墙上近得多
-    const reach = UNIT_BY_KEY.nu.range * RULES.siege.wallRange;
+    const reach = UNIT_BY_KEY.nu.main.range * RULES.siege.wallRange;
     let fx = 0, fy = 0;
     for (const sl of mine) {
       if (sl.group === g0) continue;

@@ -9,20 +9,24 @@ import { Measurer, Row } from './measure';
 
 /**
  * 各维度量几级：生命、输出、纪律、冲击 ±8，节奏、机动、射程 ±4，护甲 +4 与 −3；
- * 破甲 +8、举盾 +12（基准为 0、没有负级数，只量加级，减级价目记 0），范围杀伤 +4 与 −15（−15 即半径降到 0）
+ * 破甲 +8、举盾 +12（基准为 0、没有负级数，只量加级，减级价目记 0），范围杀伤 +4 与 −15（−15 即半径降到 0）；
+ * 攻击距离 +1（多够一排；基准是贴身，没有负级数）
  */
 export const PROBE: Record<string, [number, number | null]> = {
   hp: [8, -8], out: [8, -8], disc: [8, -8], imp: [8, -8],
   cad: [4, -4], spd: [4, -4], rng: [4, -4],
   armM: [4, -3], armP: [4, -3],
-  pen: [8, null], block: [12, null], splash: [4, -15],
+  pen: [8, null], block: [12, null], splash: [4, -15], reach: [1, null],
 };
 
 /** 兵员量几级：标准混编军每个位置都按兵员加 8 级加人，量一次，加级减级同价 */
 export const MANPOWER_PROBE = 8;
 
-/** 机动、射程、纪律在平地会战里量不出价值，加级价目取实测值与地板价中较大的一个（减级不计点，见 points.ts 的 STRATEGIC_DIMS） */
-export const FLOOR_DIMS: Dim[] = ['spd', 'rng', 'disc'];
+/**
+ * 机动、射程、纪律在平地会战里量不出价值，加级价目取实测值与地板价中较大的一个（减级不计点，见 points.ts 的 STRATEGIC_DIMS）。
+ * 攻击距离也设地板价：它的价值随位置差得很远（近战步兵一级约值生命十几级），某个位置上量不出来时不能让它白拿
+ */
+export const FLOOR_DIMS: Dim[] = ['spd', 'rng', 'disc', 'reach'];
 /** 地板价 = 同位置生命价目的这个比例 */
 export const FLOOR_RATIO = 1 / 3;
 

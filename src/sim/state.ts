@@ -4,6 +4,11 @@ export const MAX_PROJ = 4096;
 export const MAX_CORPSE = 2048;
 export const NONE = -1;
 export const O_IDLE = 0, O_MOVE = 1, O_AMOVE = 2, O_ATTACK = 3, O_HOLD = 4;
+/**
+ * 交手状态（World.engaged）：没在交手；正在出手（近战是贴身肉搏，远程是在射程内射击）；
+ * 近战武器隔着贴身距离出手（长兵器，多在后排）
+ */
+export const ENG_NONE = 0, ENG_CLOSE = 1, ENG_REACH = 2;
 export const GRID = 40;
 export const COARSE = 320;
 export const VIS_CELL = 64;

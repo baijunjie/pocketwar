@@ -4,7 +4,7 @@
  * 绕行的状态存在 World 的 detour* 字段里；空位与圆心按相对空位所属敌兵的位置存，敌人被人群推着走时它们跟着走。
  */
 import { DT, RULES, TILE } from '../content';
-import { GRID, NONE, O_ATTACK, S_CHARGE, S_ROUT } from '../state';
+import { ENG_CLOSE, GRID, NONE, O_ATTACK, S_CHARGE, S_ROUT } from '../state';
 import type { World } from '../world';
 
 /** findOpening() 的结果：空位坐标、空位所属的敌兵，以及绕过去用的圆（敌群重心与半径） */
@@ -326,5 +326,5 @@ export function detourPasses(w: World, i: number, j: number): boolean {
 
 /** j 是不是正在射击的远程单位（射程内有目标） */
 export function shooting(w: World, j: number): boolean {
-  return w.engaged[j] === 1 && w.defs[w.type[j]].range > 0;
+  return w.engaged[j] === ENG_CLOSE && !w.defs[w.type[j]].melee;
 }

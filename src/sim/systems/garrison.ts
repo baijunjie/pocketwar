@@ -112,7 +112,7 @@ export function buildSlots(w: World): void {
 
 /** 能上墙驻守的兵种：远程的步行人形单位 */
 export function canGarrison(d: UnitDef): boolean {
-  return d.humanoid && d.range > 0 && !d.mobile;
+  return d.humanoid && !d.melee && !d.mobile;
 }
 
 /**
@@ -357,7 +357,7 @@ export function shiftPosts(w: World): void {
     if (e === NONE) continue;
     const ex = w.x[e], ey = w.y[e];
     const dist = Math.hypot(ex - ux, ey - uy);
-    if (dist <= d.range * G.wallRange * G.shiftInRange) continue;
+    if (dist <= d.main.range * G.wallRange * G.shiftInRange) continue;
     const cur = w.slots[w.post[i]];
     if (!byGroup) {
       byGroup = new Map();

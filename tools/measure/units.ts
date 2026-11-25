@@ -3,7 +3,7 @@
  * 开发工具，不属于游戏本体：游戏运行时（src/）不引用本目录。
  */
 import {
-  ARCHETYPES, ARCHETYPE_INDEX, DIMS, EXPAND_RULES, LEVELS, Levels, POSITIONS, Panel, SHIELD_SPEED_MUL, SIZES, STEP, TILE, applyLevels, levelTables, TraitUse, UNITS, UnitDef, expandUnit, linkMatchups, registerUnit, traitMix,
+  ARCHETYPES, ARCHETYPE_INDEX, DIMS, EXPAND_RULES, LEVELS, Levels, POSITIONS, Panel, SHIELD_SPEED_MUL, SIZES, WR_AUX, STEP, TILE, applyLevels, auxWeapon, levelTables, linkWeapons, weaponLevels, TraitUse, UNITS, UnitDef, expandUnit, linkMatchups, registerUnit, traitMix,
 } from '../../src/sim/defs';
 
 export { DIMS, STEP, POSITIONS };
@@ -64,8 +64,9 @@ const variants = new Map<string, UnitDef>();
 /** 兵种现在的点数维度面板（生命已乘全局倍率；没有冲锋的冲击为 0，不举盾的举盾为 0） */
 function unitPanel(d: UnitDef): Panel {
   return {
-    hp: d.hp, dmg: d.dmg, cd: d.cd, armM: d.armM, armP: d.armP, pace: d.pace, range: d.range, discipline: d.discipline,
-    impact: d.abilities.charge?.impact ?? 0, pen: d.pen, splash: d.splash, block: d.abilities.shield?.block ?? 0,
+    hp: d.hp, dmg: d.main.lvDmg[0], cd: d.main.lvCd[0], armM: d.armM, armP: d.armP, pace: d.pace, range: d.melee ? 0 : d.main.range,
+    reach: d.melee ? d.main.range - EXPAND_RULES.meleeContact : 0, discipline: d.discipline,
+    impact: d.abilities.charge?.impact ?? 0, pen: d.main.pen, splash: d.melee ? 0 : d.main.splash, block: d.abilities.shield?.block ?? 0,
   };
 }
 
@@ -79,12 +80,12 @@ export function variant(from: UnitDef, L: Levels, addTraits: TraitUse[] = []): U
   const hit = variants.get(key);
   if (hit) return hit;
   if (L.heal) throw new Error('治疗维度：兵种表里还没有治疗量字段，神职落地后再实现');
-  const d: UnitDef = { ...from, key, abilities: { ...from.abilities }, probe: true };
+  // 武器复制后再改，不动 from 的
+  const weapons = from.weapons.map(wp => ({ ...wp, lvDmg: [...wp.lvDmg], lvCd: [...wp.lvCd] }));
+  const d: UnitDef = { ...from, ...linkWeapons(weapons), key, abilities: { ...from.abilities }, probe: true };
   // 面板在 from 的面板上按级数算，与兵种展开同一套阶梯（applyLevels）
   const p = applyLevels(unitPanel(from), L);
   d.hp = Math.round(p.hp);
-  d.dmg = p.dmg;
-  d.cd = p.cd;
   d.armM = p.armM;
   d.armP = p.armP;
   if (L.spd) {
@@ -92,11 +93,11 @@ export function variant(from: UnitDef, L: Levels, addTraits: TraitUse[] = []): U
     d.speed = Math.round(d.pace * SIZES[from.size].speedMul);
     d.walk = Math.round(d.speed * (from.walk / from.speed));
   }
-  d.range = p.range;
+  d.main.range = d.melee ? EXPAND_RULES.meleeContact + p.reach : p.range;
   d.discipline = p.discipline;
   if (d.abilities.charge) d.abilities.charge = { ...d.abilities.charge, impact: p.impact };
-  d.pen = p.pen;
-  d.splash = p.splash;
+  d.main.pen = p.pen;
+  if (L.splash) d.main.splash = p.splash;
   // 举盾减免为 0 就是不举盾
   if (p.block > 0) d.abilities.shield = { block: p.block, speedMul: SHIELD_SPEED_MUL };
   else delete d.abilities.shield;
@@ -107,18 +108,20 @@ export function variant(from: UnitDef, L: Levels, addTraits: TraitUse[] = []): U
     d.hitMod = [...from.hitMod, ...mix.hitMod];
     d.traits |= mix.flags;
     d.abilities = { ...mix.abilities, ...d.abilities };
-    if (mix.aux) d.aux = mix.aux;
-    if (mix.atk !== undefined) d.atk = mix.atk;
+    if (mix.aux) Object.assign(d, linkWeapons([...weapons.filter(wp => wp.role !== WR_AUX), auxWeapon(mix.aux, LEVELS.thresholds.length)]));
+    Object.assign(d.main, mix.main);
     d.auras = [...from.auras, ...mix.auras];
   }
-  d.power = from.power * Math.sqrt((d.hp / from.hp) * (d.dmg / d.cd / (from.dmg / from.cd)));
+  Object.assign(d.main, weaponLevels(p.dmg, p.cd, LEVELS));
+  const dps = (u: UnitDef): number => u.main.lvDmg[0] / u.main.lvCd[0];
+  d.power = from.power * Math.sqrt((d.hp / from.hp) * (dps(d) / dps(from)));
   d.lv = { ...from.lv };
   for (const k of DIMS) if (L[k]) d.lv[k] = (d.lv[k] ?? 0) + L[k]!;
   // 按等级展开的数值、索敌距离都随面板重算
   Object.assign(d, levelTables(d, LEVELS));
-  d.acq = d.range > 0 ? d.range + (d.siege ? 0 : 40) : d.acq;
+  d.acq = d.melee ? d.acq : d.main.range + (d.siege ? 0 : 40);
   d.alert = Math.max(d.alert, d.acq);
-  d.lookK = d.range > 60 ? Math.min(14, Math.floor(d.range / TILE)) : 1;
+  d.lookK = !d.melee && d.main.range > 60 ? Math.min(14, Math.floor(d.main.range / TILE)) : 1;
   UNITS.push(d);
   d.idx = UNITS.length - 1;
   d.elite = -1; d.basic = -1; d.tier = 0;

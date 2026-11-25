@@ -2,7 +2,7 @@
  * 资源及其用处：资源点自动采集；黄金把兵种升为高级形态，石料 / 木材升级据点，
  * 木材还能给资源点建哨塔、让部队在野外搭临时据点。
  */
-import { BUILDINGS, BuildingDef, RES_KINDS, RULES, SITE_INFO, SITE_OUTPOST, TILE, T_BRIDGE, T_SHALLOW, TowerDef, UnitDef } from '../content';
+import { BUILDINGS, BuildingDef, RES_KINDS, RULES, SITE_INFO, SITE_OUTPOST, TILE, T_BRIDGE, T_SHALLOW, TowerDef, UnitDef, shellWeapon } from '../content';
 import { FX_BUILT, FX_UPGRADE, S_ROUT } from '../state';
 import { siteGap } from '../siteArea';
 import type { Site, World } from '../world';
@@ -143,7 +143,10 @@ export function towerAt(def: BuildingDef, lv: number): TowerDef | null {
   const t = def.tower;
   if (!t || lv <= 1) return t;
   const L = RULES.economy.siteLevels[lv - 1], p = lv >= SITE_MAX_LEVEL ? def.tier3 : undefined;
-  return { range: t.range * L.range, dmg: t.dmg * L.dmg, cd: t.cd, arrows: t.arrows * (p?.arrowMul ?? 1), shells: p?.shells ?? 0 };
+  // 等级的伤害倍率与箭矢倍率作用于建筑自带的武器（都是箭）；3 级追加的炮弹不吃
+  const weapons = t.weapons.map(wp => ({ ...wp, dmg: wp.dmg * L.dmg, burst: wp.burst * (p?.arrowMul ?? 1) }));
+  if (p?.shells) weapons.push(shellWeapon(p.shells));
+  return { range: t.range * L.range, cd: t.cd, weapons };
 }
 
 /** 设定据点等级（1–3）：建筑的生命上限、护甲、火力跟着变；升级时补上新增的生命 */

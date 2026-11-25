@@ -2,18 +2,18 @@
  * 单位每帧的行为：校验目标 → 索敌与状态切换 → 行军 / 追击 / 攻击 / 溃逃 → 分离 → 位移。
  * 这是整个模拟里最热的循环，所以写成一个大函数；具体的规则（选谁、打多少、何时溃逃）都在别的系统里。
  */
-import { A_MELEE, A_PIERCE, DT, RULES, SIZES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL, UnitDef } from '../content';
+import { A_MELEE, DT, RULES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL, UnitDef } from '../content';
 import { DIRX, DIRY } from '../nav';
 import { siteContains } from '../siteArea';
-import { FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
+import { ENG_CLOSE, ENG_REACH, FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
 import type { World } from '../world';
-import { attack, damageUnit, spawnProj } from './combat';
+import { damageUnit, strike } from './combat';
 import { orderAttackUnit, orderMove } from './orders';
 import { P_NONE, P_POSTED, stepPost } from './garrison';
 import { FOLLOW, FOLLOW_APART, FOLLOW_SLOT, SLOT, marchFollow, marchSlot } from './march';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
-import { SCAN, canAttackBuilding, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from './targeting';
+import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from './targeting';
 import { STEP, detourPasses, detourProgress, detourStep, shooting, startWait, tryDetour } from './detour';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE, chaseWay, findAround, keepWay } from './around';
 
@@ -48,14 +48,14 @@ export function updateUnits(w: World): void {
   const give = 1 - C.plantGive;
   const n = w.n;
 
-  // 每个单位正被多少近战敌人盯着（索敌时避开已经围满的目标）
+  // 每个单位正被多少近战敌人盯着（索敌时避开已经围满的目标）；隔着贴身距离出手的长兵器不占贴身的位置，不算
   const crowd = w.crowd;
   crowd.fill(0, 0, n);
   // 两方各有多少人站在墙顶上（远程单位没目标时，没有敌兵上墙就不用再多扫一圈）
   const onWallN = [0, 0, 0];
   for (let i = 0; i < n; i++) {
     const t = target[i];
-    if (alive[i] && t >= 0 && defs[type[i]].range === 0 && crowd[t] < 250) crowd[t]++;
+    if (alive[i] && t >= 0 && defs[type[i]].melee && w.engaged[i] !== ENG_REACH && crowd[t] < 250) crowd[t]++;
     if (alive[i] && state[i] & S_WALL) onWallN[team[i]]++;
   }
 
@@ -98,7 +98,7 @@ export function updateUnits(w: World): void {
     let spd = d.speed * TERRAIN_SPEED[tt] * rainMul;
     if (tt === T_FOREST) spd *= d.forestMul;
     const run = spd;
-    let eng = 0, usePath = false, chasing = false, blockedByTerrain = false, detouring = false;
+    let eng = 0, usePath = false, chasing = false, blockedByTerrain = false, detouring = false, overRank = false;
     let aim = w.dir[i];
 
     if (st & S_ROUT) {
@@ -150,7 +150,7 @@ export function updateUnits(w: World): void {
 
       // ---- 观察四周（分帧错开）：进入战斗状态、触发特殊动作、索敌 ----
       if (((i + tick) & 7) === 0) {
-        const melee = d.range === 0;
+        const melee = d.melee;
         if (ab.brace) {
           // 有敌人朝这边冲锋：立枪
           const cx = (ux / mc) | 0, cy = (uy / mc) | 0;
@@ -170,7 +170,7 @@ export function updateUnits(w: World): void {
         // 近战的不出据点，只打进了据点的敌人；挨了敌方远程的打才出击追打那个射手
         const guard = ord === O_IDLE && w.sheltered[i] === 1;
         const prov = guard && melee ? provoker(w, i, tm, TICK_RATE * SITE.provoke) : NONE;
-        let acqR = ord === O_HOLD ? (melee ? 44 : d.range * (onWall ? SG.wallRange : hill) * windMax) : d.acq * hill;
+        let acqR = ord === O_HOLD ? (melee ? C.holdAcq + d.main.range - C.meleeContact : d.main.range * (onWall ? SG.wallRange : hill) * windMax) : d.acq * hill;
         // 攻击移动：看见了就打，不等敌人走进平时的索敌距离
         if (ord === O_AMOVE && d.alert > acqR) acqR = d.alert;
         if (guard && !melee && SITE.alarm > acqR) acqR = SITE.alarm;
@@ -181,7 +181,7 @@ export function updateUnits(w: World): void {
         if (near !== NONE) {
           w.combatT[i] = C.linger;
           const nd = defs[type[near]];
-          if (ab.shield && nd.range > 0 && !(melee && w.engaged[i])) w.shieldT[i] = C.shieldHold;
+          if (ab.shield && !nd.melee && !(melee && w.engaged[i] === ENG_CLOSE)) w.shieldT[i] = C.shieldHold;
           const cg = ab.charge;
           if (cg && w.chargeCd[i] <= 0 && !(st & S_CHARGE) && ord !== O_MOVE && ord !== O_HOLD && !w.engaged[i]
             && w.ignoreT[i] <= 0) {
@@ -206,7 +206,7 @@ export function updateUnits(w: World): void {
         const bLeash = ord === O_IDLE ? C.leash : 0;
         // 工程类先找建筑打：附近有建筑就不理会敌兵（正在肉搏的除外）
         if (seekB && d.siege && tgt >= NONE && !(melee && w.engaged[i])) {
-          const b = findBuilding(w, i, ux, uy, tm, d.range > acqR ? d.range : acqR, d, bLeash);
+          const b = findBuilding(w, i, ux, uy, tm, d.main.range > acqR ? d.main.range : acqR, d, bLeash);
           if (b >= 0) {
             tgt = target[i] = -b - 2;
             w.waitT[i] = 0;
@@ -295,7 +295,7 @@ export function updateUnits(w: World): void {
       }
       st = (st & S_CHARGE) | (inCombat ? S_COMBAT : 0)
         | (ab.brace && w.braceT[i] > 0 ? S_BRACE : 0)
-        | (ab.shield && w.shieldT[i] > 0 && !(d.range === 0 && w.engaged[i]) ? S_SHIELD : 0)
+        | (ab.shield && w.shieldT[i] > 0 && !(d.melee && w.engaged[i] === ENG_CLOSE) ? S_SHIELD : 0)
         | (ab.torch && canTorch && !w.torchOff[i] ? S_TORCH : 0) | (onWall ? S_WALL : 0);
       // 非战斗状态按行军速度走；同一道命令里的部队统一成最慢的那个
       if (!inCombat) {
@@ -322,15 +322,22 @@ export function updateUnits(w: World): void {
         const dx = tx - ux, dy = ty - uy;
         const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
         const edge = dist - tr - d.radius;
-        const reach = tgt < 0 && d.humanoid ? SG.torchRange
-          : d.range > 0 ? d.range * (onWall ? SG.wallRange : tt === T_HILL ? 1.12 : 1) * windRangeMul(w, dx, dy) : 7;
-        if (edge <= reach) {
-          if (d.minRange > 0 && dist < d.minRange) {
+        // 站位按这把武器：打建筑用对建筑武器（距离不乘高地、风、城墙），否则是主武器（远程的射程乘城墙、高地、风）
+        const torch = tgt < 0 ? d.torch : null;
+        const stance = torch ?? d.main;
+        const reach = torch ? torch.range
+          : !d.melee ? d.main.range * (onWall ? SG.wallRange : tt === T_HILL ? 1.12 : 1) * windRangeMul(w, dx, dy)
+            : st & S_CHARGE && d.main.range > C.meleeContact ? C.meleeContact : d.main.range;
+        // 近战武器隔着贴身距离够着敌兵（长兵器隔着自己人出手）：超出贴身的那一段要直线可通（建筑按贴边的点算距离，不看这一条）
+        const far = d.melee && tgt >= 0 && edge > C.meleeContact;
+        if (edge <= reach && !(far && w.lineBlocked(ux, uy, tx, ty, tm))) {
+          if (stance.minRange > 0 && dist < stance.minRange) {
             // 器械无法攻击贴身目标
             target[i] = tgt = NONE;
             w.ignoreT[i] = 0.5;
           } else {
             eng = 1;
+            overRank = far;
             w.waits[i] = 0;
             w.waitT[i] = w.detourT[i] = 0;
             aim = Math.atan2(dy, dx);
@@ -339,7 +346,12 @@ export function updateUnits(w: World): void {
             if (!d.mobile && vx[i] * vx[i] + vy[i] * vy[i] > 16) {
               // 只有骑兵能边跑边打：其余的先站定，下一帧再出手
               vx[i] = vy[i] = 0;
-            } else if (w.cd[i] <= 0) attack(w, i, d, tgt, tt);
+            } else {
+              // 够得着的武器里用最短的那把
+              const aux = d.aux;
+              const wp = !torch && aux && tgt >= 0 && edge <= aux.range && aux.range < d.main.range ? aux : stance;
+              if ((wp === aux ? w.auxCd[i] : w.cd[i]) <= 0) strike(w, i, d, wp, tgt, tt);
+            }
             // 冲到跟前了：冲锋到此为止（撞击在下面的碰撞里结算）
             if (st & S_CHARGE && w.chargeT[i] > 0.25) w.chargeT[i] = 0.25;
             if ((d.traits & TR_FIREMOVE) && tgt >= 0 && edge < reach * 0.55) {
@@ -357,11 +369,7 @@ export function updateUnits(w: World): void {
         } else {
           // 接敌途中的副武器（重标枪、弓）
           const aux = d.aux;
-          if (aux && tgt >= 0 && w.auxCd[i] <= 0 && edge <= aux.range) {
-            w.auxCd[i] = aux.cd * (0.9 + w.rng.next() * 0.2);
-            w.atkAnim[i] = 0.3;
-            spawnProj(w, ux, uy, tgt, tx, ty, aux.proj, aux.dmg, A_PIERCE, 0, 0, d.idx, tm, i);
-          }
+          if (aux && tgt >= 0 && w.auxCd[i] <= 0 && edge <= aux.range) strike(w, i, d, aux, tgt, tt);
           // 打建筑：明确下令的走通往它的路线；途中自己盯上的（角楼、哨塔、门楼）能直走就直接上前，否则继续沿原路线走
           if (tgt < 0 ? ord === O_ATTACK || (ord !== O_IDLE && w.lineBlocked(ux, uy, tx - (dx / dist) * 24, ty - (dy / dist) * 24, tm))
             : ord === O_ATTACK && dist > 240) usePath = true;
@@ -376,7 +384,7 @@ export function updateUnits(w: World): void {
               ax = w.wayX[i] - ux;
               ay = w.wayY[i] - uy;
               al = Math.sqrt(ax * ax + ay * ay) || 0.001;
-            } else if (way === WAY_NONE && d.range === 0) {
+            } else if (way === WAY_NONE && d.melee) {
               // 近战绕不过去（隔着城墙、深水）：玩家指定的目标改走寻路，自己挑的放弃，几秒内不再挑它。
               // 远程绕不过去照旧直线走、不放弃：隔着墙也射得着，凑近到射程就行
               if (ord === O_ATTACK) usePath = true;
@@ -543,13 +551,15 @@ export function updateUnits(w: World): void {
       }
     }
     if (!detouring) w.detourT[i] = 0;
-    w.engaged[i] = eng;
+    w.engaged[i] = overRank ? ENG_REACH : eng;
     state[i] = st;
     // 站定出手：除了骑兵，出手的那一下（以及交手期间）脚下不动，也不会被旁人挤开
     const plant = !d.mobile && !(st & S_ROUT) && (eng === 1 || w.atkAnim[i] > 0);
     // 骑兵交手时脚下可以动，但不会被自己人挤出战位；在战线后面列队等待的也一样
-    const firm = plant || ((eng === 1 || (w.waitT[i] > 0 && wx === 0 && wy === 0 && w.detourLoose[i] <= 0)) && !(st & (S_CHARGE | S_ROUT)));
-    planted[i] = plant ? 1 : firm ? 2 : 0;
+    // 隔着贴身距离出手的长兵器（多是站在后排）不算钉在战位上：脚下不走，但叠在自己人身上时照常被推开，
+    // 否则后排一进攻击距离就原地钉住，人叠着人
+    const firm = !overRank && (plant || ((eng === 1 || (w.waitT[i] > 0 && wx === 0 && wy === 0 && w.detourLoose[i] <= 0)) && !(st & (S_CHARGE | S_ROUT))));
+    planted[i] = overRank ? 0 : plant ? 1 : firm ? 2 : 0;
     if (plant || posted) {
       wx = wy = 0;
       vx[i] = vy[i] = 0;
@@ -570,7 +580,7 @@ export function updateUnits(w: World): void {
     const skin = C.contactSkin, passK = C.passPush;
     // 近战不被射击中的己方远程挡住：远程射程内有目标就一直站定，又站在战线后面近战要过的地方，
     // 当成人墙的话，近战会被自己的弓手围死在后面。正在走的近战从他们身上穿过去，停下来的照常被推开
-    const melee = d.range === 0, thru = melee && !firm && (wx !== 0 || wy !== 0);
+    const melee = d.melee, thru = melee && !firm && (wx !== 0 || wy !== 0);
     // 反过来，自己是站着射击的远程时，己方近战怎么叠上来都不让位（否则近战从正中穿过时重叠过了让位线，会被一路推着走）；
     // 边跑边射的不算，它自己在往人堆里走时照常受推
     const shot = !melee && eng === 1 && wx === 0 && wy === 0;
@@ -637,7 +647,7 @@ export function updateUnits(w: World): void {
           // 站定的人只有被压得太狠才让一点；别人撞上站定的人，自己全让
           // 例外：没在出手的近战（列队等的、交手中的骑兵）叠在射击中的己方远程身上时照常被推开，否则穿到一半停下就一直叠着
           if (firm && dd > rr * give && (plant || mate) && !(over && !plant)) continue;
-          if (shot && mate && defs[type[j]].range === 0) continue;
+          if (shot && mate && defs[type[j]].melee) continue;
           let share = !firm && (pj === 1 || (pj === 2 && mate)) ? 1 : (rj * rj) / (r2 + rj * rj);
           if (pass) share *= passK;
           else if (over) ousted = true;
@@ -675,7 +685,7 @@ export function updateUnits(w: World): void {
     const cwx = wx, cwy = wy;
     let flank = false;
     // 只有近战绕：「追不上」的计时到点后另找、排队只管近战，远程绕起来没有尽头，况且横挪时也一直在往前凑，很快就够得着
-    if (press && chasing && !detouring && d.range === 0 && nc > 0) {
+    if (press && chasing && !detouring && d.melee && nc > 0) {
       const wl = Math.sqrt(wx * wx + wy * wy);
       if (wl > 0) {
         const fx = wx / wl, fy = wy / wl;
@@ -754,7 +764,7 @@ export function updateUnits(w: World): void {
     const mvx = nx - ux, mvy = ny - uy;
     const moved = Math.sqrt(mvx * mvx + mvy * mvy);
     const want = Math.sqrt(cwx * cwx + cwy * cwy);
-    if (chasing && plant && d.range === 0) {
+    if (chasing && plant && d.melee) {
       // 追击途中出手站定的那几帧（多是抛副武器；主武器刚出手、目标随即退出攻击距离的那几帧也一样）：既不算走通（不回落）、
       // 也不算没走通（不累计），计时原样留着，之后接着攒。否则落进下面回落那条分支，已攒的进度清空，这一轮横挪就超出上限
     } else if (flank) {
@@ -773,7 +783,7 @@ export function updateUnits(w: World): void {
       // 绕行走不动（被正在交手的自己人堵在人堆里）就尽早放弃，改列队等
       detourProgress(w, i, ux, uy, nx, ny, want);
     }
-    if (chasing && d.range === 0 && w.stuck[i] > C.blockedAfter) {
+    if (chasing && d.melee && w.stuck[i] > C.blockedAfter) {
       w.stuck[i] = 0;
       if (blockedByTerrain && !flank) {
         // 被地形挡住：放弃这个目标，稍后重新索敌。
@@ -789,7 +799,7 @@ export function updateUnits(w: World): void {
           scan(w, i, tm, ux, uy, d.acq, d.acq, d, NONE, ord === O_IDLE ? C.leash : 0);
           alt = SCAN.pick;
           // 换过去的目标得真有空位，否则只是在两个围满的敌人之间来回跑
-          if (alt !== NONE && (alt === tgt || w.crowd[alt] >= SIZES[defs[type[alt]].size].slots || w.lineBlocked(ux, uy, x[alt], y[alt], tm))) alt = NONE;
+          if (alt !== NONE && (alt === tgt || crowded(w, d, alt, Math.hypot(x[alt] - ux, y[alt] - uy)) || w.lineBlocked(ux, uy, x[alt], y[alt], tm))) alt = NONE;
         }
         if (alt !== NONE) {
           target[i] = alt;
@@ -830,8 +840,8 @@ const ONE = [0];
  */
 function idleLeash2(w: World, i: number, d: UnitDef, tgt: number): number {
   const C = RULES.combat, SITE = RULES.site;
-  let r = w.sheltered[i] && (d.range > 0 || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm : C.leash;
-  if (d.range > 0 && tgt >= 0 && w.state[tgt] & S_WALL && C.wallSeek > r) r = C.wallSeek;
+  let r = w.sheltered[i] && (!d.melee || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm : C.leash;
+  if (!d.melee && tgt >= 0 && w.state[tgt] & S_WALL && C.wallSeek > r) r = C.wallSeek;
   return r * r * 1.2;
 }
 /** 据点里的近战守军不追出据点：目标在据点外、又不是最近打过自己的人，就该丢掉 */
@@ -841,7 +851,7 @@ function guardDrops(w: World, i: number, tgt: number): boolean {
 
 /** 绕行时空位所属的敌兵要满足的条件：据点里的近战守军只留不会被 guardDrops 丢掉的；其余没有限制（undefined） */
 function guardKeep(w: World, i: number, d: UnitDef, ord: number): ((foe: number) => boolean) | undefined {
-  return ord === O_IDLE && w.sheltered[i] === 1 && d.range === 0 ? foe => !guardDrops(w, i, foe) : undefined;
+  return ord === O_IDLE && w.sheltered[i] === 1 && d.melee ? foe => !guardDrops(w, i, foe) : undefined;
 }
 
 /** 顶住的自己人的方向（单位向量），每帧最多记这么多处 */
@@ -853,7 +863,7 @@ function provoker(w: World, i: number, tm: number, ticks: number): number {
   for (let k = 0; k < 2; k++) {
     const o = i * 2 + k, a = w.hitBy[o];
     if (a < 0 || !w.alive[a] || w.uid[a] !== w.hitByUid[o] || w.team[a] === tm) continue;
-    if (w.tickCount - w.hitByTick[o] > ticks || w.defs[w.type[a]].range <= 0 || !(w.seen[a] & (1 << tm))) continue;
+    if (w.tickCount - w.hitByTick[o] > ticks || w.defs[w.type[a]].melee || !(w.seen[a] & (1 << tm))) continue;
     return a;
   }
   return NONE;

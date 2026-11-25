@@ -9,7 +9,7 @@ import { damageUnit, spawnProj, updateTowers } from '../src/sim/systems/combat';
 import { outpostCount, setSiteLevel, siteUpgradeCost, towerCount, unitUpgradeCost, upgradeAllCost, upgradeQueue } from '../src/sim/systems/economy';
 import { windRangeMul } from '../src/sim/systems/targeting';
 import { Building, O_AMOVE, O_IDLE, S_TORCH, Site, World } from '../src/sim/world';
-import { flatWorld, run } from './helpers';
+import { arrowsOf, flatWorld, run, shellFire } from './helpers';
 
 const C = (120 * TILE) / 2;
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;
@@ -46,7 +46,7 @@ describe('高级形态', () => {
       expect(e.key).toBe(`${d.key}_e`);
       expect(e.name).not.toBe(d.name);
       expect(e.hp / d.hp).toBeCloseTo(ELITE.hp, 1);
-      expect(e.dmg).toBeCloseTo(d.dmg * ELITE.dmg, 5);
+      expect(e.main.lvDmg[0]).toBeCloseTo(d.main.lvDmg[0] * ELITE.dmg, 5);
       expect(e.armM).toBe(d.armM + ELITE.armor);
       expect(e.armP).toBe(d.armP + ELITE.armor);
       expect(e.speed).toBe(d.speed);
@@ -296,12 +296,12 @@ describe('据点升级', () => {
     // 新增的那部分生命补上，旧伤还在
     expect(hall.hp).toBeCloseTo(hall.maxHp - hall.def.hp * 0.5, 3);
     expect([hall.lv, tower.lv, hall.armor]).toEqual([2, 2, L[1].armor]);
-    expect(tower.tower!.dmg).toBeCloseTo(tower.def.tower!.dmg * L[1].dmg, 5);
+    expect(arrowsOf(tower.tower).dmg).toBeCloseTo(arrowsOf(tower.def.tower).dmg * L[1].dmg, 5);
     expect(tower.tower!.range).toBeCloseTo(tower.def.tower!.range * L[1].range, 5);
     // 箭数不翻倍，2 级也没有炮弹
-    expect(tower.tower!.arrows).toBe(tower.def.tower!.arrows);
-    expect(hall.tower!.arrows).toBe(hall.def.tower!.arrows);
-    expect(tower.tower!.shells ?? 0).toBe(0);
+    expect(arrowsOf(tower.tower).burst).toBe(arrowsOf(tower.def.tower).burst);
+    expect(arrowsOf(hall.tower).burst).toBe(arrowsOf(hall.def.tower).burst);
+    expect(shellFire(tower.tower)).toBeUndefined();
     expect(gate.tower).toBeNull();
     // 钱不够升 3 级
     expect(w.upgradeSite(town)).toBe(false);
@@ -313,8 +313,8 @@ describe('据点升级', () => {
     expect(town.level).toBe(3);
     expect(hall.maxHp).toBe(Math.round(hall.def.hp * L[2].hp));
     expect([hall.lv, hall.armor]).toEqual([3, L[2].armor]);
-    expect(tower.tower).toEqual({ range: tower.def.tower!.range * L[2].range, dmg: tower.def.tower!.dmg * L[2].dmg, cd: tower.def.tower!.cd, arrows: 2, shells: 1 });
-    expect(hall.tower).toEqual({ range: hall.def.tower!.range * L[2].range, dmg: hall.def.tower!.dmg * L[2].dmg, cd: hall.def.tower!.cd, arrows: 4, shells: 2 });
+    expect(tower.tower).toEqual({ range: tower.def.tower!.range * L[2].range, cd: tower.def.tower!.cd, weapons: [{ ...tower.def.tower!.weapons[0], dmg: tower.def.tower!.weapons[0].dmg * L[2].dmg, burst: 2 }, { atk: A_SIEGE, dmg: RULES.economy.shell.dmg, proj: P_BALL, pen: 0, splash: RULES.economy.shell.splash, burst: 1, fan: false }] });
+    expect(hall.tower).toEqual({ range: hall.def.tower!.range * L[2].range, cd: hall.def.tower!.cd, weapons: [{ ...hall.def.tower!.weapons[0], dmg: hall.def.tower!.weapons[0].dmg * L[2].dmg, burst: 4 }, { atk: A_SIEGE, dmg: RULES.economy.shell.dmg, proj: P_BALL, pen: 0, splash: RULES.economy.shell.splash, burst: 2, fan: false }] });
     expect(gate.tower).toBeNull();
     // 满级不能再升
     w.stock.stone[1] = 1e5;
@@ -344,19 +344,19 @@ describe('据点升级', () => {
     const camp = w.sites.find(s => s.type === SITE_CAMP && s.owner === 1)!;
     const post = blds(w, camp, 'watchtower')[0], tent = w.buildings[camp.main];
     expect(tent.def.key).toBe('cmdtent');
-    expect([post.def.tower!.arrows, tent.def.tower!.arrows]).toEqual([1, 2]);
+    expect([arrowsOf(post.def.tower).burst, arrowsOf(tent.def.tower).burst]).toEqual([1, 2]);
     w.stock.wood[1] = SITE_INFO[SITE_CAMP].upgradeCost;
     expect(w.upgradeSite(camp)).toBe(true);
     expect(w.stock.wood[1]).toBeCloseTo(0, 5);
-    expect([camp.level, post.tower!.arrows, tent.tower!.arrows]).toEqual([2, 1, 2]);
+    expect([camp.level, arrowsOf(post.tower).burst, arrowsOf(tent.tower).burst]).toEqual([2, 1, 2]);
     expect(w.upgradeSite(camp)).toBe(false);
     w.stock.wood[1] = siteUpgradeCost(camp);
     expect(w.upgradeSite(camp)).toBe(true);
     expect(w.stock.wood[1]).toBeCloseTo(0, 5);
     expect(camp.level).toBe(3);
     const L3 = RULES.economy.siteLevels[2];
-    expect(post.tower).toEqual({ range: post.def.tower!.range * L3.range, dmg: post.def.tower!.dmg * L3.dmg, cd: post.def.tower!.cd, arrows: 3, shells: 0 });
-    expect(tent.tower).toEqual({ range: tent.def.tower!.range * L3.range, dmg: tent.def.tower!.dmg * L3.dmg, cd: tent.def.tower!.cd, arrows: 6, shells: 0 });
+    expect(post.tower).toEqual({ range: post.def.tower!.range * L3.range, cd: post.def.tower!.cd, weapons: [{ ...post.def.tower!.weapons[0], dmg: post.def.tower!.weapons[0].dmg * L3.dmg, burst: 3 }] });
+    expect(tent.tower).toEqual({ range: tent.def.tower!.range * L3.range, cd: tent.def.tower!.cd, weapons: [{ ...tent.def.tower!.weapons[0], dmg: tent.def.tower!.weapons[0].dmg * L3.dmg, burst: 6 }] });
     // 资源点的哨塔是后来搭的，设成几级都不变
     const farm = w.sites.find(s => s.type === SITE_FARM)!;
     give(w, farm, 1);
@@ -821,7 +821,7 @@ describe('风与远程', () => {
     expect(windRangeMul(w, -1, 0)).toBeCloseTo(1 - K, 5);
     expect(windRangeMul(w, 0, 1)).toBeCloseTo(1, 5);
     // 坚守的弩手：射程外一点点的敌人，顺风一侧够得着，顶风一侧够不着
-    const R = UNIT_BY_KEY.nu.range;
+    const R = UNIT_BY_KEY.nu.main.range;
     const shoot = (side: number): number => {
       const v = flatWorld();
       windy(v, 0, 1);
@@ -923,12 +923,12 @@ describe('第十二轮：箭数、集结点', () => {
     expect(t0.length).toBe(2);
     expect(new Set(t0).size).toBe(2);
     const B = BUILDINGS;
-    expect(B.tower.tower!.arrows).toBe(2);
+    expect(arrowsOf(B.tower.tower).burst).toBe(2);
     // 主堡相当于 2 座角楼，中军帐相当于 2 座哨塔：射程、单支伤害、间隔相同
-    for (const k of ['keep', 'keep_town']) expect(B[k].tower, k).toEqual({ ...B.tower.tower!, arrows: 4 });
-    expect(B.watchtower.tower!.arrows).toBe(1);
+    for (const k of ['keep', 'keep_town']) expect(B[k].tower, k).toEqual({ ...B.tower.tower!, weapons: [{ ...arrowsOf(B.tower.tower), burst: 4 }] });
+    expect(arrowsOf(B.watchtower.tower).burst).toBe(1);
     expect(B.arrowtower.tower).toEqual(B.watchtower.tower);
-    expect(B.cmdtent.tower).toEqual({ ...B.watchtower.tower!, arrows: 2 });
+    expect(B.cmdtent.tower).toEqual({ ...B.watchtower.tower!, weapons: [{ ...arrowsOf(B.watchtower.tower), burst: 2 }] });
     for (const k of ['gate_h', 'gate_v', 'wgate_h', 'wgate_v']) expect(B[k].tower, k).toBeNull();
     // 升级不再让箭数翻倍：2 级与 3 级的角楼仍是两支箭，3 级起另加一发炮弹
     w.stock.stone[1] = 1e4;

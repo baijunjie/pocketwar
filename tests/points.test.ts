@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ARCHETYPES, EXPAND_RULES, HP_SCALE, LEVEL_RANGES, POSITIONS, levelRange, PriceTable, STEP, UNITS, UNIT_BY_KEY, applyLevels, estimatePoints,
+  ARCHETYPES, DIMS, EXPAND_RULES, HP_SCALE, LEVEL_RANGES, POSITIONS, PRICES, STRATEGIC_DIMS, levelRange, PriceTable, STEP, UNITS, UNIT_BY_KEY, applyLevels, dimPoints, estimatePoints,
   expandUnit, panelPower, powerFromPoints,
 } from '../src/sim/defs';
 import { contentUnits } from '../tools/measure/fingerprint';
 import { Row } from '../tools/measure/measure';
-import { derivePrices } from '../tools/measure/price';
+import { FLOOR_DIMS, FLOOR_RATIO, derivePrices } from '../tools/measure/price';
 import { estimateGaps, measuredUnits, readUnitPoints } from '../tools/measure/unitpoints';
 
 describe('兵种表点数化：面板由原型基准与级数算出', () => {
@@ -26,10 +26,22 @@ describe('兵种表点数化：面板由原型基准与级数算出', () => {
     expect(u.abilities.charge?.impact).toBe(b.impact);
   });
 
+  it('攻击距离是加数阶梯：每级 +15 像素，在面板的攻击距离上加，不影响别的面板字段', () => {
+    expect(STEP.reach).toBe(15);
+    const b = ARCHETYPES.find(a => a.key === 'inf')!.panel;
+    expect(b.reach).toBe(0);
+    expect(applyLevels(b, { reach: 2 }).reach).toBe(30);
+    expect(applyLevels(b, {}).reach).toBe(0);
+    expect({ ...applyLevels(b, { reach: 1 }), reach: 0 }).toEqual({ ...applyLevels(b, {}), reach: 0 });
+    expect(DIMS).toContain('reach');
+  });
+
   it('点数维度的面板在兵种表里只填级数：填绝对数值直接报错；用了原型没开放的维度也报错', () => {
     const bad = (spec: object): unknown => () => expandUnit({ faction: 'china', key: 't', name: 't', arch: 'inf', spec, desc: '' }, EXPAND_RULES);
     expect(bad({ hp: 80 })).toThrow('点数维度');
     expect(bad({ lv: { rng: 1 } })).toThrow('没有开放维度');
+    const badRanged = (spec: object): unknown => () => expandUnit({ faction: 'china', key: 't', name: 't', arch: 'ranged', spec, desc: '' }, EXPAND_RULES);
+    expect(badRanged({ lv: { reach: 1 } })).toThrow('没有开放维度');
     expect(bad({ lv: { imp: 1 } })).toThrow('没有开放维度');
   });
 
@@ -59,6 +71,11 @@ describe('兵种表点数化：面板由原型基准与级数算出', () => {
     expect(mk({ out: 13 })).toThrow('越出范围');
     expect(mk({ hp: -7 })).toThrow('越出范围');
     expect(mk({ armM: -3 })).toThrow('护甲低于 0');
+    // 攻击距离 0…+2，没有负级数
+    expect(LEVEL_RANGES.reach).toEqual([0, 2]);
+    expect(mk({ reach: 2 })).not.toThrow();
+    expect(mk({ reach: 3 })).toThrow('越出范围');
+    expect(mk({ reach: -1 })).toThrow('越出范围');
   });
 });
 
@@ -79,6 +96,53 @@ describe('价目表与估算点数', () => {
     expect(() => estimatePoints('inf', {}, ['naginata'], table)).toThrow('价目表缺格');
     expect(() => estimatePoints('cav', { hp: 5 }, [], table)).toThrow('价目表缺格');
     expect(estimatePoints('inf', {}, [], table)).toBe(0);
+  });
+
+  it('攻击距离只有加级价目、不是战略维度：加级按价目计点，价目表里近战步兵、长柄、近战骑兵、载具各一格，别的位置没有', () => {
+    expect(STRATEGIC_DIMS).not.toContain('reach');
+    expect(FLOOR_DIMS).toContain('reach');
+    const t: PriceTable = { dims: { inf: { reach: [0.4, 0] } }, traits: {}, manpower: 0 };
+    expect(estimatePoints('inf', { reach: 1 }, [], t)).toBeCloseTo(0.4, 12);
+    expect(estimatePoints('inf', { reach: 2 }, [], t)).toBeCloseTo(0.8, 12);
+    expect(dimPoints('reach', 2, [0.4, 0])).toBeCloseTo(0.8, 12);
+    expect(() => estimatePoints('ranged', { reach: 1 }, [], t)).toThrow('价目表缺格');
+    expect(Object.keys(PRICES.dims).filter(pos => PRICES.dims[pos].reach).sort()).toEqual(['cav', 'ele', 'inf', 'spear']);
+    for (const pos of ['inf', 'spear', 'cav', 'ele']) {
+      const p = PRICES.dims[pos];
+      // 地板价：加级价目不低于同位置生命加级价目的 1/3；没有减级价目
+      expect(p.reach![0], pos).toBeGreaterThanOrEqual(p.hp![0] * FLOOR_RATIO - 1e-9);
+      expect(p.reach![1], pos).toBe(0);
+    }
+  });
+
+  it('汇总价目时攻击距离取实测与地板价（生命加级价目的三分之一）中较大的：实测不显著或为负就取地板价，实测更高就取实测', () => {
+    const rows: Row[] = [];
+    const push = (label: string, slot: string, levels: object, points: number, significant = true): void => {
+      rows.push({ kind: 'dim', label, size: 100, n: 48, adv: 0, advSe: 0, win: 0, points, significant, meta: { slot, levels } });
+    };
+    for (const pos of Object.keys(POSITIONS)) {
+      const a = ARCHETYPES.find(x => x.key === POSITIONS[pos].arch)!;
+      for (const dim of a.dims.filter(k => k !== 'heal')) {
+        const [up, down] = ['armM', 'armP'].includes(dim) ? [4, -3] : ['cad', 'spd', 'rng'].includes(dim) ? [4, -4] : dim === 'reach' ? [1, null] : [8, -8];
+        const val = (lv: number): number => (dim === 'hp' ? (lv > 0 ? 2.4 : -2) : dim === 'reach' ? (pos === 'cav' ? 2 : 0.1) : lv > 0 ? 0.8 : -0.4);
+        push(`${pos}:${dim}=${up}`, pos, { [dim]: up }, val(up), !(dim === 'reach' && pos === 'ele'));
+        if (down !== null) push(`${pos}:${dim}=${down}`, pos, { [dim]: down }, val(down));
+      }
+    }
+    rows.push({ kind: 'count', label: 'manpower:+8', size: 449, n: 96, adv: 0, advSe: 0, win: 0, points: 3, significant: true, meta: { slot: 'all', manpower: 7.5 } });
+    const t = derivePrices(rows);
+    // 生命每级 0.3 点，地板价 0.1
+    expect(t.dims.inf.reach![0]).toBeCloseTo(0.1, 9);
+    expect(t.dims.spear.reach![0]).toBeCloseTo(0.1, 9);
+    // 实测 2 点每级，高于地板价，取实测
+    expect(t.dims.cav.reach![0]).toBeCloseTo(2, 9);
+    // 不显著记 0，再取地板价
+    expect(t.dims.ele.reach![0]).toBeCloseTo(t.dims.ele.hp![0] / 3, 9);
+    // 只量加级，减级价目是 0
+    for (const pos of ['inf', 'spear', 'cav', 'ele']) expect(t.dims[pos].reach![1], pos).toBe(0);
+    // 不开放的位置没有这一格
+    expect(t.dims.ranged.reach).toBeUndefined();
+    expect(t.dims.bolt.reach).toBeUndefined();
   });
 
   it('战力估值 = 原型基准的战力估值 × 1.05 的（点数 ÷（生命价目 + 输出价目））次方', () => {

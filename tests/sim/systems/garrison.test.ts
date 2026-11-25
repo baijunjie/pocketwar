@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SITE_CITY, UNIT_BY_KEY } from '../../../src/sim/defs';
+import { SITE_CITY, UNITS, UNIT_BY_KEY, isContentUnit } from '../../../src/sim/defs';
+import { canGarrison } from '../../../src/sim/systems/garrison';
 import { createGame } from '../../../src/sim/setup';
 import type { World } from '../../../src/sim/world';
 
@@ -21,5 +22,18 @@ describe('驻守命令：清掉追击的状态', () => {
     expect(w.wayUid[u]).toBe(0);
     expect(w.wayNoT[u]).toBe(0);
     expect(w.wallUid[u]).toBe(0);
+  });
+});
+
+describe('能上墙驻守的兵种：主武器是远程武器的步行人形单位', () => {
+  it('远程步兵可以；攻击距离再长的近战（长戟兵、足轻枪兵）、骑兵、器械、战象都不行', () => {
+    for (const k of ['nu', 'liannu', 'yumi', 'teppo', 'velites', 'sagitt', 'kamandar']) expect(canGarrison(UNIT_BY_KEY[k]), k).toBe(true);
+    for (const k of ['ji', 'yari', 'auxilia', 'spara', 'dao', 'legion', 'immortal', 'tieqi', 'asvaran', 'huojian', 'onager', 'scorpio', 'elephant']) {
+      expect(canGarrison(UNIT_BY_KEY[k]), k).toBe(false);
+    }
+  });
+
+  it('判据只看主武器是不是远程、是不是人形、能不能边走边打：高级形态与初级一致', () => {
+    for (const d of UNITS.filter(isContentUnit)) expect(canGarrison(d), d.key).toBe(d.humanoid && !d.melee && !d.mobile);
   });
 });

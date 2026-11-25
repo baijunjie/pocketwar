@@ -32,12 +32,12 @@ describe('类别改为原型', () => {
   it('原型自带的行为：近战骑兵冲锋、远程骑兵边走边射、载具践踏；近战的原型射程为 0，远程的大于 0', () => {
     for (const d of UNITS) {
       const a = ARCHETYPES[d.arch];
-      expect(a.ranged, d.key).toBe(d.range > 0);
+      expect(a.ranged, d.key).toBe(!d.melee);
       if (a.key === 'cav') expect(d.abilities.charge, d.key).toBeDefined();
       else expect(d.abilities.charge, d.key).toBeUndefined();
     }
     expect(UNIT_BY_KEY.asvaran.traits).toBe(4);
-    expect(UNIT_BY_KEY.elephant.traits).toBe(8);
+    expect(UNIT_BY_KEY.elephant.traits).toBe(0);
   });
 
   it('长柄特性：立枪拒马，各枪兵对骑兵的倍率可以不同；僧兵、投矛散兵、蝎弩的克制记在特性上', () => {
@@ -86,22 +86,25 @@ describe('直射器械原型与蝎弩', () => {
     expect(ARCHETYPES[scorpio.arch].key).toBe('bolt');
     expect(bolt.panel.hp * HP_SCALE).toBeCloseTo(220, 9);
     expect(scorpio.hp).toBe(220);
-    expect(scorpio.dmg).toBe(90);
-    expect(scorpio.cd).toBe(4.5);
-    expect(scorpio.range).toBe(400);
-    expect(scorpio.minRange).toBe(60);
-    expect(scorpio.pen).toBeCloseTo(0.8, 12);
-    expect(scorpio.atk).toBe(A_PIERCE);
-    expect(scorpio.splash).toBe(0);
-    expect(scorpio.proj).toBe(P_BIGBOLT);
+    expect(scorpio.main.lvDmg[0]).toBe(90);
+    expect(scorpio.main.lvCd[0]).toBe(4.5);
+    expect(scorpio.main.range).toBe(400);
+    expect(scorpio.main.minRange).toBe(60);
+    expect(scorpio.main.pen).toBeCloseTo(0.8, 12);
+    expect(scorpio.main.atk).toBe(A_PIERCE);
+    expect(scorpio.main.splash).toBe(0);
+    expect(scorpio.main.proj).toBe(P_BIGBOLT);
     expect(scorpio.ownTraits).toEqual(['ballista']);
     // 点数 = 破甲 +8 的价目 + 重弩特性价目（其余维度都是基准），且在单兵种点数上下限内
     expect(scorpio.points).toBeCloseTo(PRICES.dims.bolt.pen![0] * 8 + PRICES.traits.bolt.ballista, 9);
     expect(scorpio.points).toBeGreaterThanOrEqual(UNIT_POINT_LIMITS[0]);
     expect(scorpio.points).toBeLessThanOrEqual(UNIT_POINT_LIMITS[1]);
     // 抛射器械的兵种仍是攻城伤害与范围杀伤
-    expect(UNIT_BY_KEY.onager.atk).toBe(A_SIEGE);
-    expect(UNIT_BY_KEY.onager.splash).toBeGreaterThan(0);
+    expect(UNIT_BY_KEY.onager.main.atk).toBe(A_SIEGE);
+    expect(UNIT_BY_KEY.onager.main.splash).toBeGreaterThan(0);
+    // 践踏：近战武器带范围杀伤，面板的范围杀伤仍是 0
+    expect(UNIT_BY_KEY.elephant.melee).toBe(true);
+    expect(UNIT_BY_KEY.elephant.main.splash).toBe(28);
   });
 
   it('经验值按原型常量：直射器械 26（基准战力估值的 10 倍），高级形态乘 1.3', () => {

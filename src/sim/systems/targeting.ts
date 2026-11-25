@@ -17,6 +17,15 @@ export const SCAN = {
 };
 
 /**
+ * 近战的攻击方 d 要打 j 时 j 算不算围满：贴身的位置已被占满，而自己又得挤到它身边才打得到。
+ * 长兵器已经够得着的目标不用挤过去，不算围满。dist 是两者的圆心距
+ */
+export function crowded(w: World, d: UnitDef, j: number, dist: number): boolean {
+  if (w.crowd[j] < SIZES[w.defs[w.type[j]].size].slots) return false;
+  return !(d.main.range > RULES.combat.meleeContact && dist - w.rad[j] - d.radius <= d.main.range);
+}
+
+/**
  * @param leash 大于 0 时，只挑离岗位（homeX, homeY）不超过这个距离的目标——待命的部队不会被引得越追越远
  */
 export function scan(w: World, i: number, tm: number, ux: number, uy: number, scanR: number, acqR: number, d: UnitDef,
@@ -33,8 +42,8 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
   if (gy1 >= gh) gy1 = gh - 1;
   const C = RULES.combat;
   const x = w.x, y = w.y, team = w.team, alive = w.alive, seen = w.seen, type = w.type, defs = w.defs;
-  const bit = 1 << tm, melee = d.range === 0;
-  const acq2 = acqR * acqR, min2 = d.minRange * d.minRange;
+  const bit = 1 << tm, melee = d.melee;
+  const acq2 = acqR * acqR, min2 = d.main.minRange * d.main.minRange;
   const avoid = w.avoidT[i] > 0 ? w.avoidUid[i] : 0;
   const hx = w.homeX[i], hy = w.homeY[i], leash2 = leash * leash;
   let nearD2 = scanR * scanR, near = NONE, best = 1e9, pick = NONE;
@@ -55,9 +64,10 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
       const jd = defs[type[j]];
       // 优先打自己克制的兵种
       const v = d.vs[jd.idx];
-      let score = Math.sqrt(d2) * (v > 1.05 ? 0.8 : v < 0.95 ? 1.15 : 1);
+      const dj = Math.sqrt(d2);
+      let score = dj * (v > 1.05 ? 0.8 : v < 0.95 ? 1.15 : 1);
       if (j === cur) score -= 25;
-      else if (melee && w.crowd[j] >= SIZES[jd.size].slots) score += C.crowdPenalty;
+      else if (melee && crowded(w, d, j, dj)) score += C.crowdPenalty;
       if (avoid && w.uid[j] === avoid) score += 200;
       if (w.state[j] & S_ROUT) score += C.routPenalty;
       if (score < best) {
@@ -98,7 +108,7 @@ export function findWallFoe(w: World, i: number, tm: number, ux: number, uy: num
   if (gx1 >= gw) gx1 = gw - 1;
   if (gy1 >= gh) gy1 = gh - 1;
   const x = w.x, y = w.y, team = w.team, alive = w.alive, seen = w.seen, state = w.state;
-  const bit = 1 << tm, min2 = d.minRange * d.minRange;
+  const bit = 1 << tm, min2 = d.main.minRange * d.main.minRange;
   const hx = w.homeX[i], hy = w.homeY[i], leash2 = leash * leash;
   let best = seek * seek, pick = NONE;
   for (let gy = gy0; gy <= gy1; gy++) {
@@ -148,7 +158,7 @@ export function wallSpotBad(w: World, tm: number, j: number, ux: number, uy: num
   let stop = 0, px = ux, py = uy;
   // 停下的那一点是不是高地要看那一点，而那一点又取决于射程：先按平地估一次，再按估出的那格修正
   for (let pass = 0; pass < 2; pass++) {
-    stop = d.range * hill * wind + w.rad[j] + d.radius;
+    stop = d.main.range * hill * wind + w.rad[j] + d.radius;
     if (dist <= stop) return false;
     const k = stop / dist;
     px = tx - dx * k;
@@ -186,7 +196,7 @@ export function findBuilding(w: World, i: number, ux: number, uy: number, tm: nu
   if (y0 < 0) y0 = 0;
   if (x1 >= mw) x1 = mw - 1;
   if (y1 >= mh) y1 = mh - 1;
-  const foe = 3 - tm, min2 = d.minRange * d.minRange, leash2 = leash * leash;
+  const foe = 3 - tm, min2 = d.main.minRange * d.main.minRange, leash2 = leash * leash;
   const hx = w.homeX[i], hy = w.homeY[i];
   const armed = RULES.combat.armedFirst;
   let best = range * range, id = -1, last = -1;

@@ -104,6 +104,16 @@ describe('阵营点数的计算', () => {
     expect(unitStrategicCost('cataphract', table)).toBeCloseTo(Math.max(0, cata.disc ?? 0) * table.dims.cav.disc![0], 9);
   });
 
+  it('攻击距离按加级价目计进兵种点数，但不算战略成本：长戟兵（长柄位 +1 攻击距离）的点数比去掉攻击距离多一格价目，战略成本只看机动、射程、纪律', () => {
+    const d = UNIT_BY_KEY.ji;
+    expect(d.position).toBe('spear');
+    expect(d.lv.reach).toBe(1);
+    expect(unitPoints('ji', table) - estimatePoints('spear', { ...d.lv, reach: 0 }, d.ownTraits, table)).toBeCloseTo(table.dims.spear.reach![0], 9);
+    expect(table.dims.spear.reach![0]).toBeGreaterThan(0);
+    const lv = d.lv;
+    expect(unitStrategicCost('ji', table)).toBeCloseTo(Math.max(0, lv.spd ?? 0) * table.dims.spear.spd![0] + Math.max(0, lv.disc ?? 0) * table.dims.spear.disc![0], 9);
+  });
+
   it('兵种点数 = 估算点数：各维度级数 × 价目（加级减级各用各的）+ 兵种自己的特性价目；战略维度只计加级，减级不计不退点', () => {
     // 步兵位：生命、护甲加级用加级价目，节奏、近战护甲减级用减级价目；机动加级照计，纪律减级（战略维度）不计不退
     const inf = table.dims.inf;
@@ -300,10 +310,10 @@ describe('级数范围与单兵种上下限', () => {
     expect(bad).toEqual([]);
   });
 
-  it('射程放宽到 −6…+6（超过两成的现有远程兵种越限，按规则放到八成落在范围内），其余维度用初值表', () => {
+  it('射程放宽到 −6…+6（超过两成的现有远程兵种越限，按规则放到八成落在范围内），攻击距离 0…+2，其余维度用初值表', () => {
     expect(LEVEL_RANGES).toEqual({
       hp: [-6, 12], out: [-6, 12], cad: [-8, 8], armM: [-3, 8], armP: [-3, 8], spd: [-4, 6], rng: [-6, 6], disc: [-3, 6], imp: [-3, 6], heal: [-4, 8],
-      pen: [0, 8], splash: [-15, 5], block: [0, 14],
+      pen: [0, 8], splash: [-15, 5], block: [0, 14], reach: [0, 2],
     });
   });
 

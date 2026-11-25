@@ -67,7 +67,7 @@ export async function main(argv: string[]): Promise<void> {
 
   if (cmd === 'base') {
     for (const d of Object.values(BASE)) {
-      console.log(`${d.name}\thp ${d.hp}\tdmg ${d.dmg.toFixed(1)}\tcd ${d.cd.toFixed(2)}\tarm ${d.armM}/${d.armP}\tspd ${d.speed}\trange ${d.range}`);
+      console.log(`${d.name}\thp ${d.hp}\tdmg ${d.main.lvDmg[0].toFixed(1)}\tcd ${d.main.lvCd[0].toFixed(2)}\tarm ${d.armM}/${d.armP}\tspd ${d.speed}\trange ${d.melee ? 0 : d.main.range}`);
     }
     return;
   }

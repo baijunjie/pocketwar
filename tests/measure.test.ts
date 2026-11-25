@@ -31,8 +31,8 @@ describe('对战测量：军队与变体', () => {
   it('变体按阶梯步长算，同一兵种同一组级数只造一次', () => {
     const v = variant(BASE.inf, { hp: 4, out: 2, cad: 1, armM: 2 });
     expect(v.hp).toBe(Math.round(BASE.inf.hp * STEP.hp ** 4));
-    expect(v.cd).toBeCloseTo((BASE.inf.cd * STEP.cad) / STEP.out ** 2);
-    expect(v.dmg).toBeCloseTo(BASE.inf.dmg * STEP.cad);
+    expect(v.main.lvCd[0]).toBeCloseTo((BASE.inf.main.lvCd[0] * STEP.cad) / STEP.out ** 2);
+    expect(v.main.lvDmg[0]).toBeCloseTo(BASE.inf.main.lvDmg[0] * STEP.cad);
     expect(v.armM).toBe(BASE.inf.armM + 2);
     const n = UNITS.length;
     expect(variant(BASE.inf, { hp: 4, out: 2, cad: 1, armM: 2 })).toBe(v);
@@ -43,8 +43,8 @@ describe('对战测量：军队与变体', () => {
     const v = variant(BASE.ranged, { hp: 4, rng: 2 });
     expect(v.lvHp[0]).toBe(v.hp);
     expect(v.lvHp[0]).toBeGreaterThan(BASE.ranged.lvHp[0]);
-    expect(v.range).toBeGreaterThan(BASE.ranged.range);
-    expect(v.acq).toBe(v.range + 40);
+    expect(v.main.range).toBeGreaterThan(BASE.ranged.main.range);
+    expect(v.acq).toBe(v.main.range + 40);
     const t = variant(BASE.inf, {}, ['naginata']);
     expect(t.vs[BASE.cav.idx]).toBeGreaterThan(BASE.inf.vs[BASE.cav.idx]);
   });
@@ -52,7 +52,7 @@ describe('对战测量：军队与变体', () => {
   it('每个基准单位都不带兵种特有的特性与点数', () => {
     for (const d of Object.values(BASE)) {
       expect(d.discipline).toBe(0);
-      expect(d.pen).toBe(0);
+      expect(d.main.pen).toBe(0);
       expect(d.aux).toBeNull();
     }
   });

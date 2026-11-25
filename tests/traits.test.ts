@@ -47,17 +47,18 @@ describe('破甲、范围杀伤、举盾按维度计点', () => {
 
   it('迁移前后每个兵种的破甲、范围杀伤、举盾与副武器不变（偏差为 0，在半个步长以内）', () => {
     for (const d of contentUnits().filter(u => u.tier === 0)) {
-      expect(d.pen, `${d.key} 破甲`).toBe(BEFORE.pen[d.key] ?? 0);
+      expect(d.main.pen, `${d.key} 破甲`).toBe(BEFORE.pen[d.key] ?? 0);
       const isSiege = ARCHETYPES[d.arch].key === 'siege';
-      expect(d.splash, `${d.key} 范围杀伤`).toBe(BEFORE.splash[d.key] ?? 0);
+      expect(d.melee ? 0 : d.main.splash, `${d.key} 范围杀伤`).toBe(BEFORE.splash[d.key] ?? 0);
       if (isSiege) expect(d.key in BEFORE.splash, d.key).toBe(true);
       const block = BEFORE.block[d.key];
       if (block) expect(d.abilities.shield, `${d.key} 举盾`).toEqual({ block, speedMul: SHIELD_SPEED_MUL });
       else expect(d.abilities.shield, `${d.key} 举盾`).toBeUndefined();
-      expect(d.aux, `${d.key} 副武器`).toEqual(BEFORE.aux[d.key] ?? null);
+      const a = d.aux;
+      expect(a && { dmg: a.lvDmg[0], range: a.range, cd: a.lvCd[0], proj: a.proj }, `${d.key} 副武器`).toEqual(BEFORE.aux[d.key] ?? null);
       // 高级形态同样
       const e = UNITS[d.elite];
-      expect([e.pen, e.splash, e.abilities.shield, e.aux], d.key).toEqual([d.pen, d.splash, d.abilities.shield, d.aux]);
+      expect([e.main.pen, e.main.splash, e.abilities.shield, e.aux], d.key).toEqual([d.main.pen, d.main.splash, d.abilities.shield, d.aux]);
     }
   });
 
@@ -84,12 +85,12 @@ describe('副武器按特性计点', () => {
 
 describe('伤害类型按特性计点', () => {
   it('抛射器械基准打攻城伤害，穿刺攻击特性把它改成穿刺伤害；直射器械基准就是穿刺伤害，蝎弩不另挂特性；兵种表里不能直接填伤害类型', () => {
-    expect(UNIT_BY_KEY.onager.atk).toBe(A_SIEGE);
-    expect(TRAITS.pierce.atk).toBe(A_PIERCE);
-    expect(traitMix(['pierce']).atk).toBe(A_PIERCE);
+    expect(UNIT_BY_KEY.onager.main.atk).toBe(A_SIEGE);
+    expect(TRAITS.pierce.main?.atk).toBe(A_PIERCE);
+    expect(traitMix(['pierce']).main.atk).toBe(A_PIERCE);
     expect(UNIT_BY_KEY.scorpio.ownTraits).not.toContain('pierce');
-    expect(UNIT_BY_KEY.scorpio.atk).toBe(A_PIERCE);
-    expect(UNITS[UNIT_BY_KEY.scorpio.elite].atk).toBe(A_PIERCE);
+    expect(UNIT_BY_KEY.scorpio.main.atk).toBe(A_PIERCE);
+    expect(UNITS[UNIT_BY_KEY.scorpio.elite].main.atk).toBe(A_PIERCE);
     expect(() => expandUnit({ faction: 'china', key: 't', name: 't', arch: 'siege', spec: { atk: A_PIERCE } as object, desc: '' }, EXPAND_RULES, false)).toThrow('特性');
   });
 });

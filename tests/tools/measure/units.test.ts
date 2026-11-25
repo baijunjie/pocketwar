@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AU_RANGED_TAKEN, A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, POSITIONS, TRAITS } from '../../../src/sim/defs';
+import { AU_RANGED_TAKEN, A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, POSITIONS, RULES, STEP, TRAITS } from '../../../src/sim/defs';
 import { BASE, REF_SHARE, SLOTS, proxySlots, refCounts, refForce, refForcePerHead, slotOf, variant } from '../../../tools/measure/units';
 
 describe('测量工具：位置与顶替', () => {
@@ -45,12 +45,12 @@ describe('测量工具：直射器械基准单位', () => {
     const bolt = ARCHETYPES.find(a => a.key === 'bolt')!.panel;
     const d = BASE.bolt;
     expect(d.hp).toBe(Math.round(bolt.hp * HP_SCALE));
-    expect([d.dmg, d.cd, d.range]).toEqual([bolt.dmg, bolt.cd, bolt.range]);
-    expect(d.atk).toBe(A_PIERCE);
-    expect(d.splash).toBe(0);
-    expect(d.pen).toBe(0);
-    expect(BASE.siege.atk).toBe(A_SIEGE);
-    expect(BASE.siege.splash).toBe(30);
+    expect([d.main.lvDmg[0], d.main.lvCd[0], d.main.range]).toEqual([bolt.dmg, bolt.cd, bolt.range]);
+    expect(d.main.atk).toBe(A_PIERCE);
+    expect(d.main.splash).toBe(0);
+    expect(d.main.pen).toBe(0);
+    expect(BASE.siege.main.atk).toBe(A_SIEGE);
+    expect(BASE.siege.main.splash).toBe(30);
   });
 });
 
@@ -67,5 +67,40 @@ describe('测量工具：变体带上光环特性', () => {
     const v = variant(BASE.inf, {}, ['cover']);
     expect(variant(v, { hp: 2 }).auras).toEqual(v.auras);
     expect(variant(v, {}, ['pilum']).auras).toEqual(v.auras);
+  });
+});
+
+describe('测量工具：变体按武器模型改面板', () => {
+  it('攻击距离加级：近战基准的主武器攻击距离在贴身距离上加每级 15 像素，不改伤害与间隔，也不动基准本身', () => {
+    const contact = RULES.combat.meleeContact;
+    expect(BASE.inf.main.range).toBe(contact);
+    const v = variant(BASE.inf, { reach: 1 });
+    expect(v.main.range).toBe(contact + STEP.reach);
+    expect(v.melee).toBe(true);
+    expect(v.lv.reach).toBe(1);
+    expect([v.main.lvDmg[0], v.main.lvCd[0]]).toEqual([BASE.inf.main.lvDmg[0], BASE.inf.main.lvCd[0]]);
+    expect(BASE.inf.main.range).toBe(contact);
+    // 在已有攻击距离的变体上再加，是累加
+    expect(variant(v, { reach: 1 }).main.range).toBe(contact + 2 * STEP.reach);
+    expect(variant(v, { reach: 1 }).lv.reach).toBe(2);
+    // 别的维度的变体沿用基准的攻击距离
+    expect(variant(BASE.inf, { hp: 2 }).main.range).toBe(contact);
+    expect(variant(v, { hp: 2 }).main.range).toBe(contact + STEP.reach);
+  });
+
+  it('远程基准射程加级照旧、不受攻击距离影响；特性改主武器：穿刺攻击把抛射器械的主武器改成穿刺伤害，基准不变', () => {
+    expect(variant(BASE.ranged, { rng: 4 }).main.range).toBeGreaterThan(BASE.ranged.main.range);
+    expect(BASE.siege.main.atk).toBe(A_SIEGE);
+    const v = variant(BASE.siege, {}, ['pierce']);
+    expect(v.main.atk).toBe(A_PIERCE);
+    expect(BASE.siege.main.atk).toBe(A_SIEGE);
+  });
+
+  it('加副武器特性的变体带副武器，不改基准的武器表', () => {
+    const v = variant(BASE.inf, {}, ['pilum']);
+    expect(v.aux).not.toBeNull();
+    expect(v.aux!.range).toBe(TRAITS.pilum.aux!.range);
+    expect(v.main).not.toBe(BASE.inf.main);
+    expect(BASE.inf.aux).toBeNull();
   });
 });

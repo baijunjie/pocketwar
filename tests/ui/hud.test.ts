@@ -11,8 +11,8 @@ describe('兵种提示', () => {
       expect(lines[0], d.key).toBe(`${d.name}（${unitKind(d)}）`);
       expect(lines[1], d.key).toBe(d.desc);
       expect(lines[2], d.key).toContain(`生命 ${d.hp}`);
-      expect(lines[2], d.key).toContain(`攻击 ${d.dmg}`);
-      expect(lines[2], d.key).toContain(`攻速 ${d.cd}s`);
+      expect(lines[2], d.key).toContain(`攻击 ${d.main.lvDmg[0]}`);
+      expect(lines[2], d.key).toContain(`攻速 ${d.main.lvCd[0]}s`);
       expect(lines[3], d.key).toContain(`护甲 ${d.armM}/${d.armP}`);
       expect(lines[4], d.key).toContain(`体型 ${SIZES[d.size].name}`);
     }
@@ -21,12 +21,24 @@ describe('兵种提示', () => {
   it('近战写「近战」，远程写射程数值', () => {
     const melee = UNIT_BY_KEY.dao, ranged = UNIT_BY_KEY.nu;
     expect(unitTip(melee)).toContain('射程 近战');
-    expect(unitTip(ranged)).toContain(`射程 ${ranged.range}`);
+    expect(unitTip(ranged)).toContain(`射程 ${ranged.main.range}`);
+  });
+
+  it('近战武器的攻击距离比贴身长的，射程一栏写「近战 距离」：长戟兵写「近战 22」，贴身的写「近战」', () => {
+    for (const k of ['ji', 'yari', 'auxilia', 'spara']) expect(unitTip(UNIT_BY_KEY[k]), k).toContain('射程 近战 22');
+    for (const d of UNITS.filter(d => d.tier === 0 && isContentUnit(d) && d.melee)) {
+      const line = unitTip(d).split('\n')[3];
+      if (d.main.range > 7) expect(line, d.key).toContain(`射程 近战 ${d.main.range}`);
+      else expect(line.startsWith('射程 近战　'), d.key).toBe(true);
+    }
+    expect(unitTip(UNIT_BY_KEY.dao).split('\n')[3]).toContain('射程 近战　护甲');
+    // 高级形态的攻击距离与初级一样
+    expect(unitTip(UNITS[UNIT_BY_KEY.ji.elite])).toContain('射程 近战 22');
   });
 
   it('范围杀伤的兵种在攻击后标注「范围」', () => {
     for (const d of UNITS.filter(d => d.tier === 0 && isContentUnit(d))) {
-      expect(unitTip(d).split('\n')[2].includes('（范围）'), d.key).toBe(d.splash > 0);
+      expect(unitTip(d).split('\n')[2].includes('（范围）'), d.key).toBe(d.main.splash > 0);
     }
   });
 

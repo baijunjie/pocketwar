@@ -1,6 +1,7 @@
 import { T_GRASS } from '../src/sim/defs';
 import { GameMap } from '../src/sim/map';
 import { World } from '../src/sim/world';
+import type { TowerDef, TowerWeapon } from '../src/sim/defs';
 
 /**
  * 一块空旷平地，没有据点和建筑；默认关掉昼夜天气，需要时自己打开。paint 可以在建世界之前改地形。
@@ -70,4 +71,14 @@ export function spinStats(w: World, slots: number[], secs: number): { turn: numb
     cnt++;
   });
   return { turn: cnt ? tSum / cnt : 0, wander: cnt ? wSum / cnt : 0, idle: cnt };
+}
+
+/** 建筑火力里的箭（fan 武器） */
+export function arrowsOf(t: TowerDef | null): TowerWeapon {
+  return t!.weapons.find(x => x.fan)!;
+}
+
+/** 建筑火力里的炮弹（非 fan 武器），没有就是 undefined */
+export function shellFire(t: TowerDef | null): TowerWeapon | undefined {
+  return t!.weapons.find(x => !x.fan);
 }

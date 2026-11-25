@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDINGS, RULES, SITE_CAMP, SITE_CITY, T_MOUNTAIN, TILE, UNIT_BY_KEY } from '../../../src/sim/defs';
+import { BUILDINGS, P_TORCH, RULES, SITE_CAMP, SITE_CITY, STEP, T_MOUNTAIN, TILE, TRAITS, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { fightState, siteContains } from '../../../src/sim/siteArea';
 import { S_COMBAT } from '../../../src/sim/world';
-import { NONE, O_AMOVE, O_ATTACK, O_IDLE, O_MOVE, S_CHARGE, S_ROUT, S_WALL } from '../../../src/sim/state';
+import { ENG_CLOSE, ENG_NONE, ENG_REACH, NONE, O_AMOVE, O_ATTACK, O_IDLE, O_MOVE, S_CHARGE, S_ROUT, S_SHIELD, S_WALL } from '../../../src/sim/state';
 import { createGame } from '../../../src/sim/setup';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE } from '../../../src/sim/systems/around';
 import { tryDetour } from '../../../src/sim/systems/detour';
-import { kill } from '../../../src/sim/systems/combat';
+import { damageUnit, kill } from '../../../src/sim/systems/combat';
 import { canAttackBuilding } from '../../../src/sim/systems/targeting';
 import type { Site, World } from '../../../src/sim/world';
+import { BASE, variant } from '../../../tools/measure/units';
 import { flatWorld, run } from '../../helpers';
 
 const C = (120 * TILE) / 2;
@@ -1625,7 +1626,7 @@ describe('追击时直线不通就绕过去', () => {
     const w = flatWorld(120, 7, (t, n) => wallV(t, n, 57, 58, 62));
     const me = mine(w, mid(56), mid(60), 'nu');
     const foe = dummy(w, mid(65), mid(60));
-    const range = w.defs[w.type[me]].range;
+    const range = w.defs[w.type[me]].main.range;
     expect(w.lineBlocked(w.x[me], w.y[me], w.x[foe], w.y[foe], 1)).toBe(true);
     expect(Math.hypot(w.x[foe] - w.x[me], w.y[foe] - w.y[me])).toBeGreaterThan(range + TILE);
     w.orderMove([me], mid(56), mid(40), true);
@@ -1650,7 +1651,7 @@ describe('追击时直线不通就绕过去', () => {
     const w = flatWorld(120, 7, (t, n) => wallV(t, n, 57, 44, 76));
     const me = mine(w, mid(56), mid(60), 'nu');
     const foe = dummy(w, mid(65), mid(60));
-    expect(Math.hypot(w.x[foe] - w.x[me], w.y[foe] - w.y[me])).toBeGreaterThan(w.defs[w.type[me]].range + TILE);
+    expect(Math.hypot(w.x[foe] - w.x[me], w.y[foe] - w.y[me])).toBeGreaterThan(w.defs[w.type[me]].main.range + TILE);
     w.orderMove([me], mid(56), mid(40), true);
     let none = false, dropped = false, avoided = false, ignored = false, seen = false;
     step(w, 30 * 6, () => {
@@ -2041,7 +2042,7 @@ describe('远程单位主动去打登上城墙的敌兵', () => {
     expect(r.targeted).toBe(true);
     expect(damaged(w, e)).toBeGreaterThan(0);
     // 不贴着墙根：停在射程边缘（射程 + 双方半径）
-    const reach = UNIT_BY_KEY.nu.range + w.rad[u] + w.rad[e];
+    const reach = UNIT_BY_KEY.nu.main.range + w.rad[u] + w.rad[e];
     expect(Math.hypot(w.x[u] - w.x[e], w.y[u] - w.y[e])).toBeLessThanOrEqual(reach + 4);
     expect(Math.hypot(w.x[u] - w.x[e], w.y[u] - w.y[e])).toBeGreaterThan(reach * 0.8);
     w.removeUnit(e);
@@ -2355,7 +2356,7 @@ describe('远程单位主动去打登上城墙的敌兵', () => {
       expect(w.wallUid[u], '不再按墙顶敌兵复核').toBe(0);
       const r = watch(w, u, e, 12);
       expect(damaged(w, e), '追上去打了').toBeGreaterThan(0);
-      expect(r.nearest).toBeLessThanOrEqual(UNIT_BY_KEY.nu.range + 40);
+      expect(r.nearest).toBeLessThanOrEqual(UNIT_BY_KEY.nu.main.range + 40);
     });
   });
 
@@ -2399,5 +2400,398 @@ describe('远程单位主动去打登上城墙的敌兵', () => {
     expect(r.targeted).toBe(false);
     expect(r.away).toBeLessThan(5);
     expect(1e7 - w.hp[foe]).toBe(0);
+  });
+});
+
+describe('近战武器的攻击距离：长兵器隔一段距离出手', () => {
+  const contact = RULES.combat.meleeContact;
+  const reach = contact + STEP.reach;
+  /** 血量充裕、原地坚守的敌方靶子（队伍 2）。血量不能取得太大，float32 装不下一次出手的损伤 */
+  const puppet = (w: World, x: number, y: number, key = 'dao'): number => {
+    const e = w.spawnUnit(idx(key), 2, x, y);
+    w.hp[e] = w.maxHp[e] = 1e5;
+    w.orderStop([e], true);
+    return e;
+  };
+  const ally = (w: World, x: number, y: number, key: string): number => {
+    const u = w.spawnUnit(idx(key), 1, x, y);
+    w.hp[u] = w.maxHp[u] = 1e5;
+    return u;
+  };
+  /** 两人身体边缘的间距（沿 x 轴摆的） */
+  const gap = (w: World, a: number, e: number): number => Math.hypot(w.x[e] - w.x[a], w.y[e] - w.y[a]) - w.rad[a] - w.rad[e];
+  const R = UNIT_BY_KEY.dao.radius * 2;
+
+  it('场景前提：长戟兵、足轻枪兵、辅助矛兵、持盾矛兵的攻击距离比贴身多一排，其余近战是贴身', () => {
+    for (const k of ['ji', 'yari', 'auxilia', 'spara']) expect(UNIT_BY_KEY[k].main.range, k).toBe(reach);
+    expect(UNIT_BY_KEY.dao.main.range).toBe(contact);
+    expect(reach).toBeGreaterThan(contact);
+  });
+
+  it('间距在攻击距离以内、比贴身远：长兵器脚下不动直接出手；贴身兵种在同样的间距上要走上前去', () => {
+    for (const k of ['ji', 'yari', 'auxilia', 'spara']) {
+      const w = flatWorld(120, 7);
+      const a = ally(w, C, C, k), e = puppet(w, C + R + 15, C);
+      expect(gap(w, a, e)).toBeCloseTo(15, 9);
+      const x0 = w.x[a];
+      let hit = -1;
+      step(w, 90, t => {
+        if (hit < 0 && w.hp[e] < 1e5) hit = t;
+      });
+      expect(hit, k).toBeGreaterThanOrEqual(0);
+      expect(hit, k).toBeLessThan(45);
+      expect(Math.abs(w.x[a] - x0), k).toBeLessThan(0.5);
+    }
+    const w = flatWorld(120, 7);
+    const a = ally(w, C, C, 'dao'), e = puppet(w, C + R + 15, C);
+    const x0 = w.x[a];
+    step(w, 90);
+    expect(w.x[a] - x0).toBeGreaterThan(3);
+    expect(gap(w, a, e)).toBeLessThanOrEqual(contact + 1);
+    expect(w.hp[e]).toBeLessThan(1e5);
+  });
+
+  it('接敌时进了攻击距离就停下出手：第一次出手时的间距在攻击距离附近（比贴身远得多）；贴身兵种出手时贴着对方', () => {
+    const at = (key: string): number => {
+      const w = flatWorld(120, 7);
+      const a = ally(w, C, C, key), e = puppet(w, C + R + 100, C);
+      w.orderMove([a], C + 500, C, true);
+      let g = -1;
+      step(w, 200, () => {
+        if (g < 0 && w.hp[e] < 1e5) g = gap(w, a, e);
+      });
+      return g;
+    };
+    const long = at('yari'), short = at('dao');
+    expect(long).toBeGreaterThan(contact + 8);
+    expect(long).toBeLessThanOrEqual(reach + 1);
+    expect(short).toBeGreaterThanOrEqual(0);
+    expect(short).toBeLessThanOrEqual(contact + 1);
+  });
+
+  it('隔着一个自己人也能出手，不用贴上去：自己人在中间不动，长兵器站在后面照样打到敌人', () => {
+    const w = flatWorld(120, 7);
+    const e = puppet(w, C + 100, C);
+    const front = ally(w, C + 100 - R - contact, C, 'dao');
+    // 前排的自己人压住出手，免得伤害分不清是谁打的
+    w.cd[front] = 1e9;
+    const back = ally(w, C + 100 - R - contact - 13, C, 'yari');
+    expect(gap(w, back, e)).toBeGreaterThan(contact);
+    expect(gap(w, back, e)).toBeLessThanOrEqual(reach);
+    const x0 = w.x[back];
+    step(w, 60);
+    expect(w.hp[e]).toBeLessThan(1e5);
+    expect(Math.abs(w.x[back] - x0)).toBeLessThan(1);
+  });
+
+  describe('超出贴身的那一段要与目标之间直线可通', () => {
+    /** 长兵器与敌人隔着一格矿山，间距在攻击距离以内（21）、比贴身远；wall 为假时没有墙 */
+    const scene = (wall: boolean) => {
+      const w = flatWorld(120, 7, (t, n) => {
+        if (wall) for (let y = 44; y <= 76; y++) t[y * n + 60] = T_MOUNTAIN;
+      });
+      const a = ally(w, 60 * TILE - 0.5, C, 'yari'), e = puppet(w, 61 * TILE + 0.5, C);
+      return { w, a, e };
+    };
+
+    it('隔着墙：间距虽在攻击距离以内，够不着，几秒内敌人不掉血；去掉墙就打得到', () => {
+      const open = scene(false);
+      expect(gap(open.w, open.a, open.e)).toBeGreaterThan(contact);
+      expect(gap(open.w, open.a, open.e)).toBeLessThanOrEqual(reach);
+      expect(open.w.lineBlocked(open.w.x[open.a], open.w.y[open.a], open.w.x[open.e], open.w.y[open.e], 1)).toBe(false);
+      step(open.w, 90);
+      expect(open.w.hp[open.e]).toBeLessThan(1e5);
+      const { w, a, e } = scene(true);
+      expect(gap(w, a, e)).toBeLessThanOrEqual(reach);
+      expect(w.lineBlocked(w.x[a], w.y[a], w.x[e], w.y[e], 1)).toBe(true);
+      step(w, 90);
+      expect(w.hp[e]).toBe(1e5);
+    });
+  });
+
+  describe('冲锋中只按贴身距离算够不够得着', () => {
+    const charge = (charging: boolean) => {
+      const cav = variant(BASE.cav, { reach: 1 });
+      expect(cav.main.range).toBe(reach);
+      const w = flatWorld(120, 7);
+      const a = w.spawnUnit(cav.idx, 1, C, C);
+      w.hp[a] = w.maxHp[a] = 1e5;
+      const e = puppet(w, C + 300, C);
+      if (!charging) w.chargeCd[a] = 1e9;
+      w.orderMove([a], C + 700, C, true);
+      let minCharging = Infinity, first = -1, charged = false;
+      step(w, 200, () => {
+        const g = gap(w, a, e);
+        if (w.state[a] & S_CHARGE) {
+          charged = true;
+          minCharging = Math.min(minCharging, g);
+        }
+        if (first < 0 && w.hp[e] < 1e5) first = g;
+      });
+      return { charged, minCharging, first };
+    };
+
+    it('冲锋的骑兵不在攻击距离处停下，冲到贴身才出手；不冲锋的同款骑兵在攻击距离处出手', () => {
+      const c = charge(true);
+      expect(c.charged).toBe(true);
+      expect(c.minCharging).toBeLessThanOrEqual(contact);
+      expect(c.first).toBeLessThanOrEqual(contact + 1);
+      const n = charge(false);
+      expect(n.charged).toBe(false);
+      expect(n.first).toBeGreaterThan(contact + 8);
+      expect(n.first).toBeLessThanOrEqual(reach + 1);
+    });
+  });
+
+  describe('隔着贴身距离出手的长兵器不算钉在战位上', () => {
+    it('叠在自己人身上时照常被推开：前排自己人站定出手，叠上来的长兵器被推到不重叠为止', () => {
+      const w = flatWorld(120, 7);
+      const e = puppet(w, C + 100, C);
+      const front = ally(w, C + 100 - R - contact, C, 'dao');
+      const back = ally(w, C + 100 - R - contact - 8, C, 'yari');
+      const dist = (): number => Math.hypot(w.x[front] - w.x[back], w.y[front] - w.y[back]);
+      expect(dist()).toBeLessThan(R);
+      const x0 = w.x[back];
+      step(w, 30);
+      expect(gap(w, back, e)).toBeGreaterThan(contact);
+      expect(gap(w, back, e)).toBeLessThanOrEqual(reach);
+      expect(w.x[back]).toBeLessThan(x0 - 0.5);
+      expect(dist()).toBeGreaterThanOrEqual(R - 0.1);
+      expect(w.hp[e]).toBeLessThan(1e5);
+    });
+
+    it('贴身出手的单位仍然钉住：站定出手后，后面挤上来的自己人推不动它', () => {
+      const w = flatWorld(120, 7);
+      const e = puppet(w, C + 100, C);
+      const front = ally(w, C + 100 - R - 5, C, 'dao');
+      ally(w, C + 100 - R - 5 - 40, C, 'dao');
+      step(w, 5);
+      expect(gap(w, front, e)).toBeLessThanOrEqual(contact);
+      const x0 = w.x[front];
+      step(w, 90);
+      expect(Math.abs(w.x[front] - x0)).toBeLessThan(0.5);
+      expect(w.hp[e]).toBeLessThan(1e5);
+    });
+  });
+});
+
+const contactOf = (): number => RULES.combat.meleeContact;
+const TRAITS_AUX = { pilum: TRAITS.pilum.aux!, sidebow: TRAITS.sidebow.aux! };
+
+describe('选武器：主武器、副武器与对建筑武器', () => {
+  const puppet = (w: World, x: number, y: number): number => {
+    const e = w.spawnUnit(idx('dao'), 2, x, y);
+    w.hp[e] = w.maxHp[e] = 1e5;
+    w.orderStop([e], true);
+    return e;
+  };
+  const gap = (w: World, a: number, e: number): number => Math.hypot(w.x[e] - w.x[a], w.y[e] - w.y[a]) - w.rad[a] - w.rad[e];
+
+  for (const [key, trait] of [['legion', 'pilum'], ['immortal', 'sidebow']] as const) {
+    it(`${UNIT_BY_KEY[key].name}：主武器够不着就继续上前，途中副武器够得着且冷却好了就用副武器出手；主武器没有出手，副武器的冷却单独计`, () => {
+      const d = UNIT_BY_KEY[key], aux = TRAITS_AUX[trait];
+      const w = flatWorld(120, 7);
+      const a = w.spawnUnit(d.idx, 1, C, C);
+      w.hp[a] = w.maxHp[a] = 1e5;
+      const e = puppet(w, C + aux.range + 80, C);
+      w.orderMove([a], C + 900, C, true);
+      let fired = -1, gapAtFire = 0, mainCd = 0;
+      let prevAux = 0;
+      for (let t = 0; t < 400 && fired < 0; t++) {
+        mainCd = w.cd[a];
+        w.tick();
+        w.fxN = 0;
+        if (w.auxCd[a] > prevAux + 0.5) {
+          fired = t;
+          gapAtFire = gap(w, a, e);
+        }
+        prevAux = w.auxCd[a];
+      }
+      expect(fired).toBeGreaterThanOrEqual(0);
+      // 出手时离敌人还远（主武器够不着），但副武器已经够得着
+      expect(gapAtFire).toBeGreaterThan(d.main.range + 20);
+      expect(gapAtFire).toBeLessThanOrEqual(aux.range + 1);
+      // 副武器出手没有动主武器的冷却（冷却只会往下走）
+      expect(w.cd[a]).toBeLessThanOrEqual(mainCd);
+      expect(w.auxCd[a]).toBeGreaterThanOrEqual(aux.cd * 0.9);
+      expect(w.auxCd[a]).toBeLessThanOrEqual(aux.cd * 1.1);
+      // 之后脚下继续往前走，直到主武器够得着
+      const g0 = gapAtFire;
+      step(w, 45);
+      expect(gap(w, a, e)).toBeLessThan(g0 - 15);
+    });
+
+    it(`${UNIT_BY_KEY[key].name}：主武器够得着时站定用主武器，不用副武器`, () => {
+      const d = UNIT_BY_KEY[key];
+      const w = flatWorld(120, 7);
+      const a = w.spawnUnit(d.idx, 1, C, C);
+      w.hp[a] = w.maxHp[a] = 1e5;
+      const e = puppet(w, C + d.radius * 2 + 4, C);
+      expect(gap(w, a, e)).toBeLessThanOrEqual(d.main.range);
+      step(w, 90);
+      expect(w.auxCd[a]).toBe(0);
+      expect(w.hp[e]).toBeLessThan(1e5);
+    });
+  }
+
+  it('打建筑用对建筑武器：刀盾兵在火把距离处站定扔火把；战象没有对建筑武器，贴上去用主武器，也不扔火把', () => {
+    const attack = (key: string) => {
+      const w = flatWorld(120, 7);
+      const b = w.addBuilding(BUILDINGS.outpost, 70, 58, 2, -1);
+      const a = w.spawnUnit(idx(key), 1, C - 200, C);
+      w.hp[a] = w.maxHp[a] = 1e5;
+      w.orderAttackBuilding([a], b);
+      const hp0 = b.hp;
+      let torches = 0, min = Infinity;
+      step(w, 400, () => {
+        for (let p = 0; p < w.pn; p++) if (w.pType[p] === P_TORCH) torches++;
+        min = Math.min(min, b.x0 - w.x[a] - w.rad[a]);
+      });
+      return { torches, min, lost: hp0 - b.hp };
+    };
+    const dao = attack('dao'), el = attack('elephant');
+    expect(dao.torches).toBeGreaterThan(0);
+    expect(dao.lost).toBeGreaterThan(0);
+    expect(dao.min).toBeGreaterThan(contactOf() + 20);
+    expect(dao.min).toBeLessThanOrEqual(RULES.siege.torchRange + 1);
+    expect(el.torches).toBe(0);
+    expect(el.lost).toBeGreaterThan(0);
+    expect(el.min).toBeLessThanOrEqual(contactOf() + 2);
+  });
+});
+
+describe('交手状态：没交手、肉搏、隔着贴身距离出手', () => {
+  const contact = RULES.combat.meleeContact;
+  const puppet = (w: World, x: number, y: number, key = 'dao'): number => {
+    const e = w.spawnUnit(idx(key), 2, x, y);
+    w.hp[e] = w.maxHp[e] = 1e5;
+    w.orderStop([e], true);
+    return e;
+  };
+  const ally = (w: World, x: number, y: number, key: string): number => {
+    const u = w.spawnUnit(idx(key), 1, x, y);
+    w.hp[u] = w.maxHp[u] = 1e5;
+    return u;
+  };
+  const R = UNIT_BY_KEY.dao.radius * 2;
+
+  it('三种状态的取值：没交手是 0，肉搏与隔着贴身距离出手都非 0 且互不相同', () => {
+    expect(ENG_NONE).toBe(0);
+    expect(ENG_CLOSE).not.toBe(ENG_NONE);
+    expect(ENG_REACH).not.toBe(ENG_NONE);
+    expect(ENG_CLOSE).not.toBe(ENG_REACH);
+  });
+
+  it('远处没敌人是没交手；贴身出手是肉搏；长兵器在比贴身远的间距出手是隔着贴身距离出手；长兵器贴到贴身距离内出手则是肉搏', () => {
+    const w = flatWorld(120, 7);
+    const lone = ally(w, C - 500, C, 'yari');
+    const e = puppet(w, C + 200, C);
+    const dao = ally(w, C + 200 - R - 5, C, 'dao');
+    const e2 = puppet(w, C + 200, C - 300);
+    const yari = ally(w, C + 200 - R - 15, C - 300, 'yari');
+    const e3 = puppet(w, C + 200, C + 300);
+    const close = ally(w, C + 200 - R - 4, C + 300, 'yari');
+    step(w, 90);
+    expect(w.engaged[lone]).toBe(ENG_NONE);
+    expect(w.engaged[dao]).toBe(ENG_CLOSE);
+    expect(w.engaged[yari]).toBe(ENG_REACH);
+    expect(w.engaged[close]).toBe(ENG_CLOSE);
+    // 目标都被打到了
+    for (const t of [e, e2, e3]) expect(w.hp[t]).toBeLessThan(1e5);
+  });
+
+  describe('围攻人数：只算会去贴身的近战', () => {
+    /** 靶子在 (C, C)，围着它的是 key 兵种：贴身（间距 5）或隔着贴身距离（间距 15），各 3 个 */
+    const crowdOf = (key: string, gapPx: number): { w: World; foe: number; units: number[] } => {
+      const w = flatWorld(120, 7);
+      const foe = puppet(w, C, C);
+      const dist = R + gapPx;
+      const units = [[-dist, 0], [-dist * 0.8, dist * 0.6], [-dist * 0.8, -dist * 0.6]].map(([dx, dy]) => ally(w, C + dx, C + dy, key));
+      step(w, 30);
+      return { w, foe, units };
+    };
+
+    it('贴身肉搏的近战都计入目标的围攻人数', () => {
+      const { w, foe, units } = crowdOf('dao', 4);
+      for (const u of units) expect(w.engaged[u]).toBe(ENG_CLOSE);
+      expect(w.crowd[foe]).toBe(3);
+    });
+
+    it('隔着贴身距离出手的长兵器不计入目标的围攻人数', () => {
+      const { w, foe, units } = crowdOf('yari', 14);
+      for (const u of units) {
+        expect(w.target[u]).toBe(foe);
+        expect(w.engaged[u]).toBe(ENG_REACH);
+      }
+      expect(w.crowd[foe]).toBe(0);
+    });
+
+    it('同一个目标上，贴身的计、隔排的不计：一个贴身加两个隔排，围攻人数是 1', () => {
+      const w = flatWorld(120, 7);
+      const foe = puppet(w, C, C);
+      const near = ally(w, C - R - 4, C, 'dao');
+      const far1 = ally(w, C + R + 14, C, 'yari'), far2 = ally(w, C, C - R - 14, 'yari');
+      step(w, 30);
+      expect([w.engaged[near], w.engaged[far1], w.engaged[far2]]).toEqual([ENG_CLOSE, ENG_REACH, ENG_REACH]);
+      expect(w.crowd[foe]).toBe(1);
+    });
+  });
+
+  describe('举盾：隔排出手不算肉搏', () => {
+    const shooter = (w: World, x: number, y: number): number => {
+      const e = puppet(w, x, y, 'nu');
+      w.cd[e] = 1e9;
+      return e;
+    };
+
+    it('后排隔着贴身距离出手的举盾长兵器（辅助矛兵、持盾矛兵）看到远程敌人就举盾；贴身肉搏的举盾兵腾不出手', () => {
+      for (const k of ['auxilia', 'spara']) {
+        const w = flatWorld(120, 7);
+        // 最近的敌人是不出手的弩兵：长兵器在它的攻击距离内，近战的盾兵则贴着它
+        shooter(w, C + R + 15, C);
+        const back = ally(w, C, C, k);
+        shooter(w, C + R + 4, C + 400);
+        const front = ally(w, C, C + 400, 'dao');
+        step(w, 30);
+        expect(w.engaged[back], k).toBe(ENG_REACH);
+        expect(w.engaged[front], k).toBe(ENG_CLOSE);
+        expect(w.state[back] & S_SHIELD, k).toBe(S_SHIELD);
+        expect(w.state[front] & S_SHIELD, k).toBe(0);
+      }
+    });
+
+    it('挨了远程伤害：隔排出手的举盾长兵器举盾，举着时远程伤害按举盾减免；贴身肉搏的仍然举不了', () => {
+      const w = flatWorld(120, 7);
+      const foe = puppet(w, C + R + 15, C);
+      const back = ally(w, C, C, 'spara');
+      const foe2 = puppet(w, C + R + 4, C + 400);
+      const front = ally(w, C, C + 400, 'dao');
+      w.cd[foe] = w.cd[foe2] = 1e9;
+      step(w, 30);
+      expect([w.engaged[back], w.engaged[front]]).toEqual([ENG_REACH, ENG_CLOSE]);
+      expect([w.shieldT[back], w.shieldT[front]]).toEqual([0, 0]);
+      const archer = w.spawnUnit(idx('nu'), 2, C + 150, C - 200);
+      w.hp[archer] = w.maxHp[archer] = 1e5;
+      damageUnit(w, back, 10, 1, 0, null, 2, archer);
+      damageUnit(w, front, 10, 1, 0, null, 2, archer);
+      expect(w.shieldT[back]).toBeGreaterThan(0);
+      expect(w.shieldT[front]).toBe(0);
+      // 举着盾时受到的远程伤害按举盾减免
+      w.tick();
+      w.fxN = 0;
+      expect(w.state[back] & S_SHIELD).toBe(S_SHIELD);
+      const block = UNIT_BY_KEY.spara.abilities.shield!.block;
+      const lose = (): number => {
+        const h = w.hp[back];
+        damageUnit(w, back, 10, 1, 0, null, 2, archer);
+        const l = h - w.hp[back];
+        w.hp[back] = h;
+        return l;
+      };
+      const shielded = lose();
+      w.state[back] &= ~S_SHIELD;
+      const bare = lose();
+      expect(shielded / bare).toBeCloseTo(1 - block, 3);
+    });
   });
 });
