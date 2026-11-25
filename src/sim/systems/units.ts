@@ -7,13 +7,13 @@ import { DIRX, DIRY } from '../nav';
 import { siteContains } from '../siteArea';
 import { FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
 import type { World } from '../world';
-import { attack, damageUnit, spawnProj, windRangeMul } from './combat';
+import { attack, damageUnit, spawnProj } from './combat';
 import { orderAttackUnit, orderMove } from './orders';
 import { P_NONE, P_POSTED, stepPost } from './garrison';
 import { SLOT, marchSlot } from './march';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
-import { SCAN, canAttackBuilding, findBuilding, scan } from './targeting';
+import { SCAN, canAttackBuilding, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from './targeting';
 import { STEP, detourPasses, detourProgress, detourStep, startWait, tryDetour } from './detour';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE, chaseWay, findAround, keepWay } from './around';
 
@@ -51,9 +51,12 @@ export function updateUnits(w: World): void {
   // 每个单位正被多少近战敌人盯着（索敌时避开已经围满的目标）
   const crowd = w.crowd;
   crowd.fill(0, 0, n);
+  // 两方各有多少人站在墙顶上（远程单位没目标时，没有敌兵上墙就不用再多扫一圈）
+  const onWallN = [0, 0, 0];
   for (let i = 0; i < n; i++) {
     const t = target[i];
     if (alive[i] && t >= 0 && defs[type[i]].range === 0 && crowd[t] < 250) crowd[t]++;
+    if (alive[i] && state[i] & S_WALL) onWallN[team[i]]++;
   }
 
   for (let i = 0; i < n; i++) {
@@ -86,7 +89,7 @@ export function updateUnits(w: World): void {
     if (w.detourLoose[i] > 0) w.detourLoose[i] -= DT;
     if (w.wayNoT[i] > 0) w.wayNoT[i] -= DT;
     // 目标不再是敌兵（清空或换成建筑，不论在哪里换的）：追击绕行的判断跟着作废
-    if (target[i] < 0) w.wayUid[i] = 0;
+    if (target[i] < 0) w.wayUid[i] = w.wallUid[i] = 0;
     let st = state[i];
     let ord = order[i];
     let tgt = target[i];
@@ -208,6 +211,18 @@ export function updateUnits(w: World): void {
             w.waitT[i] = 0;
           }
         }
+        // 追着自己挑的墙顶敌兵（wallUid）去的远程：墙顶守军会沿墙挪位、下墙，复核一下该不该放手：
+        // 走到刚好进射程的那一点变得不该去了（顶在墙根、进了塔的射程、目标下墙进城后直线不通），或待命的单位所在据点已平静而它也没在打我方的人，
+        // 就放手，交回原有逻辑：待命的回岗位，攻击移动的接着走；目标下了墙但够得着，就当普通目标追，不再复核
+        const wallHunter = auto && !melee && !d.siege && !guard && (ord === O_IDLE || ord === O_AMOVE);
+        if (w.wallUid[i] !== 0) {
+          if (!wallHunter || tgt < 0 || w.uid[tgt] !== w.wallUid[i]) w.wallUid[i] = 0;
+          else if (wallSpotBad(w, tm, tgt, ux, uy, d) || (ord === O_IDLE && state[tgt] & S_WALL && !foeSiteFighting(w, tgt) && !foeTargets(w, tgt, tm))) {
+            tgt = target[i] = NONE;
+            w.waitT[i] = 0;
+            w.wallUid[i] = 0;
+          } else if (!(state[tgt] & S_WALL)) w.wallUid[i] = 0;
+        }
         if (prov !== NONE && !w.engaged[i] && auto) {
           // 出击：改成明确的攻击命令（走寻路出城门），打完回原位
           const hx = w.homeX[i], hy = w.homeY[i];
@@ -243,6 +258,17 @@ export function updateUnits(w: World): void {
                 w.avoidT[i] = C.avoidFor;
                 w.wayNoT[i] = C.chaseRetry;
               }
+            }
+          }
+          // 远程单位索敌范围里没有敌兵时，去打墙顶上的，手头盯着的建筑也换过去（人形单位先打敌兵）。
+          // 待命的只在那座据点正在交战、或它自己正在打我方的人时才去（攻击移动是玩家下了进攻的命令）；据点里待命的守军由驻守系统接管，不在此列
+          if (!took && tgt < 0 && wallHunter && onWallN[3 - tm] > 0) {
+            const e = findWallFoe(w, i, tm, ux, uy, d, ord === O_IDLE ? C.wallSeek : 0, ord === O_IDLE);
+            if (e !== NONE) {
+              tgt = target[i] = e;
+              w.targetUid[i] = w.wallUid[i] = w.uid[e];
+              w.waitT[i] = 0;
+              took = true;
             }
           }
           if (!took && tgt === NONE && seekB && !d.siege) {
@@ -707,7 +733,10 @@ export function updateUnits(w: World): void {
     const mvx = nx - ux, mvy = ny - uy;
     const moved = Math.sqrt(mvx * mvx + mvy * mvy);
     const want = Math.sqrt(cwx * cwx + cwy * cwy);
-    if (flank) {
+    if (chasing && plant && d.range === 0) {
+      // 追击途中出手站定的那几帧（多是抛副武器；主武器刚出手、目标随即退出攻击距离的那几帧也一样）：既不算走通（不回落）、
+      // 也不算没走通（不累计），计时原样留着，之后接着攒。否则落进下面回落那条分支，已攒的进度清空，这一轮横挪就超出上限
+    } else if (flank) {
       // 绕向侧面找空位：不论有没有顺带往前蹭一点，都按比例记「追不上」，最多绕 blockedAfter ÷ flankStuck 秒
       w.stuck[i] += moved > want * DT * 0.3 ? DT * C.flankStuck : DT;
     } else if (want > 8 && (chasing ? mvx * cwx + mvy * cwy < want * want * DT * 0.3 : moved < want * DT * 0.3)) {
@@ -774,10 +803,14 @@ export function updateUnits(w: World): void {
 
 const ONE = [0];
 
-/** 待命的单位追敌：敌人离岗位超过这个距离（的平方）就不追。据点里的守军（远程，或追打过自己的人）按据点警戒距离算 */
+/**
+ * 待命的单位追敌：敌人离岗位超过这个距离（的平方）就不追。据点里的守军（远程，或追打过自己的人）按据点警戒距离算；
+ * 远程追的墙顶敌兵按 wallSeek 算（与 findWallFoe 挑目标时的离岗位距离一致）
+ */
 function idleLeash2(w: World, i: number, d: UnitDef, tgt: number): number {
   const C = RULES.combat, SITE = RULES.site;
-  const r = w.sheltered[i] && (d.range > 0 || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm : C.leash;
+  let r = w.sheltered[i] && (d.range > 0 || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm : C.leash;
+  if (d.range > 0 && tgt >= 0 && w.state[tgt] & S_WALL && C.wallSeek > r) r = C.wallSeek;
   return r * r * 1.2;
 }
 /** 据点里的近战守军不追出据点：目标在据点外、又不是最近打过自己的人，就该丢掉 */

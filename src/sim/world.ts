@@ -262,6 +262,8 @@ export class World {
    * 以及要绕时朝着走的路点
    */
   readonly wayUid = new Uint32Array(MAX_UNITS);
+  /** 远程主动挑的墙顶敌兵（uid，0 = 没有）：units.ts 据此在追的途中复核该不该放手 */
+  readonly wallUid = new Uint32Array(MAX_UNITS);
   readonly wayMode = new Uint8Array(MAX_UNITS);
   readonly wayX = new Float32Array(MAX_UNITS);
   readonly wayY = new Float32Array(MAX_UNITS);
@@ -510,7 +512,7 @@ export class World {
     this.avoidT[i] = this.waitT[i] = 0;
     this.waits[i] = this.crowd[i] = 0;
     this.detourT[i] = this.detourLoose[i] = 0;
-    this.wayUid[i] = this.wayMode[i] = this.wayNoT[i] = 0;
+    this.wayUid[i] = this.wayMode[i] = this.wayNoT[i] = this.wallUid[i] = 0;
     this.seen[i] = 0;
     this.sheltered[i] = 0;
     for (let k = 0; k < AURA_KINDS.length; k++) this.aura[k][i] = AURA_KINDS[k].neutral;
@@ -688,11 +690,8 @@ export class World {
     for (const s of this.systems) if (s.every === 1 || t % s.every === s.phase) s.run(this);
   }
 
-  /**
-   * 最近的、本队看得见的敌方单位；没有返回 NONE。
-   * @param needSeen 为 false 时不考虑视野（用于「附近有没有敌人」这类判断）
-   */
-  findEnemy(ux: number, uy: number, tm: number, range: number, minRange: number, needSeen = true): number {
+  /** (ux, uy) 周围 range 范围的粗格里有没有 tm 的对手（粗略的，只用来提前排除附近一个敌人也没有的情形） */
+  foeNear(ux: number, uy: number, tm: number, range: number): boolean {
     const cw = this.cw, ch = this.ch;
     const pe = this.pres[3 - tm];
     let cx0 = ((ux - range) / COARSE) | 0, cx1 = ((ux + range) / COARSE) | 0;
@@ -701,12 +700,16 @@ export class World {
     if (cy0 < 0) cy0 = 0;
     if (cx1 >= cw) cx1 = cw - 1;
     if (cy1 >= ch) cy1 = ch - 1;
-    let any = false;
-    for (let cy = cy0; cy <= cy1 && !any; cy++) for (let cx = cx0; cx <= cx1; cx++) if (pe[cy * cw + cx]) {
-      any = true;
-      break;
-    }
-    if (!any) return NONE;
+    for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) if (pe[cy * cw + cx]) return true;
+    return false;
+  }
+
+  /**
+   * 最近的、本队看得见的敌方单位；没有返回 NONE。
+   * @param needSeen 为 false 时不考虑视野（用于「附近有没有敌人」这类判断）
+   */
+  findEnemy(ux: number, uy: number, tm: number, range: number, minRange: number, needSeen = true): number {
+    if (!this.foeNear(ux, uy, tm, range)) return NONE;
     const gw = this.gw, gh = this.gh, cs = this.cellStart, items = this.items;
     let gx0 = ((ux - range) / GRID) | 0, gx1 = ((ux + range) / GRID) | 0;
     let gy0 = ((uy - range) / GRID) | 0, gy1 = ((uy + range) / GRID) | 0;

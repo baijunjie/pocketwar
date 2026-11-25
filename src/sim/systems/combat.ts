@@ -5,7 +5,7 @@ import {
 } from '../content';
 import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
 import type { Building, World } from '../world';
-import { canAttackBuilding } from './targeting';
+import { canAttackBuilding, windRangeMul } from './targeting';
 
 /** 防御建筑（角楼、哨塔、主堡等）开火时使用的「攻击者」数据 */
 const TOWER_ATTACKER = { vs: null, vsBld: 0, siege: false };
@@ -283,15 +283,6 @@ export function spawnProj(w: World, sx: number, sy: number, tgt: number, tx: num
   w.pSrc[p] = src;
   w.pSrcUid[p] = src >= 0 ? w.uid[src] : 0;
   w.pMiss[p] = miss;
-}
-
-/** 风对射程的影响：沿 (dx, dy) 方向射击时的射程倍率 */
-export function windRangeMul(w: World, dx: number, dy: number): number {
-  const wind = w.env.wind;
-  if (wind <= 0) return 1;
-  const d = Math.sqrt(dx * dx + dy * dy);
-  if (d < 1e-6) return 1;
-  return 1 + RULES.env.windRange * wind * (dx * Math.cos(w.env.windDir) + dy * Math.sin(w.env.windDir)) / d;
 }
 
 export function updateProjectiles(w: World): void {

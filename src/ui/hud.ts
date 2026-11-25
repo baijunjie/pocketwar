@@ -6,7 +6,8 @@ import {
 import { SITE_MAX_LEVEL, siteUpgradeCost, towerCount, unitUpgradeCost } from '../sim/systems/economy';
 import { teamMoraleFactors } from '../sim/systems/morale';
 import { canRally, rallySites } from '../sim/rally';
-import { campBatch, factionUnits, fightState, militaryLeft, pickedUnit, reinfPaused } from '../sim/systems/sites';
+import { fightState } from '../sim/siteArea';
+import { campBatch, factionUnits, militaryLeft, pickedUnit, reinfPaused } from '../sim/systems/sites';
 import { S_BRACE, S_CHARGE, S_COMBAT, S_SHIELD, S_TORCH, S_WALL, Site, World } from '../sim/world';
 import { unitPortrait } from '../render/portrait';
 

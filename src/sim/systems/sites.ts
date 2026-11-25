@@ -3,7 +3,7 @@ import { BR_MILITARY, FactionDef, RULES, SITE_INFO, TILE, UNITS, UnitDef, forceL
 import { NONE, S_ROUT } from '../state';
 import type { Building, Site, World } from '../world';
 import { canRally } from '../rally';
-import { siteContains } from '../siteArea';
+import { fightState, siteContains } from '../siteArea';
 import { setSiteLevel } from './economy';
 import { autoGarrison, shiftPosts } from './garrison';
 import { SITE_EVERY } from './index';
@@ -45,7 +45,7 @@ export function updateSites(w: World): void {
     // 据点不在交战时，建筑自行修复；手里有石料（城池）/ 木材（营寨）时修得快得多，同时少量消耗。
     // 倒塌的建筑同样按这个速度重建：腾空了脚下就立起来，修满之前不放箭（down）。后来花木材搭的哨塔不在此列，要重新花木材建。
     // 中立据点一样会修（没有资源，只有原速）；资源点没有恢复能力。
-    if (info.regen && !siteFighting(w, s, calm)) {
+    if (info.regen && !fightState(w, s, calm).fighting) {
       const stock = w.stock[info.material];
       for (const id of s.buildings) {
         const b = w.buildings[id];
@@ -122,24 +122,6 @@ function checkDefeat(w: World): void {
     w.events.push({ kind: 'gameover', winner: w.winner });
     return;
   }
-}
-
-/** 据点在交战：有建筑最近挨过打，或据点范围内有敌方单位（溃兵不算） */
-function siteFighting(w: World, s: Site, calm: number): boolean {
-  return fightState(w, s, calm).fighting;
-}
-
-/**
- * 据点的交战状态与原因（界面显示用）：据点范围内的敌兵数（中立据点范围内任何一方的兵都算）；建筑最近一次挨打距今几秒（没挨过为 -1）；
- * 还要几秒才转为平静（范围内有敌兵时为 -1：要等敌兵离开或被消灭）。
- */
-export function fightState(w: World, s: Site, calm = RULES.site.bldCalm * 30): { fighting: boolean; foes: number; hitAgo: number; calmIn: number } {
-  const foes = s.owner ? s.count[3 - s.owner] : s.count[1] + s.count[2];
-  let last = -1;
-  for (const id of s.buildings) last = Math.max(last, w.buildings[id].hitTick);
-  const ago = w.tickCount - last;
-  const hit = last >= 0 && ago <= calm;
-  return { fighting: foes > 0 || hit, foes, hitAgo: last >= 0 ? ago / 30 : -1, calmIn: foes > 0 ? -1 : hit ? (calm - ago) / 30 : 0 };
 }
 
 /** 倒塌的建筑上站着敌兵（溃兵也算；中立方没有自己人，任何兵都算）：先不重建，免得把敌人关在墙里 */

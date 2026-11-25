@@ -2,8 +2,9 @@
  * 索敌：在看得见的敌人里挑一个「打得到」的，而不是单纯最近的。
  * 评分 = 距离 × 克制偏好 + 各种惩罚：目标已被围满、刚被判定够不着、已经溃逃。
  */
-import { BK_WALL, BR_MILITARY, RULES, SIZES, TILE, UnitDef } from '../content';
-import { COARSE, GRID, NONE, S_ROUT } from '../state';
+import { BK_WALL, BR_MILITARY, RULES, SIZES, TILE, T_HILL, UnitDef } from '../content';
+import { GRID, NONE, S_ROUT, S_WALL } from '../state';
+import { fightState, siteContains } from '../siteArea';
 import type { Building, World } from '../world';
 
 /** scan() 的结果 */
@@ -22,20 +23,7 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
   cur: number, leash = 0): void {
   SCAN.pick = SCAN.near = NONE;
   SCAN.nearD2 = 0;
-  const cw = w.cw, ch = w.ch;
-  const pe = w.pres[3 - tm];
-  let cx0 = ((ux - scanR) / COARSE) | 0, cx1 = ((ux + scanR) / COARSE) | 0;
-  let cy0 = ((uy - scanR) / COARSE) | 0, cy1 = ((uy + scanR) / COARSE) | 0;
-  if (cx0 < 0) cx0 = 0;
-  if (cy0 < 0) cy0 = 0;
-  if (cx1 >= cw) cx1 = cw - 1;
-  if (cy1 >= ch) cy1 = ch - 1;
-  let any = false;
-  for (let cy = cy0; cy <= cy1 && !any; cy++) for (let cx = cx0; cx <= cx1; cx++) if (pe[cy * cw + cx]) {
-    any = true;
-    break;
-  }
-  if (!any) return;
+  if (!w.foeNear(ux, uy, tm, scanR)) return;
   const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
   let gx0 = ((ux - scanR) / GRID) | 0, gx1 = ((ux + scanR) / GRID) | 0;
   let gy0 = ((uy - scanR) / GRID) | 0, gy1 = ((uy + scanR) / GRID) | 0;
@@ -81,6 +69,99 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
   SCAN.pick = pick;
   SCAN.near = near;
   SCAN.nearD2 = nearD2;
+}
+
+/** 风对射程的影响：沿 (dx, dy) 方向射击时的射程倍率 */
+export function windRangeMul(w: World, dx: number, dy: number): number {
+  const wind = w.env.wind;
+  if (wind <= 0) return 1;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d < 1e-6) return 1;
+  return 1 + RULES.env.windRange * wind * (dx * Math.cos(w.env.windDir) + dy * Math.sin(w.env.windDir)) / d;
+}
+
+/**
+ * 远程单位去打站在墙顶垛口上的敌兵（近战够不着墙顶，只有远程要去）时挑目标：看得见、没溃逃，
+ * 在 RULES.combat.wallSeek 以内、离岗位也不超过它（leash 大于 0 时），挑最近的。
+ * 自己走到刚好进射程的那一点不该去的（见 wallSpotBad）不挑。
+ * @param inFight 为 true 时只挑所在据点正在交战（fightState）、或自己正在打 tm 的人的：待命的单位不为没动静的城头守军走上去
+ * 调用方负责限频；手里没有敌兵目标时才调（可以盯着建筑）。
+ */
+export function findWallFoe(w: World, i: number, tm: number, ux: number, uy: number, d: UnitDef, leash = 0, inFight = false): number {
+  const seek = RULES.combat.wallSeek;
+  if (!w.foeNear(ux, uy, tm, seek)) return NONE;
+  const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
+  let gx0 = ((ux - seek) / GRID) | 0, gx1 = ((ux + seek) / GRID) | 0;
+  let gy0 = ((uy - seek) / GRID) | 0, gy1 = ((uy + seek) / GRID) | 0;
+  if (gx0 < 0) gx0 = 0;
+  if (gy0 < 0) gy0 = 0;
+  if (gx1 >= gw) gx1 = gw - 1;
+  if (gy1 >= gh) gy1 = gh - 1;
+  const x = w.x, y = w.y, team = w.team, alive = w.alive, seen = w.seen, state = w.state;
+  const bit = 1 << tm, min2 = d.minRange * d.minRange;
+  const hx = w.homeX[i], hy = w.homeY[i], leash2 = leash * leash;
+  let best = seek * seek, pick = NONE;
+  for (let gy = gy0; gy <= gy1; gy++) {
+    const row = gy * gw;
+    const k0 = cs[row + gx0], k1 = cs[row + gx1 + 1];
+    for (let k = k0; k < k1; k++) {
+      const j = items[k];
+      if (team[j] === tm || !alive[j] || !(seen[j] & bit) || (state[j] & (S_WALL | S_ROUT)) !== S_WALL) continue;
+      const ox = x[j] - ux, oy = y[j] - uy;
+      const d2 = ox * ox + oy * oy;
+      if (d2 >= best || d2 < min2) continue;
+      if (leash2 > 0 && (x[j] - hx) * (x[j] - hx) + (y[j] - hy) * (y[j] - hy) > leash2) continue;
+      if (wallSpotBad(w, tm, j, ux, uy, d)) continue;
+      if (inFight && !foeSiteFighting(w, j) && !foeTargets(w, j, tm)) continue;
+      best = d2;
+      pick = j;
+    }
+  }
+  return pick;
+}
+
+/** 单位 j 此刻在打 tm 一方的人（它手里的攻击目标是 tm 的单位） */
+export function foeTargets(w: World, j: number, tm: number): boolean {
+  const t = w.target[j];
+  return t >= 0 && w.team[t] === tm;
+}
+
+/** 单位 j 所在的据点正在交战（fightState）；不在任何据点范围内的算没有 */
+export function foeSiteFighting(w: World, j: number): boolean {
+  for (const s of w.sites) if (!s.gone && siteContains(s, w.x[j], w.y[j])) return fightState(w, s).fighting;
+  return false;
+}
+
+/**
+ * 从 (ux, uy) 朝墙顶敌兵 j 走到刚好进射程的那一点，是不是不该去：直线走不到（被城墙、建筑挡着，
+ * 那一点多半在墙里头，追过去只会顶在墙根），或者落在敌方（含中立）箭塔的射程里（白挨塔的箭）。
+ * 停下的位置按实际出手的射程算（高地、风与 units.ts 的 reach 同式），箭塔的射程按塔到那一点的方向算风（与 updateTowers 同式）。
+ * 已经进了射程的不用走，算可以去。
+ */
+export function wallSpotBad(w: World, tm: number, j: number, ux: number, uy: number, d: UnitDef): boolean {
+  const tx = w.x[j], ty = w.y[j];
+  const dx = tx - ux, dy = ty - uy;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
+  const wind = windRangeMul(w, dx, dy);
+  const mw = w.map.w;
+  let hill = 1;
+  let stop = 0, px = ux, py = uy;
+  // 停下的那一点是不是高地要看那一点，而那一点又取决于射程：先按平地估一次，再按估出的那格修正
+  for (let pass = 0; pass < 2; pass++) {
+    stop = d.range * hill * wind + w.rad[j] + d.radius;
+    if (dist <= stop) return false;
+    const k = stop / dist;
+    px = tx - dx * k;
+    py = ty - dy * k;
+    hill = w.map.terrain[((py / TILE) | 0) * mw + ((px / TILE) | 0)] === T_HILL ? 1.12 : 1;
+  }
+  if (w.lineBlocked(ux, uy, px, py, tm)) return true;
+  for (const b of w.armed) {
+    if (!b.alive || b.owner === tm || !b.tower) continue;
+    const r = b.tower.range * windRangeMul(w, px - b.cx, py - b.cy);
+    if ((b.cx - px) * (b.cx - px) + (b.cy - py) * (b.cy - py) < r * r) return true;
+  }
+  return false;
 }
 
 /**

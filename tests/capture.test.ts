@@ -3,8 +3,8 @@ import {
   A_FIRE, BR_COMMON, BR_DEFENSE, BR_MILITARY, BUILDINGS, RULES, SITE_CITY, SITE_FARM, SITE_CAMP, SITE_INFO, SITE_OUTPOST, TILE, UNIT_BY_KEY,
 } from '../src/sim/defs';
 import { createGame } from '../src/sim/setup';
+import { fightState } from '../src/sim/siteArea';
 import { splashDamage } from '../src/sim/systems/combat';
-import { fightState } from '../src/sim/systems/sites';
 import { canAttackBuilding, findBuilding } from '../src/sim/systems/targeting';
 import { NONE, O_ATTACK, Site, World } from '../src/sim/world';
 import { flatWorld, run } from './helpers';

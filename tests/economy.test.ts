@@ -5,8 +5,9 @@ import {
 } from '../src/sim/defs';
 import { generateMap } from '../src/sim/map';
 import { createGame } from '../src/sim/setup';
-import { damageUnit, spawnProj, updateTowers, windRangeMul } from '../src/sim/systems/combat';
+import { damageUnit, spawnProj, updateTowers } from '../src/sim/systems/combat';
 import { outpostCount, setSiteLevel, siteUpgradeCost, towerCount, unitUpgradeCost, upgradeAllCost, upgradeQueue } from '../src/sim/systems/economy';
+import { windRangeMul } from '../src/sim/systems/targeting';
 import { Building, O_AMOVE, O_IDLE, S_TORCH, Site, World } from '../src/sim/world';
 import { flatWorld, run } from './helpers';
 

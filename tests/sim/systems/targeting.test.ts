@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDINGS, UNIT_BY_KEY } from '../../../src/sim/defs';
-import { canAttackBuilding } from '../../../src/sim/systems/targeting';
+import { BUILDINGS, RULES, SITE_CAMP, SITE_CITY, TILE, T_HILL, UNIT_BY_KEY } from '../../../src/sim/defs';
+import { S_ROUT, S_WALL } from '../../../src/sim/state';
+import { canAttackBuilding, findWallFoe, foeSiteFighting, foeTargets, wallSpotBad, windRangeMul } from '../../../src/sim/systems/targeting';
 import { NONE } from '../../../src/sim/world';
+import type { Site, World } from '../../../src/sim/world';
 import { flatWorld, run } from '../../helpers';
 
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;
@@ -82,3 +84,395 @@ describe('索敌：优先打自己克制的兵种', () => {
     expect(pick('yari', [['dao', 60, 0], ['tieqi', 0, 140]])).toBe('dao');
   });
 });
+
+describe('findWallFoe：远程单位去打墙顶上的敌兵，挑哪一个', () => {
+  const C = 60 * TILE;
+  const WALL_TY = 60;
+  const WALL_Y = WALL_TY * TILE + 10;
+  const nu = UNIT_BY_KEY.nu;
+
+  /**
+   * 一排敌方城墙，我方站定的弩兵 asker 在墙正南 gap 远；foes 给出各个敌兵在墙顶的 x。
+   * 跑一帧让索敌网格与墙顶标志就位，再把可见性都置为己方看得见。
+   */
+  const scene = (foes: number[], gap = 500): { w: World; asker: number; ids: number[] } => {
+    const w = flatWorld();
+    for (let tx = 20; tx <= 100; tx++) w.addBuilding(BUILDINGS.wall, tx, WALL_TY, 2, -1);
+    w.sealWalls();
+    const asker = w.spawnUnit(idx('nu'), 1, C, WALL_Y + gap);
+    w.orderStop([asker], true);
+    const ids = foes.map(x => {
+      const e = w.spawnUnit(idx('yumi'), 2, x, WALL_Y);
+      w.orderStop([e], true);
+      return e;
+    });
+    w.tick();
+    w.fxN = 0;
+    for (const e of ids) w.seen[e] |= 2;
+    return { w, asker, ids };
+  };
+  const find = (w: World, asker: number, leash = 0, inFight = false): number =>
+    findWallFoe(w, asker, 1, w.x[asker], w.y[asker], nu, leash, inFight);
+
+  it('场景前提：敌兵都在墙顶', () => {
+    const { w, ids } = scene([C - 100, C + 100]);
+    for (const e of ids) expect(w.state[e] & S_WALL).toBe(S_WALL);
+  });
+
+  it('没有墙上的敌兵：什么也不挑', () => {
+    const { w, asker } = scene([]);
+    expect(find(w, asker)).toBe(NONE);
+  });
+
+  it('多个墙上敌兵取最近的', () => {
+    const { w, asker, ids } = scene([C + 300, C - 40, C - 400]);
+    expect(find(w, asker)).toBe(ids[1]);
+  });
+
+  it('不挑：地面上的敌兵、己方自己站在墙上的人、己方看不见的、已溃逃的', () => {
+    const { w, asker, ids } = scene([C - 100, C + 100, C + 200]);
+    const ground = w.spawnUnit(idx('yumi'), 2, C, WALL_Y + 300);
+    const mineOnWall = w.spawnUnit(idx('yumi'), 1, C, WALL_Y);
+    w.orderStop([ground, mineOnWall], true);
+    w.tick();
+    w.fxN = 0;
+    expect(w.state[mineOnWall] & S_WALL).toBe(S_WALL);
+    expect(w.state[ground] & S_WALL).toBe(0);
+    w.seen[ground] |= 2;
+    w.seen[mineOnWall] |= 2;
+    w.seen[ids[0]] = 4;
+    w.state[ids[1]] = S_ROUT | S_WALL;
+    // 剩下 ids[2]
+    expect(find(w, asker)).toBe(ids[2]);
+    w.seen[ids[2]] = 4;
+    expect(find(w, asker)).toBe(NONE);
+  });
+
+  it('离自己超过 wallSeek 的不挑，不超过的挑（按直线距离算，不是按方框）', () => {
+    // 敌兵在人的东北：横纵各差 d，直线距离 d × √2 落在 wallSeek 两侧，但都在边长 2 × wallSeek 的方框之内
+    const reach = (extra: number): number => (RULES.combat.wallSeek + extra) / Math.SQRT2;
+    const out = scene([C + reach(50)], reach(50));
+    expect(find(out.w, out.asker)).toBe(NONE);
+    const inn = scene([C + reach(-50)], reach(-50));
+    expect(find(inn.w, inn.asker)).toBe(inn.ids[0]);
+    // 正北方向也一样
+    const edge = RULES.combat.wallSeek;
+    const far = scene([C], edge + 50);
+    expect(find(far.w, far.asker)).toBe(NONE);
+  });
+
+  it('leash 大于 0 时，离岗位超过 leash 的不挑；岗位不是人此刻的位置', () => {
+    const { w, asker, ids } = scene([C], 600);
+    // 岗位就在人所在的地方，离敌兵约 600
+    expect(find(w, asker, 500)).toBe(NONE);
+    expect(find(w, asker, 700)).toBe(ids[0]);
+    expect(find(w, asker, 0)).toBe(ids[0]);
+    // 人离敌兵近，岗位离敌兵远：按岗位算
+    w.homeY[asker] = WALL_Y + 900;
+    expect(find(w, asker, 700)).toBe(NONE);
+    expect(find(w, asker, 1000)).toBe(ids[0]);
+  });
+
+  describe('inFight：只挑所在据点在交战的、或自己正在打己方的人的', () => {
+    it('不在任何据点范围内、又没在打己方的人：不挑；传 false 时照挑', () => {
+      const { w, asker, ids } = scene([C]);
+      expect(find(w, asker, 0, false)).toBe(ids[0]);
+      expect(find(w, asker, 0, true)).toBe(NONE);
+    });
+
+    it('它正在打己方的人：挑；它在打的是别的（建筑、没有目标）：不挑', () => {
+      const { w, asker, ids } = scene([C - 100, C + 100]);
+      w.target[ids[1]] = asker;
+      expect(find(w, asker, 0, true)).toBe(ids[1]);
+      const b = w.addBuilding(BUILDINGS.house, 30, 70, 1, -1);
+      w.target[ids[1]] = -b.id - 2;
+      expect(find(w, asker, 0, true)).toBe(NONE);
+    });
+  });
+
+  describe('走到刚好进射程的那一点走不通或有塔：不挑，转挑下一个', () => {
+    // 近的一个 A 在人的正前偏西，远的一个 B 偏东；A 的落点（离墙约一个射程、偏南）旁放障碍
+    const A = C - 100, B = C + 400;
+    const pointY = WALL_TY + 7;
+    const picks = (put: (w: World) => void): { got: number; a: number; b: number } => {
+      const { w, asker, ids } = scene([A, B]);
+      put(w);
+      return { got: find(w, asker), a: ids[0], b: ids[1] };
+    };
+
+    it('对照：什么障碍也没有时挑近的 A', () => {
+      const r = picks(() => {});
+      expect(r.got).toBe(r.a);
+    });
+
+    it('A 的落点在城墙里：挑 B', () => {
+      const r = picks(w => {
+        for (let tx = 50; tx <= 62; tx++) w.addBuilding(BUILDINGS.wall, tx, pointY, 2, -1);
+      });
+      expect(r.got).toBe(r.b);
+    });
+
+    it.each([2, 0])('A 的落点在箭塔射程里（箭塔属于 %i 方）：挑 B', owner => {
+      const r = picks(w => {
+        w.addBuilding(BUILDINGS.watchtower, 55, pointY, owner, -1);
+      });
+      expect(r.got).toBe(r.b);
+    });
+
+    it('己方的箭塔不算', () => {
+      const r = picks(w => {
+        w.addBuilding(BUILDINGS.watchtower, 55, pointY, 1, -1);
+      });
+      expect(r.got).toBe(r.a);
+    });
+
+    it('所有候选都走不通：什么也不挑', () => {
+      const r = picks(w => {
+        for (let tx = 20; tx <= 100; tx++) w.addBuilding(BUILDINGS.wall, tx, pointY, 2, -1);
+      });
+      expect(r.got).toBe(NONE);
+    });
+  });
+});
+
+describe('wallSpotBad：风对停下的位置与箭塔射程的影响', () => {
+  const C = 60 * TILE;
+  const WALL_TY = 60;
+  const WALL_Y = WALL_TY * TILE + 10;
+  const nu = UNIT_BY_KEY.nu;
+  const K = RULES.env.windRange;
+
+  /** 墙顶一个敌兵 e（在 x = C），弩兵 asker 在它正南 500 处；返回与它们的 wallSpotBad */
+  const scene = (paint?: (t: Uint8Array, n: number) => void): { w: World; e: number; asker: number; bad: () => boolean } => {
+    const w = flatWorld(120, 7, paint);
+    for (let tx = 20; tx <= 100; tx++) w.addBuilding(BUILDINGS.wall, tx, WALL_TY, 2, -1);
+    w.sealWalls();
+    const asker = w.spawnUnit(idx('nu'), 1, C, WALL_Y + 500);
+    const e = w.spawnUnit(idx('yumi'), 2, C, WALL_Y);
+    w.orderStop([asker, e], true);
+    w.tick();
+    w.fxN = 0;
+    return { w, e, asker, bad: () => wallSpotBad(w, 1, e, w.x[asker], w.y[asker], nu) };
+  };
+  const wind = (w: World, dir: number, force: number): void => {
+    w.env.enabled = true;
+    w.env.nextWeather = w.env.nextWind = 1e9;
+    w.env.windy = force > 0;
+    w.env.wind = w.env.windTarget = force;
+    w.env.windDir = dir;
+  };
+  /** 弩兵朝北射，风朝南吹是顶风、朝北吹是顺风、朝东吹是侧风 */
+  const HEAD = Math.PI / 2, TAIL = -Math.PI / 2, SIDE = 0;
+
+  describe('顶风时停下的位置更靠近目标', () => {
+    /** 无风时停下的那一点离敌兵多远；顶风时近 range × K 左右（超过一格） */
+    const stopAt = (w: World, e: number, mul: number): number => nu.range * mul + w.rad[e] + nu.radius;
+    /** 在顶风时停下的那一点所在的格子盖一排城墙（无风时停下的点比它靠南一格以上） */
+    const wallAtHeadwindStop = (w: World, e: number): void => {
+      const ty = ((w.y[e] + stopAt(w, e, 1 - K)) / TILE) | 0;
+      for (let tx = 20; tx <= 100; tx++) w.addBuilding(BUILDINGS.wall, tx, ty, 2, -1);
+    };
+
+    it('同一摆位：无风时安全，顶风时那一点进了城墙而不该去；顺风、侧风不受影响', () => {
+      const { w, e, bad } = scene();
+      wallAtHeadwindStop(w, e);
+      expect(nu.range * K, '顶风与无风的停点差超过一格').toBeGreaterThan(TILE);
+      expect(windRangeMul(w, 0, -1)).toBe(1);
+      expect(bad(), '无风').toBe(false);
+      wind(w, SIDE, 1);
+      expect(bad(), '侧风').toBe(false);
+      wind(w, TAIL, 1);
+      expect(bad(), '顺风').toBe(false);
+      wind(w, HEAD, 1);
+      expect(bad(), '顶风').toBe(true);
+    });
+
+    it('风力小一半，停点只近一半：差不到一格时仍然安全', () => {
+      const { w, e, bad } = scene();
+      wallAtHeadwindStop(w, e);
+      // 风力 0.3：停点只比无风时近 range × K × 0.3，不到一格，仍在盖了城墙的那一格之外
+      expect(nu.range * K * 0.3).toBeLessThan(TILE * 0.5);
+      wind(w, HEAD, 0.3);
+      expect(bad()).toBe(false);
+    });
+  });
+
+  describe('顺风时箭塔的有效射程更长', () => {
+    /** 无风时停下的那一点 (px, py)；在它正西 d 处放一座敌方哨塔（格子中心离那一点的距离落在 [lo, hi] 里的那一格） */
+    const towerAt = (w: World, e: number, lo: number, hi: number): void => {
+      const px = w.x[e], py = w.y[e] + nu.range + w.rad[e] + nu.radius;
+      const ty = (py / TILE) | 0;
+      for (let tx = 0; tx < 60; tx++) {
+        const d = Math.hypot(px - (tx + 0.5) * TILE, py - (ty + 0.5) * TILE);
+        if (d >= lo && d <= hi) {
+          w.addBuilding(BUILDINGS.watchtower, tx, ty, 2, -1);
+          return;
+        }
+      }
+      throw new Error('没找到合适的格子');
+    };
+    const R = BUILDINGS.watchtower.tower!.range;
+
+    it('塔离那一点比射程远一点：无风、顶风安全，顺风那一点进了塔的射程而不该去', () => {
+      const { w, e, bad } = scene();
+      towerAt(w, e, R * 1.03, R * (1 + K) * 0.97);
+      expect(bad(), '无风').toBe(false);
+      // 塔在那一点正西：朝东吹是塔射向那一点的顺风；朝西吹是顶风。东西向的风不改变弩兵朝北射时停下的位置
+      wind(w, Math.PI, 1);
+      expect(bad(), '朝西吹，对塔是顶风').toBe(false);
+      wind(w, 0, 1);
+      expect(bad(), '朝东吹，对塔是顺风').toBe(true);
+    });
+  });
+});
+
+describe('wallSpotBad：停下的位置按高地算射程', () => {
+  const C = 60 * TILE;
+  const WALL_TY = 60;
+  const WALL_Y = WALL_TY * TILE + 10;
+  const nu = UNIT_BY_KEY.nu;
+
+  /** hill：墙南 5 格起往南 6 排格子是高地；停在高地上射程长 12%，停点更靠南 */
+  const bad = (hill: boolean): boolean => {
+    const w = flatWorld(120, 7, (t, n) => {
+      if (!hill) return;
+      for (let ty = WALL_TY + 5; ty < WALL_TY + 12; ty++) for (let tx = 0; tx < n; tx++) t[ty * n + tx] = T_HILL;
+    });
+    for (let tx = 20; tx <= 100; tx++) w.addBuilding(BUILDINGS.wall, tx, WALL_TY, 2, -1);
+    w.sealWalls();
+    const asker = w.spawnUnit(idx('nu'), 1, C, WALL_Y + 500);
+    const e = w.spawnUnit(idx('yumi'), 2, C, WALL_Y);
+    w.orderStop([asker, e], true);
+    w.tick();
+    w.fxN = 0;
+    // 在平地停点与高地停点之间找一个放敌方哨塔的格子：离高地停点在射程内、离平地停点在射程外，且不在弩兵走过去的那条线上
+    const R = BUILDINGS.watchtower.tower!.range;
+    const p0 = w.y[e] + nu.range + w.rad[e] + nu.radius, p1 = w.y[e] + nu.range * 1.12 + w.rad[e] + nu.radius;
+    let found = false;
+    for (let ty = 60; ty < 100 && !found; ty++) for (let tx = 40; tx < 80 && !found; tx++) {
+      const cx = (tx + 0.5) * TILE, cy = (ty + 0.5) * TILE;
+      if (Math.abs(cx - C) < 2 * TILE) continue;
+      if (Math.hypot(cx - C, cy - p1) < R - 1 && Math.hypot(cx - C, cy - p0) > R + 1) {
+        w.addBuilding(BUILDINGS.watchtower, tx, ty, 2, -1);
+        found = true;
+      }
+    }
+    expect(found, '找到放塔的格子').toBe(true);
+    return wallSpotBad(w, 1, e, w.x[asker], w.y[asker], nu);
+  };
+
+  it('停点在高地上时射程长 12%：停得更远，那一点落进箭塔射程而不该去；平地上同一摆位安全', () => {
+    expect(bad(false)).toBe(false);
+    expect(bad(true)).toBe(true);
+  });
+});
+
+describe('foeTargets：墙顶敌兵此刻在打 tm 一方的人', () => {
+  const C = 60 * TILE;
+  const make = () => {
+    const w = flatWorld();
+    const foe = w.spawnUnit(idx('yumi'), 2, C, C);
+    const mine = w.spawnUnit(idx('dao'), 1, C + 100, C);
+    const theirs = w.spawnUnit(idx('dao'), 2, C - 100, C);
+    return { w, foe, mine, theirs };
+  };
+
+  it('手里的攻击目标是我方单位：真', () => {
+    const { w, foe, mine } = make();
+    w.target[foe] = mine;
+    expect(foeTargets(w, foe, 1)).toBe(true);
+  });
+
+  it('没有目标：假', () => {
+    const { w, foe } = make();
+    expect(foeTargets(w, foe, 1)).toBe(false);
+  });
+
+  it('目标是别队的单位（对 tm 而言）：假', () => {
+    const { w, foe, mine, theirs } = make();
+    w.target[foe] = mine;
+    expect(foeTargets(w, foe, 2)).toBe(false);
+    w.target[foe] = theirs;
+    expect(foeTargets(w, foe, 1)).toBe(false);
+  });
+
+  it('目标是建筑：假', () => {
+    const { w, foe } = make();
+    const b = w.addBuilding(BUILDINGS.watchtower, 70, 70, 1, -1);
+    w.orderAttackBuilding([foe], b);
+    expect(w.target[foe]).toBe(-b.id - 2);
+    expect(foeTargets(w, foe, 1)).toBe(false);
+  });
+});
+
+describe('foeSiteFighting：墙顶敌兵所在的据点正在交战', () => {
+  const C = 60 * TILE;
+  const WALL_TY = 60;
+  const WALL_Y = WALL_TY * TILE + 10;
+
+  /** 敌方城池（范围 ty 40..60），一个敌兵站在南墙顶、一个站在城外远处；返回据点与两个敌兵 */
+  const scene = (): { w: World; site: Site; onWall: number; outside: number } => {
+    const w = flatWorld();
+    const site = w.addSite(SITE_CITY, '敌城', 30 * TILE, 40 * TILE, 2);
+    for (let tx = 30; tx <= 90; tx++) site.buildings.push(w.addBuilding(BUILDINGS.wall, tx, WALL_TY, 2, site.id).id);
+    site.buildings.push(w.addBuilding(BUILDINGS.wall, 30, 40, 2, site.id).id);
+    w.sealWalls();
+    const onWall = w.spawnUnit(idx('yumi'), 2, C, WALL_Y);
+    const outside = w.spawnUnit(idx('yumi'), 2, C, WALL_Y + 800);
+    w.orderStop([onWall, outside], true);
+    return { w, site, onWall, outside };
+  };
+
+  it('据点平静：假', () => {
+    const { w, onWall } = scene();
+    run(w, 1);
+    expect(foeSiteFighting(w, onWall)).toBe(false);
+  });
+
+  it('据点的建筑刚挨过打：真；挨打过去 bldCalm 秒之后又转为假', () => {
+    const { w, site, onWall } = scene();
+    w.damageBuilding(w.buildings[site.buildings[10]], 50, 1, 1, 1, true);
+    expect(foeSiteFighting(w, onWall)).toBe(true);
+    run(w, RULES.site.bldCalm + 1);
+    expect(foeSiteFighting(w, onWall)).toBe(false);
+  });
+
+  it('据点范围里有对方（己方）的兵：真；兵走了之后转为假', () => {
+    const { w, onWall } = scene();
+    const q = w.spawnUnit(idx('dao'), 1, C - 400, WALL_TY * TILE - 150);
+    w.orderStop([q], true);
+    run(w, 1);
+    expect(foeSiteFighting(w, onWall)).toBe(true);
+    w.removeUnit(q);
+    run(w, 1);
+    expect(foeSiteFighting(w, onWall)).toBe(false);
+  });
+
+  it('不在任何据点范围内的敌兵：假，即使别的据点在交战', () => {
+    const { w, site, outside, onWall } = scene();
+    w.damageBuilding(w.buildings[site.buildings[10]], 50, 1, 1, 1, true);
+    expect(foeSiteFighting(w, onWall)).toBe(true);
+    expect(foeSiteFighting(w, outside)).toBe(false);
+  });
+
+  it('已消失（gone）的据点不算', () => {
+    const { w, site, onWall } = scene();
+    w.damageBuilding(w.buildings[site.buildings[10]], 50, 1, 1, 1, true);
+    expect(foeSiteFighting(w, onWall)).toBe(true);
+    site.gone = true;
+    expect(foeSiteFighting(w, onWall)).toBe(false);
+  });
+
+  it('没有围墙的据点（占领圈）也按它的范围算', () => {
+    const w = flatWorld();
+    const site = w.addSite(SITE_CAMP, '营', C, C, 2);
+    const e = w.spawnUnit(idx('yumi'), 2, C + 20, C);
+    w.orderStop([e], true);
+    expect(site.rect).toBeNull();
+    const q = w.spawnUnit(idx('dao'), 1, C - 20, C);
+    w.orderStop([q], true);
+    run(w, 1);
+    expect(foeSiteFighting(w, e)).toBe(true);
+  });
+});
+

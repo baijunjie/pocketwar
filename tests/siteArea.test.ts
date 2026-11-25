@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { BR_MILITARY, BUILDINGS, SITE_CAMP, SITE_FARM, SITE_INFO, TILE, UNIT_BY_KEY } from '../src/sim/defs';
 import { createGame } from '../src/sim/setup';
-import { siteContains, siteGap } from '../src/sim/siteArea';
+import { fightState, siteContains, siteGap } from '../src/sim/siteArea';
 import { orderOutpost } from '../src/sim/systems/economy';
-import { fightState } from '../src/sim/systems/sites';
 import type { Site, World } from '../src/sim/world';
 import { flatWorld, run } from './helpers';
 
