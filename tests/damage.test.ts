@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, ARCHETYPES, BUILDINGS, RULES, TILE, UNITS, UNIT_BY_KEY, archetypePower } from '../src/sim/defs';
+import { AU_RANGED_TAKEN, A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, ARCHETYPES, BUILDINGS, RULES, TILE, UNITS, UNIT_BY_KEY, archetypePower } from '../src/sim/defs';
 import { damageUnit, kill } from '../src/sim/systems/combat';
 import { startRout } from '../src/sim/systems/morale';
 import { S_WALL } from '../src/sim/world';
@@ -71,6 +71,41 @@ describe('伤害公式：强度对比式', () => {
     expect(wall).toBeCloseTo(expectDmg(20, sam.armP) * RULES.siege.wallCover, 3);
     const melee = hit('samurai', 20, A_MELEE, 0, null, (w, u) => { w.state[u] |= S_WALL; });
     expect(melee).toBeCloseTo(expectDmg(20, sam.armM), 3);
+  });
+});
+
+describe('伤害公式：光环的所受远程伤害倍率', () => {
+  const aura = (v: number) => (w: ReturnType<typeof flatWorld>, u: number): void => { w.aura[AU_RANGED_TAKEN][u] = v; };
+
+  it('远程攻击（穿刺）的伤害乘受害者当前的倍率', () => {
+    const base = hit('samurai', 20, A_PIERCE);
+    expect(hit('samurai', 20, A_PIERCE, 0, null, aura(0.8))).toBeCloseTo(base * 0.8, 3);
+    expect(hit('samurai', 20, A_PIERCE, 0, null, aura(0.5))).toBeCloseTo(base * 0.5, 3);
+  });
+
+  it('无加成值 1 时伤害不变', () => {
+    expect(hit('samurai', 20, A_PIERCE, 0, null, aura(1))).toBeCloseTo(hit('samurai', 20, A_PIERCE), 5);
+  });
+
+  it('近战与不计护甲的攻城伤害不受影响', () => {
+    expect(hit('samurai', 20, A_MELEE, 0, null, aura(0.5))).toBeCloseTo(hit('samurai', 20, A_MELEE), 5);
+    expect(hit('samurai', 20, A_SIEGE, 0, null, aura(0.5))).toBeCloseTo(20, 3);
+  });
+
+  it('与龟甲阵、城墙垛口同一层相乘', () => {
+    const testudo = hit('legion', 20, A_PIERCE);
+    expect(hit('legion', 20, A_PIERCE, 0, null, aura(0.8))).toBeCloseTo(testudo * 0.8, 3);
+    const wall = hit('samurai', 20, A_PIERCE, 0, null, (w, u) => { w.state[u] |= S_WALL; });
+    expect(hit('samurai', 20, A_PIERCE, 0, null, (w, u) => { w.state[u] |= S_WALL; aura(0.8)(w, u); })).toBeCloseTo(wall * 0.8, 3);
+  });
+
+  it('只看受害者自己的加成，旁边别人的加成不影响它', () => {
+    const w = flatWorld();
+    const a = w.spawnUnit(idx('samurai'), 1, C, C), b = w.spawnUnit(idx('samurai'), 1, C + 10, C);
+    w.hp[a] = w.maxHp[a] = w.hp[b] = w.maxHp[b] = 1000;
+    w.aura[AU_RANGED_TAKEN][a] = 0.5;
+    damageUnit(w, b, 20, A_PIERCE, 0, null, 2, -1);
+    expect(1000 - w.hp[b]).toBeCloseTo(hit('samurai', 20, A_PIERCE), 3);
   });
 });
 

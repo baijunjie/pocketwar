@@ -83,6 +83,9 @@ defineTrait('sidebow', { name: '副弓', aux: { dmg: 7, range: 170, cd: 2.4, pro
 // 穿刺攻击：抛射器械改打穿刺伤害（吃远程护甲与举盾、龟甲阵、林地减免；抛射器械的基准是无视护甲的攻城伤害）
 defineTrait('pierce', { name: '穿刺攻击', atk: A_PIERCE });
 
+// 光环：盾牌掩护身边的友军（不含自己），所受远程伤害 −20%。待定挂到哪些持盾步兵，先在近战步兵与长柄两个位置计价
+defineTrait('cover', { name: '盾墙掩护', aura: { kind: 'rangedTaken', radius: 60, value: 0.8 }, priceAt: ['inf', 'spear'] });
+
 // 中国：弩与火器之国，人多势众
 U('china', 'ji', '长戟兵', 'inf', { lv: { hp: -1, cad: -1, out: -4, armM: -1, armP: -2, spd: -1 }, traits: [['polearm', { cav: 2.5 }]] }, '结阵拒马，克制骑兵');
 U('china', 'dao', '刀盾兵', 'inf', { lv: { out: 2, armM: 1, armP: 1, spd: -1, block: 12 } }, '持盾近战，攻守均衡');

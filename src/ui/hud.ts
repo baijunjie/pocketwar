@@ -1,7 +1,7 @@
 /** 游戏内界面：顶栏、据点与援军、选中面板、指令按钮、战报、帮助与结算 */
 import {
-  BuildingDef, ELITE, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RES_SHORT, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_INFO, SIZES, UNITS,
-  UnitDef, unitKind,
+  AURA_KINDS, BuildingDef, ELITE, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RES_SHORT, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_INFO, SIZES, UNITS,
+  UnitAura, UnitDef, unitKind,
 } from '../sim/defs';
 import { SITE_MAX_LEVEL, siteUpgradeCost, towerCount, unitUpgradeCost } from '../sim/systems/economy';
 import { teamMoraleFactors } from '../sim/systems/morale';
@@ -80,6 +80,19 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''):
 
 const css = (c: [number, number, number]): string => `rgb(${c[0]},${c[1]},${c[2]})`;
 
+/** 光环加成相对无加成值的增减，如「−20%」：正负号按数值本身判断，取整成 0 的保留一位小数 */
+export function auraPct(a: UnitAura): string {
+  const k = AURA_KINDS[a.kind];
+  const r = a.value / k.neutral - 1;
+  const abs = Math.abs(r) * 100;
+  return `${r < 0 ? '−' : '+'}${Math.round(abs) || Math.round(abs * 10) / 10}%`;
+}
+
+/** 光环的加成写成「所受远程伤害 −20%」 */
+export function auraEffect(a: UnitAura): string {
+  return `${AURA_KINDS[a.kind].name} ${auraPct(a)}`;
+}
+
 export function unitTip(d: UnitDef): string {
   const lines = [
     `${d.name}（${unitKind(d)}）`, d.desc,
@@ -91,6 +104,7 @@ export function unitTip(d: UnitDef): string {
   if (ab.charge) lines.push(`冲锋：远距离接敌时突进，冲撞伤害 ${ab.charge.impact}`);
   if (ab.brace) lines.push(`拒马：敌人冲来时立枪，反伤 ${ab.brace.dmg}`);
   if (ab.shield) lines.push(`举盾：遇远程敌人时远程伤害 −${Math.round(ab.shield.block * 100)}%，移动稍慢`);
+  for (const a of d.auras) lines.push(`光环「${a.name}」：半径 ${a.radius} 内的其他友军${auraEffect(a)}`);
   if (ab.torch) lines.push('夜间可打火把');
   lines.push(d.siege ? '工程类：能破坏城墙与城门' : '打建筑时投掷火把，烧不动城墙');
   if (d.vsBld >= 2) lines.push(`对建筑 ×${d.vsBld}`);
@@ -649,6 +663,7 @@ export class Hud {
     if (d.mobile) perks.push('可边走边打');
     if (d.siege) perks.push('可破城墙');
     if (d.aux) perks.push(`副武器 ${d.aux.dmg}/${d.aux.range}`);
+    for (const a of d.auras) perks.push(`${a.name} ${auraPct(a)}`);
     this.selBox.innerHTML = `
       <div class="udetail" title="${unitTip(d).replace(/"/g, '&quot;')}">
         <div class="who">

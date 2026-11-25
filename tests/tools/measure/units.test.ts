@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, POSITIONS } from '../../../src/sim/defs';
-import { BASE, REF_SHARE, SLOTS, proxySlots, refCounts, refForce, refForcePerHead, slotOf } from '../../../tools/measure/units';
+import { AU_RANGED_TAKEN, A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, POSITIONS, TRAITS } from '../../../src/sim/defs';
+import { BASE, REF_SHARE, SLOTS, proxySlots, refCounts, refForce, refForcePerHead, slotOf, variant } from '../../../tools/measure/units';
 
 describe('测量工具：位置与顶替', () => {
   it('每个位置都有基准单位；顶替别的位置的位置（直射器械）顶替器械位，其余各占自己', () => {
@@ -51,5 +51,21 @@ describe('测量工具：直射器械基准单位', () => {
     expect(d.pen).toBe(0);
     expect(BASE.siege.atk).toBe(A_SIEGE);
     expect(BASE.siege.splash).toBe(30);
+  });
+});
+
+describe('测量工具：变体带上光环特性', () => {
+  it('加光环特性的变体带着这个特性的光环，登记成探测单位；基准本身与不加特性的变体没有光环', () => {
+    const v = variant(BASE.inf, {}, ['cover']);
+    expect(v.auras).toEqual([{ name: TRAITS.cover.name, kind: AU_RANGED_TAKEN, radius: 60, value: 0.8 }]);
+    expect(v.probe).toBe(true);
+    expect(BASE.inf.auras).toEqual([]);
+    expect(variant(BASE.inf, { hp: 1 }).auras).toEqual([]);
+  });
+
+  it('在已带光环的单位上改级数、再加别的特性，原有的光环保留，不重复', () => {
+    const v = variant(BASE.inf, {}, ['cover']);
+    expect(variant(v, { hp: 2 }).auras).toEqual(v.auras);
+    expect(variant(v, {}, ['pilum']).auras).toEqual(v.auras);
   });
 });

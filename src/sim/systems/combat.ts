@@ -1,6 +1,6 @@
 /** 战斗结算：出手、伤害、阵亡、经验与升级、投射物、防御建筑（角楼、哨塔、主堡等）放箭 */
 import {
-  A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_INFO, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
+  AU_RANGED_TAKEN, A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, BK_TOWER, DT, LEVELS, P_TORCH, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_INFO, TR_BUSHIDO, TR_TESTUDO, TR_TRAMPLE,
   T_FOREST, T_HILL, UnitDef,
 } from '../content';
 import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
@@ -72,6 +72,7 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
   let dmg = routed ? d0 * RULES.morale.routDamage : mitigate(d0, arm * (1 - pen));
   if (atk === A_PIERCE) {
     if (td.traits & TR_TESTUDO) dmg *= 0.65;
+    dmg *= w.aura[AU_RANGED_TAKEN][j];
     const sh = td.abilities.shield;
     if (sh) {
       if (w.state[j] & S_SHIELD) dmg *= 1 - sh.block;

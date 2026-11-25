@@ -158,9 +158,66 @@ export function defineArchetype(key: string, name: string, a: ArchetypeSpec): nu
   return idx;
 }
 
+/** 位置基准本来就带的特性 key：原型自带的加位置要求的；兵种的这些特性不另计价，价目表也不给它们在这个位置计价 */
+export function positionTraits(pos: string): string[] {
+  const p = POSITIONS[pos];
+  const arch = ARCHETYPES[ARCHETYPE_INDEX[p.arch]];
+  return [...(arch.base.traits ?? []).map(u => (typeof u === 'string' ? u : u[0])), ...(p.trait ? [p.trait] : [])];
+}
+
 /** 原型在某个维度上的级数范围：原型自己声明的，没声明的取全局初值 */
 export function levelRange(arch: ArchetypeDef, dim: Dim): [number, number] {
   return arch.ranges[dim] ?? LEVEL_RANGES[dim];
+}
+
+// ---------- 光环 ----------
+/**
+ * 光环的加成种类。每种加成要在系统里有对应的结算点，所以种类是固定的表，不由内容层登记；下标即 World.aura 的下标。
+ * 加成都是倍率（界面按相对 neutral 的增减百分比显示）。
+ * neutral 是没有加成时的值；lowerStronger 为真时数值越小越强（同类光环取最强时取最小的）；
+ * [min, max] 是特性上可填的数值范围，填的数还必须比 neutral 强
+ */
+export interface AuraKindDef {
+  key: string;
+  name: string;
+  neutral: number;
+  lowerStronger: boolean;
+  min: number;
+  max: number;
+}
+/** 所受远程伤害倍率：远程攻击（投射物）对受益者造成的伤害乘以它，与龟甲阵同一层 */
+export const AU_RANGED_TAKEN = 0;
+export const AURA_KINDS: readonly AuraKindDef[] = [
+  { key: 'rangedTaken', name: '所受远程伤害', neutral: 1, lowerStronger: true, min: 0.3, max: 1 },
+];
+/** 光环半径（世界像素）的可填范围：小于最小的够不着身边的人，大于最大的一个人就罩住半个战场 */
+export const AURA_RADIUS: [number, number] = [16, 240];
+
+/** 特性上写的光环：半径内光环来源以外的己方单位获得加成（kind 是 AURA_KINDS 的 key） */
+export interface AuraSpec {
+  kind: string;
+  radius: number;
+  value: number;
+}
+/** 展开到兵种上的光环：kind 换成 AURA_KINDS 的下标，name 是特性的显示名（供界面显示） */
+export interface UnitAura {
+  name: string;
+  kind: number;
+  radius: number;
+  value: number;
+}
+
+/** 加成 a 是否比 b 强（同类光环取最强的一个） */
+export function auraStronger(kind: number, a: number, b: number): boolean {
+  return AURA_KINDS[kind].lowerStronger ? a < b : a > b;
+}
+
+function checkAura(key: string, a: AuraSpec): void {
+  const k = AURA_KINDS.find(x => x.key === a.kind);
+  if (!k) throw new Error(`特性 ${key}：未知光环加成种类 ${a.kind}`);
+  if (!(a.radius >= AURA_RADIUS[0] && a.radius <= AURA_RADIUS[1])) throw new Error(`特性 ${key}：光环半径 ${a.radius} 越出范围 ${AURA_RADIUS[0]}…${AURA_RADIUS[1]}`);
+  if (!(a.value >= k.min && a.value <= k.max)) throw new Error(`特性 ${key}：光环数值 ${a.value} 越出范围 ${k.min}…${k.max}`);
+  if (!(k.lowerStronger ? a.value < k.neutral : a.value > k.neutral)) throw new Error(`特性 ${key}：光环数值 ${a.value} 没有加成（无加成为 ${k.neutral}）`);
 }
 
 // ---------- 特性 ----------
@@ -182,6 +239,13 @@ export interface TraitDef {
   aux?: AuxAttack;
   /** 改变主攻击的伤害类型（A_*），如抛射器械的穿刺攻击 */
   atk?: number;
+  /** 光环：让身边的己方单位获得加成 */
+  aura?: AuraSpec;
+  /**
+   * 价目表一律在这些位置（POSITIONS 的 key）给它计价，与带它的兵种所在位置取并集。
+   * 用于先定义、待定挂到哪些兵种的特性；挂到兵种之后不再需要的位置要手动删掉，否则每次重量都多量这几格
+   */
+  priceAt: string[];
 }
 export const TRAITS: Record<string, TraitDef> = {};
 export interface TraitSpec {
@@ -193,11 +257,18 @@ export interface TraitSpec {
   hitMod?: MultTable;
   aux?: AuxAttack;
   atk?: number;
+  aura?: AuraSpec;
+  priceAt?: string[];
 }
 export function defineTrait(key: string, t: TraitSpec): void {
   if (TRAITS[key]) throw new Error(`特性重复：${key}`);
   for (const tag of t.tags ?? []) tagBit(tag);
-  TRAITS[key] = { key, name: t.name, flag: t.flag ?? 0, tags: t.tags ?? [], abilities: t.abilities, counter: t.counter ?? {}, hitMod: t.hitMod ?? {}, aux: t.aux, atk: t.atk };
+  if (t.aura) checkAura(key, t.aura);
+  for (const pos of t.priceAt ?? []) if (!POSITIONS[pos]) throw new Error(`特性 ${key}：未知位置 ${pos}`);
+  TRAITS[key] = {
+    key, name: t.name, flag: t.flag ?? 0, tags: t.tags ?? [], abilities: t.abilities, counter: t.counter ?? {}, hitMod: t.hitMod ?? {}, aux: t.aux, atk: t.atk,
+    ...(t.aura ? { aura: { ...t.aura } } : {}), priceAt: t.priceAt ?? [],
+  };
 }
 /** 兵种使用特性：只写 key，或写 [key, 覆盖的克制倍率] */
 export type TraitUse = string | [string, MultTable];
@@ -291,6 +362,8 @@ export interface UnitDef {
   vsBld: number;
   aux: AuxAttack | null;
   traits: number;
+  /** 光环（来自特性）：系统只读这里，不认兵种 */
+  auras: UnitAura[];
   abilities: Abilities;
   vision: number;
   alert: number;
@@ -369,24 +442,25 @@ export interface XpValueRules {
 
 /** 原型加上特性之后的标签、克制、受击修正、被动特性标志与特殊动作 */
 export function composeTraits(arch: ArchetypeDef, uses: TraitUse[]): {
-  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined;
+  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined; auras: UnitAura[];
 } {
   const mix = traitMix(uses);
   return {
     tags: tagBit(arch.key) | mix.tags, counter: [...multList(arch.counter), ...mix.counter], hitMod: [...multList(arch.hitMod), ...mix.hitMod],
-    flags: mix.flags, abilities: mix.abilities, aux: mix.aux, atk: mix.atk,
+    flags: mix.flags, abilities: mix.abilities, aux: mix.aux, atk: mix.atk, auras: mix.auras,
   };
 }
 
 /** 一组特性给兵种带来的标签、克制、受击修正、被动特性标志与特殊动作 */
 export function traitMix(uses: TraitUse[]): {
-  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined;
+  tags: number; counter: Mult[]; hitMod: Mult[]; flags: number; abilities: Abilities; aux: AuxAttack | null; atk: number | undefined; auras: UnitAura[];
 } {
   let tags = 0, flags = 0;
   const counter: Mult[] = [], hitMod: Mult[] = [];
   const abilities: Abilities = {};
   let aux: AuxAttack | null = null;
   let atk: number | undefined;
+  const auras: UnitAura[] = [];
   for (const u of uses) {
     const [key, over] = typeof u === 'string' ? [u, {}] : u;
     const t = TRAITS[key];
@@ -398,8 +472,9 @@ export function traitMix(uses: TraitUse[]): {
     Object.assign(abilities, t.abilities);
     if (t.aux) aux = t.aux;
     if (t.atk !== undefined) atk = t.atk;
+    if (t.aura) auras.push({ name: t.name, kind: AURA_KINDS.findIndex(k => k.key === t.aura!.kind), radius: t.aura.radius, value: t.aura.value });
   }
-  return { tags, counter, hitMod, flags, abilities, aux, atk };
+  return { tags, counter, hitMod, flags, abilities, aux, atk, auras };
 }
 
 /** 攻击方 a 打目标 t 的倍率：原型固定克制 × a 命中 t 标签的克制 × t 命中 a 标签的受击修正 */
@@ -489,8 +564,7 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
   if (xpBase === undefined) throw new Error(`原型 ${arch.key} 没有登记经验值`);
   if (arch.ranged !== (range > 0)) throw new Error(`${p.key}：原型 ${arch.key} 是${arch.ranged ? '远程' : '近战'}，射程是 ${range}`);
   // 估算点数：兵种自己的特性（不含原型与位置基准本来就带的）按位置价目计
-  const carried = [...(base.traits ?? []), ...(POSITIONS[pos].trait ? [POSITIONS[pos].trait!] : [])]
-    .map(u => (typeof u === 'string' ? u : u[0]));
+  const carried = positionTraits(pos);
   const ownTraits = traitKeys.filter(t => !carried.includes(t));
   const points = estimatePoints(pos, L, ownTraits);
   const power0 = powerFromPoints(archetypePower(arch), pos, points);
@@ -505,6 +579,7 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
     armM: 0, armP: 0, pen: panel.pen, splash, proj: m.proj ?? P_ARROW,
     vs: [], vsBld: m.vsBld ?? 1, aux: mix.aux,
     traits: mix.flags,
+    auras: mix.auras,
     abilities,
     vision: Math.max(m.vision ?? 320, siege ? range : 0),
     alert: 0, acq: 0, lookK: range > 60 ? Math.min(14, Math.floor(range / TILE)) : 1,

@@ -15,10 +15,11 @@
 | `src/sim/siteArea.ts` | 据点范围判定：有围墙的据点（城池、营寨）按围墙矩形，没有的（资源点、临时据点）按占领圈，提供点在范围内与到范围边缘距离 |
 | `src/sim/rally.ts` | 集结点：哪些据点能设（只有出援军的）、玩家指令作用于哪几座，界面、渲染与指令共用 |
 | `src/sim/defs.ts` | 兼容入口，转出 `content/` 的静态数据 |
-| `src/sim/content/` | 只放数据：原型、特性、兵种、体型、等级、阵营、建筑（按军事、城防、普通分角色）、据点（城池、营寨、资源点、临时据点四大类）与全部规则数值（`types.ts` 提供登记函数）；`units.ts` 依次定义原型、特性与兵种表 |
+| `src/sim/content/` | 只放数据：原型、特性（可带光环，加成种类是 `types.ts` 里固定的表 `AURA_KINDS`）、兵种、体型、等级、阵营、建筑（按军事、城防、普通分角色）、据点（城池、营寨、资源点、临时据点四大类）与全部规则数值（`types.ts` 提供登记函数）；`units.ts` 依次定义原型、特性与兵种表 |
 | `src/sim/content/points.ts`、`force.ts`、`prices.json` | 点数与兵力：`points.ts` 管点数维度、阶梯、级数范围、价目表估算点数与阵营、援军预算；`force.ts` 管兵力占用与兵员、援军倍率；`prices.json` 是价目表，由测量工具生成、不手改 |
 | `src/sim/systems/` | 只放算法：每个文件一个系统，由 `index.ts` 的管线顺序调用；系统里不写死数字、不认具体兵种 |
 | `src/sim/systems/sites.ts`、`economy.ts`、`targeting.ts` | 据点逻辑所在：`sites.ts` 管占领（军事建筑拆光才能读秒）、休整、按据点的援军（营寨按占领方所选兵种出）与集结点、丢光城池与营寨判负；`economy.ts` 管据点三级升级、资源点哨塔与临时据点；`targeting.ts` 的 `canAttackBuilding` 判定建筑能否被攻击 |
+| `src/sim/systems/aura.ts` | 光环：定期重新判定，由带光环特性的存活单位给半径内的其他己方单位写入加成（`World.aura`），伤害结算读它 |
 | `src/sim/ai/` | 指挥官接口与登记表（`commander.ts`），战略 AI（`strategic.ts`），以及电脑给营寨选兵种的办法（`picker.ts`） |
 | `src/render/` | three.js 渲染层：把模拟状态每帧写进实例缓冲并绘制 |
 | `src/render/renderer.ts` | 场景、镜头、拾取，各绘制部件的总管 |

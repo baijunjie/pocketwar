@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ELITE, SIZES, SITE_CAMP, SITE_CITY, UNITS, UNIT_BY_KEY, isContentUnit, unitKind } from '../../src/sim/defs';
+import { AU_RANGED_TAKEN, ELITE, EXPAND_RULES, SIZES, SITE_CAMP, SITE_CITY, UNITS, UNIT_BY_KEY, expandUnit, isContentUnit, unitKind } from '../../src/sim/defs';
 import { unitUpgradeCost } from '../../src/sim/systems/economy';
 import { createGame } from '../../src/sim/setup';
-import { tier3Perks, unitTip } from '../../src/ui/hud';
+import { auraEffect, auraPct, tier3Perks, unitTip } from '../../src/ui/hud';
 
 describe('兵种提示', () => {
   it('第一行是名称与类别，第二行是说明，随后是生命、攻击、攻速与射程护甲', () => {
@@ -83,5 +83,54 @@ describe('据点满级解锁：tier3Perks', () => {
       expect(new Set(keys).size).toBe(keys.length);
       for (const p of tier3Perks(w, s)) expect(p.def.tier3).toBeTruthy();
     }
+  });
+});
+
+describe('光环的显示', () => {
+  const coverUnit = expandUnit({ faction: 'china', key: 't_cover_tip', name: '盾卫', arch: 'inf', spec: { traits: ['cover'] }, desc: '持盾掩护' }, EXPAND_RULES, false)[0];
+
+  it('auraEffect：所受远程伤害倍率 0.8 写成「所受远程伤害 −20%」，0.6 是 −40%', () => {
+    const a = { name: '盾墙掩护', kind: AU_RANGED_TAKEN, radius: 60 };
+    expect(auraEffect({ ...a, value: 0.8 })).toBe('所受远程伤害 −20%');
+    expect(auraEffect({ ...a, value: 0.6 })).toBe('所受远程伤害 −40%');
+  });
+
+  it('auraPct：相对无加成值的增减，比无加成小为「−」、大为「+」', () => {
+    const a = { name: 'x', kind: AU_RANGED_TAKEN, radius: 60 };
+    expect(auraPct({ ...a, value: 0.8 })).toBe('−20%');
+    expect(auraPct({ ...a, value: 0.6 })).toBe('−40%');
+    expect(auraPct({ ...a, value: 1.2 })).toBe('+20%');
+    expect(auraPct({ ...a, value: 0.3 })).toBe('−70%');
+  });
+
+  it('auraPct：取整为 0 的保留一位小数，正负号按数值本身判断，不显示成「+0%」', () => {
+    const a = { name: 'x', kind: AU_RANGED_TAKEN, radius: 60 };
+    expect(auraPct({ ...a, value: 0.996 })).toBe('−0.4%');
+    expect(auraPct({ ...a, value: 0.999 })).toBe('−0.1%');
+    expect(auraPct({ ...a, value: 1.004 })).toBe('+0.4%');
+    expect(auraPct({ ...a, value: 0.996 })).not.toContain('+');
+  });
+
+  it('auraEffect 是「种类名 + 空格 + auraPct」', () => {
+    const a = { name: 'x', kind: AU_RANGED_TAKEN, radius: 60 };
+    for (const value of [0.8, 0.996, 0.5]) expect(auraEffect({ ...a, value })).toBe(`所受远程伤害 ${auraPct({ ...a, value })}`);
+  });
+
+  it('兵种提示列出光环：特性名、半径与加成', () => {
+    const tip = unitTip(coverUnit);
+    expect(tip).toContain('光环「盾墙掩护」：半径 60 内的其他友军所受远程伤害 −20%');
+  });
+
+  it('没有光环的兵种不显示光环这一行', () => {
+    for (const d of UNITS.filter(d => d.tier === 0 && isContentUnit(d) && !d.auras.length)) expect(unitTip(d), d.key).not.toContain('光环');
+  });
+
+  it('带光环的兵种提示里每个光环一行', () => {
+    const d = { ...coverUnit, auras: [coverUnit.auras[0], { ...coverUnit.auras[0], name: '另一个', radius: 90, value: 0.5 }] };
+    const lines = unitTip(d).split('\n').filter(l => l.startsWith('光环'));
+    expect(lines).toEqual([
+      '光环「盾墙掩护」：半径 60 内的其他友军所受远程伤害 −20%',
+      '光环「另一个」：半径 90 内的其他友军所受远程伤害 −50%',
+    ]);
   });
 });

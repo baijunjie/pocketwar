@@ -43,6 +43,7 @@ const CHUNK = 4;
 /** 多进程：n 个工作进程，每个跑 `vite-node worker.ts` */
 export function poolRunner(n: number): Runner {
   const workerFile = fileURLToPath(new URL('./worker.ts', import.meta.url));
+  // 按本工作树的 node_modules 定位：工作树里没装依赖时 vitest 能沿上级目录找到依赖照跑，这里的工作进程却起不来，报「工作进程退出（1）」
   const viteNode = fileURLToPath(new URL('../../node_modules/vite-node/vite-node.mjs', import.meta.url));
   const procs: ChildProcess[] = [];
   const idle: ChildProcess[] = [];

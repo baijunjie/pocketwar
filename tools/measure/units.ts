@@ -109,6 +109,7 @@ export function variant(from: UnitDef, L: Levels, addTraits: TraitUse[] = []): U
     d.abilities = { ...mix.abilities, ...d.abilities };
     if (mix.aux) d.aux = mix.aux;
     if (mix.atk !== undefined) d.atk = mix.atk;
+    d.auras = [...from.auras, ...mix.auras];
   }
   d.power = from.power * Math.sqrt((d.hp / from.hp) * (d.dmg / d.cd / (from.dmg / from.cd)));
   d.lv = { ...from.lv };

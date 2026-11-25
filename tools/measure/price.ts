@@ -3,7 +3,7 @@
  * 全部用维度测量按固定规程重量；规则见 docs 里的开发计划，这里是实现。
  */
 import {
-  ARCHETYPES, ARCHETYPE_INDEX, Dim, POSITIONS, PriceTable, UNITS, isContentUnit,
+  ARCHETYPES, ARCHETYPE_INDEX, Dim, POSITIONS, PriceTable, TRAITS, UNITS, isContentUnit, positionTraits,
 } from '../../src/sim/defs';
 import { Measurer, Row } from './measure';
 
@@ -32,16 +32,22 @@ export function openDims(pos: string): Dim[] {
   return a.dims.filter(k => k !== 'heal');
 }
 
-/** 需要量价的特性：某个位置里有兵种带它，而位置基准本来没有 */
+/**
+ * 需要量价的特性：某个位置里有兵种带它，而位置基准本来没有；
+ * 以及特性自己声明要计价的位置（TraitDef.priceAt，有没有兵种带都计价），位置基准本来就带它的除外
+ */
 export function pricedTraits(): { slot: string; trait: string }[] {
   const out: { slot: string; trait: string }[] = [];
+  const add = (slot: string, trait: string): void => {
+    if (!out.some(o => o.slot === slot && o.trait === trait)) out.push({ slot, trait });
+  };
   for (const d of UNITS) {
     if (d.tier !== 0 || !isContentUnit(d)) continue;
     // ownTraits 已经去掉了原型与位置基准本来就带的特性
-    for (const t of d.ownTraits) {
-      if (out.some(o => o.slot === d.position && o.trait === t)) continue;
-      out.push({ slot: d.position, trait: t });
-    }
+    for (const t of d.ownTraits) add(d.position, t);
+  }
+  for (const t of Object.values(TRAITS)) {
+    for (const slot of t.priceAt) if (!positionTraits(slot).includes(t.key)) add(slot, t.key);
   }
   return out;
 }

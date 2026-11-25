@@ -14,6 +14,7 @@
 - 克制倍率见 `docs/product/units.md`「克制」，破甲见 `docs/product/units.md`「点数机制」的维度表。
 - 在上式之后依次乘上（只对远程伤害的标「远程」）：
   - 举盾、龟甲阵（远程）：见 `docs/product/units.md`「特殊动作」与「兵种特性」；
+  - 「所受远程伤害」光环（远程）：受害者当前所在光环的倍率，不在光环里为 1，见 `docs/product/units.md`「光环」；
   - 身处林地（远程）：×0.75；
   - 站在城墙垛口上（远程）：见 `docs/product/siege.md`「驻守城墙」；
   - 等级的防御：除以 1 + 0.5 × 级数（见 `docs/product/units.md`「等级与经验」）。

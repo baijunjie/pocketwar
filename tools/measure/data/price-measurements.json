@@ -1,5 +1,5 @@
 {
- "fingerprint": "3b54c80a1fbdc644",
+ "fingerprint": "94d991a0204c0c0d",
  "rows": [
   {
    "kind": "dim",
@@ -2860,6 +2860,44 @@
    "meta": {
     "slot": "inf",
     "trait": "sidebow"
+   }
+  },
+  {
+   "kind": "trait",
+   "label": "inf:+cover",
+   "size": 150,
+   "n": 48,
+   "adv": 0.28612258295841914,
+   "advSe": 0.010309188988940548,
+   "win": 0.9791666666666666,
+   "delta": 0.02373642083384429,
+   "deltaSe": 0.012553063257753358,
+   "slope": 0.041918610104797804,
+   "points": 0.5662501875539889,
+   "pointsSe": 0.3008654362560078,
+   "significant": false,
+   "meta": {
+    "slot": "inf",
+    "trait": "cover"
+   }
+  },
+  {
+   "kind": "trait",
+   "label": "spear:+cover",
+   "size": 150,
+   "n": 48,
+   "adv": 0.30148950167548955,
+   "advSe": 0.007606580868189195,
+   "win": 1,
+   "delta": 0.039103339550914724,
+   "deltaSe": 0.008744647120121692,
+   "slope": 0.041918610104797804,
+   "points": 0.9328396016269428,
+   "pointsSe": 0.21401745029456423,
+   "significant": true,
+   "meta": {
+    "slot": "spear",
+    "trait": "cover"
    }
   },
   {

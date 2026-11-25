@@ -3,6 +3,7 @@
  * 想换掉某个算法（比如换一套士气规则），替换 world.systems 里对应的那一项即可。
  */
 import type { World } from '../world';
+import { AURA_EVERY, updateAuras } from './aura';
 import { updateProjectiles, updateTowers } from './combat';
 import { ECON_EVERY, updateEconomy } from './economy';
 import { updateEnvironment } from './environment';
@@ -28,6 +29,8 @@ export function defaultSystems(): System[] {
   return [
     { name: 'environment', every: ENV_EVERY, phase: 0, run: updateEnvironment },
     { name: 'grid', every: 1, phase: 0, run: buildGrid },
+    // 光环在出手与投射物结算之前：本帧的伤害按刚判定的加成算
+    { name: 'aura', every: AURA_EVERY, phase: 0, run: updateAuras },
     { name: 'march', every: 1, phase: 0, run: updateMarches },
     { name: 'units', every: 1, phase: 0, run: updateUnits },
     { name: 'projectiles', every: 1, phase: 0, run: updateProjectiles },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RULES, UNITS, UNIT_BY_KEY, isContentUnit } from '../../../src/sim/defs';
+import { RULES, TRAITS, UNITS, UNIT_BY_KEY, isContentUnit } from '../../../src/sim/defs';
 import { contentUnits, hash, measureFingerprint, pricingFingerprint, unitsFingerprint } from '../../../tools/measure/fingerprint';
 import * as price from '../../../tools/measure/price';
 
@@ -105,5 +105,28 @@ describe('指纹：规则与兵种', () => {
       d.hp = hp;
     }
     expect(unitsFingerprint()).toBe(before);
+  });
+});
+
+describe('指纹：光环参数', () => {
+  it('光环的半径、数值与更新间隔变了，测量指纹与价目指纹都跟着变（价目表随之过期）', () => {
+    const a = TRAITS.cover.aura!, saved = { ...a }, interval = RULES.aura.interval;
+    const m0 = measureFingerprint(), p0 = pricingFingerprint();
+    try {
+      a.value = 0.7;
+      expect(measureFingerprint()).not.toBe(m0);
+      expect(pricingFingerprint()).not.toBe(p0);
+      a.value = saved.value;
+      a.radius = 80;
+      expect(measureFingerprint()).not.toBe(m0);
+      expect(pricingFingerprint()).not.toBe(p0);
+      a.radius = saved.radius;
+      expect(measureFingerprint()).toBe(m0);
+      RULES.aura.interval = 1;
+      expect(measureFingerprint()).not.toBe(m0);
+    } finally {
+      Object.assign(a, saved);
+      RULES.aura.interval = interval;
+    }
   });
 });

@@ -124,6 +124,7 @@ src/sim/          纯逻辑，不依赖 DOM，可在 Node 中无头运行
     environment.ts  昼夜天气    supply.ts   粮草
     economy.ts      资源采集、兵种与据点升级、资源点哨塔、临时据点
     sites.ts        占领与援军  orders.ts   指令   formation.ts  阵型
+    aura.ts         光环：带光环特性的单位给半径内的己方加成
   ai/             指挥官接口与战略 AI（可登记别的算法）
   world.ts        世界状态与系统管线；state.ts 常量
   map.ts  nav.ts  setup.ts   地图生成、流场寻路、开局部署

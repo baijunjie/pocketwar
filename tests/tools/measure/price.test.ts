@@ -51,6 +51,11 @@ describe('价目表的测量清单：priceJobs', () => {
     for (const { slot, trait } of pricedTraits()) expect(labels, `${slot}:+${trait}`).toContain(`${slot}:+${trait}`);
   });
 
+  it('特性自己声明要计价的位置也在清单上：盾墙掩护在近战步兵与长柄两处各一格，没有别的位置', () => {
+    expect(labels).toEqual(expect.arrayContaining(['inf:+cover', 'spear:+cover']));
+    expect(labels.filter(l => l.endsWith(':+cover')).sort()).toEqual(['inf:+cover', 'spear:+cover']);
+  });
+
   it('每格的标签就是跑出来的行的标签（抽测与沿用旧测量都按标签对应）', async () => {
     for (const j of priceJobs(m, opts)) expect((await j.run()).label, j.label).toBe(j.label);
   });

@@ -2,7 +2,7 @@
  * 世界状态：单位（SoA）、建筑、据点、投射物、环境、补给。不依赖 DOM，可在 Node 中无头运行。
  * 这里只放数据和最基础的增删查；所有玩法算法在 systems/ 下，由 tick() 按管线依次调用。
  */
-import { BK_GATE, BK_WALL, BuildingDef, DT, FactionDef, LEVELS, RULES, ResKind, SITE_INFO, TILE, TowerDef, UNITS } from './content';
+import { AURA_KINDS, BK_GATE, BK_WALL, BuildingDef, DT, FactionDef, LEVELS, RULES, ResKind, SITE_INFO, TILE, TowerDef, UNITS } from './content';
 import type { March } from './systems/march';
 import { GameMap } from './map';
 import { Field, Nav } from './nav';
@@ -371,6 +371,8 @@ export class World {
   readonly sortieY = new Float32Array(MAX_UNITS);
   /** 所在的自家据点（sheltered 时有效） */
   readonly shelterSite = new Int16Array(MAX_UNITS);
+  /** 当前生效的光环加成：[加成种类（AURA_KINDS 的下标）][单位]，没有加成时是该种类的无加成值（aura 系统定期写入） */
+  readonly aura: Float32Array[] = AURA_KINDS.map(k => new Float32Array(MAX_UNITS).fill(k.neutral));
 
   // ---- 士气统计格（morale 系统填写） ----
   readonly mw: number;
@@ -500,6 +502,7 @@ export class World {
     this.detourT[i] = this.detourLoose[i] = 0;
     this.seen[i] = 0;
     this.sheltered[i] = 0;
+    for (let k = 0; k < AURA_KINDS.length; k++) this.aura[k][i] = AURA_KINDS[k].neutral;
     this.sortie[i] = 0;
     this.hitBy[i * 2] = this.hitBy[i * 2 + 1] = NONE;
     this.teamCount[tm]++;
