@@ -17,6 +17,7 @@ const COLS: [string, (r: Row) => string][] = [
   ['points', r => num(r.points, 2)],
   ['points_se', r => num(r.pointsSe, 2, false)],
   ['significant', r => (r.significant === undefined ? '' : r.significant ? 'yes' : 'no')],
+  ['stop', r => r.stop ?? ''],
 ];
 
 function num(x: number | undefined, k: number, signed = true): string {

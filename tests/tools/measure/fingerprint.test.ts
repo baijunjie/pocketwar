@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { RULES, TRAITS, UNITS, UNIT_BY_KEY, isContentUnit } from '../../../src/sim/defs';
 import { contentUnits, hash, measureFingerprint, pricingFingerprint, unitsFingerprint } from '../../../tools/measure/fingerprint';
+import { DECIDED } from '../../../tools/measure/battle';
 import * as price from '../../../tools/measure/price';
+import { SEQ } from '../../../tools/measure/stats';
 
 describe('指纹：哈希', () => {
   it('相同内容相同哈希，与对象键的书写顺序无关', () => {
@@ -85,6 +87,37 @@ describe('指纹：规则与兵种', () => {
       expect(pricingFingerprint()).not.toBe(p);
     } finally {
       price.PROBE.hp = probe;
+    }
+    expect([measureFingerprint(), pricingFingerprint()]).toEqual([m, p]);
+  });
+
+  it('提前收兵的规程（DECIDED）变了，测量指纹变，汇总指纹跟着变', () => {
+    const m = measureFingerprint(), p = pricingFingerprint();
+    const d = DECIDED as { loserMax: number };
+    const old = d.loserMax;
+    try {
+      d.loserMax = old + 0.01;
+      expect(measureFingerprint()).not.toBe(m);
+      expect(pricingFingerprint()).not.toBe(p);
+    } finally {
+      d.loserMax = old;
+    }
+    expect([measureFingerprint(), pricingFingerprint()]).toEqual([m, p]);
+  });
+
+  it('序贯检验的规程（SEQ）里任何一项变了（含 effMinT），测量指纹变，汇总指纹跟着变', () => {
+    const m = measureFingerprint(), p = pricingFingerprint();
+    const q = SEQ as unknown as Record<string, number>;
+    expect(Object.keys(q)).toContain('effMinT');
+    for (const k of Object.keys(q)) {
+      const old = q[k];
+      try {
+        q[k] = old + 0.25;
+        expect(measureFingerprint(), k).not.toBe(m);
+        expect(pricingFingerprint(), k).not.toBe(p);
+      } finally {
+        q[k] = old;
+      }
     }
     expect([measureFingerprint(), pricingFingerprint()]).toEqual([m, p]);
   });

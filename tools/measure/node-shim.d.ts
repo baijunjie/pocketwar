@@ -4,6 +4,8 @@
  */
 declare const process: {
   argv: string[];
+  pid: number;
+  kill(pid: number, signal: number): void;
   execPath: string;
   stdin: unknown;
   stdout: { write(s: string): void };
@@ -18,6 +20,7 @@ declare module 'node:child_process' {
     on(ev: 'exit', cb: (code: number | null) => void): this;
   }
   export function spawn(cmd: string, args: string[], opts: { stdio: unknown[] }): ChildProcess;
+  export function execFileSync(cmd: string, args: string[], opts: { encoding: 'utf8'; stdio: unknown[] }): string;
 }
 declare module 'node:readline' {
   export function createInterface(o: { input: unknown }): { on(ev: 'line', cb: (line: string) => void): unknown };
@@ -29,7 +32,7 @@ declare module 'node:fs' {
   export function mkdirSync(p: string, o?: { recursive: boolean }): void;
   export function writeFileSync(p: string, s: string): void;
   export function readFileSync(p: string, enc: 'utf8'): string;
-  export function readdirSync(p: string, o: { recursive: boolean }): string[];
+  export function readdirSync(p: string, o?: { recursive: boolean }): string[];
 }
 declare module 'node:path' {
   export function resolve(...p: string[]): string;
@@ -40,4 +43,9 @@ declare module 'node:crypto' {
 }
 declare module 'node:fs' {
   export function appendFileSync(p: string, s: string): void;
+  export function rmSync(p: string, o?: { force: boolean }): void;
+  export function existsSync(p: string): boolean;
+}
+declare module 'node:os' {
+  export function availableParallelism(): number;
 }

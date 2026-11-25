@@ -1,7 +1,7 @@
 /**
  * 对战测量工具入口（npm run measure 以 vite-node --script 运行本文件；被导入时不执行，见文件末尾）。用法（项目根目录）：
  *   npm run measure -- [选项] <命令> [参数…]
- * 选项：--workers N（并行进程数，缺省 4，1 为本进程）、--size N（兵力份数）、--n N（覆盖缺省规模与样本数）、--out 文件（写 TSV）
+ * 选项：--workers N（并行进程数，缺省为本机性能核数、读不到时为逻辑核数，1 为本进程）、--size N（兵力份数）、--n N（覆盖缺省样本数；换算点数的测量按序贯检验分批打、样本够了就停，这时它是上限）、--out 文件（写 TSV）
  * 命令：
  *   base                          打印各原型的基准单位面板
  *   ladder [级数…]                标尺：全军生命加减若干级对标准混编军的优势（缺省 -12 … +12）
@@ -36,7 +36,8 @@ import { fileURLToPath } from 'node:url';
 import { ARCHETYPES, ARCHETYPE_INDEX, FACTION_IDS, FactionId } from '../../src/sim/defs';
 import { parseLevels } from './army';
 import { Measurer, Row } from './measure';
-import { inProcessRunner, poolRunner } from './runner';
+import type { Stop } from './stats';
+import { defaultWorkers, inProcessRunner, poolRunner } from './runner';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { measureFingerprint, pricingFingerprint, unitsFingerprint } from './fingerprint';
 import { MANPOWER_PROBE, derivePrices, measurePrices, priceJobs } from './price';
@@ -58,7 +59,8 @@ export async function main(argv: string[]): Promise<void> {
     args.splice(i, 2);
     return v;
   };
-  const workers = Number(opt('workers') ?? 4);
+  const workersOpt = opt('workers');
+  const workers = workersOpt ? Number(workersOpt) : defaultWorkers();
   const sizeOpt = opt('size'), nOpt = opt('n'), out = opt('out');
   const o = { size: sizeOpt ? Number(sizeOpt) : undefined, n: nOpt ? Number(nOpt) : undefined };
   const [cmd, ...rest] = args;
@@ -112,6 +114,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   const runner = workers > 1 ? poolRunner(workers) : inProcessRunner();
   const m = new Measurer(runner);
+  console.error(`工作进程 ${workers > 1 ? `${workers} 个` : '无（本进程跑）'}${workersOpt ? '' : '（缺省：本机性能核数，读不到时为逻辑核数）'}`);
   const t0 = Date.now();
   try {
     let rows: Row[] = [];
@@ -185,8 +188,9 @@ export async function main(argv: string[]): Promise<void> {
       done = [...done, ...reused];
       rows = await measurePrices(m, r => {
         appendFileSync(log, JSON.stringify(r) + '\n');
-        console.error(`${r.label}\t${r.points!.toFixed(2)} ±${r.pointsSe!.toFixed(2)}${r.significant ? '' : '（不显著）'}`);
+        console.error(`${r.label}\t${r.points!.toFixed(2)} ±${r.pointsSe!.toFixed(2)}${r.significant ? '' : '（不显著）'}\t${r.n} 组，${STOP_TEXT[r.stop!]}`);
       }, done, o);
+      console.error(seqSummary(rows));
       writeFileSync(PRICE_ROWS_FILE, JSON.stringify({ fingerprint: measureFingerprint(), rows }, null, 1) + '\n');
       writeFileSync(PRICES_FILE, JSON.stringify({ fingerprint: pricingFingerprint(), ...derivePrices(rows) }, null, 1) + '\n');
     } else if (cmd === 'manpower') {
@@ -209,6 +213,18 @@ export async function main(argv: string[]): Promise<void> {
   } finally {
     runner.close();
   }
+}
+
+const STOP_TEXT: Record<Stop, string> = { sig: '显著即停', futile: '不显著即停', cap: '打满上限' };
+
+/** 序贯检验的汇总：各停止原因的格数，每种规模的平均组数 */
+function seqSummary(rows: Row[]): string {
+  const by = (k: Stop): number => rows.filter(r => r.stop === k).length;
+  const sizes = [...new Set(rows.map(r => r.size))].sort((a, b) => a - b).map(sz => {
+    const rs = rows.filter(r => r.size === sz);
+    return `规模 ${sz} 份 ${rs.length} 格平均 ${(rs.reduce((p, r) => p + r.n, 0) / rs.length).toFixed(1)} 组`;
+  });
+  return `序贯检验：${STOP_TEXT.sig} ${by('sig')} 格、${STOP_TEXT.futile} ${by('futile')} 格、${STOP_TEXT.cap} ${by('cap')} 格；${sizes.join('，')}`;
 }
 
 /** 提交的旧价目测量（不看指纹，--check 与 --reuse 用） */

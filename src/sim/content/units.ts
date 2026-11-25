@@ -115,7 +115,7 @@ U('rome', 'onager', '投石机', 'siege', { lv: { hp: 3, out: -1, rng: 1, splash
 
 // 波斯：骑兵、弓手与战象
 U('persia', 'spara', '持盾矛兵', 'inf', { lv: { hp: -3, cad: -1, out: -6, block: 13 }, traits: ['polearm'] }, '藤盾矛兵，人数众多');
-U('persia', 'immortal', '不死军', 'inf', { traits: ['sidebow'], lv: { hp: -1, cad: 2, out: 8, armM: 1, spd: 1, disc: 4, block: 11 } }, '王家卫队，弓矛兼备');
+U('persia', 'immortal', '不死军', 'inf', { traits: ['sidebow'], lv: { hp: -1, cad: 2, out: 8, armM: 1, disc: 4, block: 11 } }, '王家卫队，弓矛兼备');
 U('persia', 'kamandar', '弓箭手', 'ranged', { lv: { hp: -1, cad: -1, rng: 1 } }, '箭如飞蝗');
 U('persia', 'asvaran', '骑射手', 'cavr', { lv: {} }, '边走边射，来去如风');
 U('persia', 'cataphract', '铁甲骑兵', 'cav', { lv: { hp: 4, armM: 2, armP: 2, spd: -4, disc: 3, imp: 2 }, eliteName: '具装铁骑' }, '人马俱甲的超重骑兵');

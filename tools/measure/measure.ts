@@ -3,6 +3,7 @@
  * 都是「被测的一方对标准混编军」的优势，换算成点数：1 点 = 标准混编军全军生命加 1 级。
  * 换算规程：让对手（标准混编军）全军生命 −6 级，使被测一方落在优势曲线的线性段；
  * 同一批种子再量被测一方全军生命 ±3 级，得到当地斜率；点数 = 优势的增量 ÷ 斜率。
+ * 换算点数的测量按序贯检验分批打（stats.ts 的 SEQ）：被测军队的增量已明确显著或明确不显著就停，样本数（n）是上限，参照组与斜率总是打满；标尺、循环赛、阵营对冲打满固定组数。
  * 顶替别的位置的位置（POSITIONS 的 ref，如直射器械顶替器械位）的参照组不是标准混编军本身，而是把被顶替的位置整个换成它的基准单位的那支，
  * 增量相对这支参照组算（斜率仍用标准混编军的），所以它的基准单位正好是 0 点。
  */
@@ -10,7 +11,7 @@ import { ARCHETYPES, ARCHETYPE_INDEX, FACTION_IDS, FactionId, MANPOWER_STEP, POS
 import { ArmySpec, SlotSpec, refSpec } from './army';
 import { Job, Runner, Sample } from './runner';
 import { proxySlots, refCounts, refForce, slotOf } from './units';
-import { Stat, pairedDiff, seedList, significant, stat } from './stats';
+import { Stat, Stop, looks, regressionDelta, seedList, significant, stat, stopRule } from './stats';
 import { Levels } from './units';
 
 /** 对手让几级生命；斜率取被测一方全军生命 ±几级 */
@@ -53,6 +54,8 @@ export interface Row {
   pointsSe?: number;
   /** 增量的绝对值不小于两倍标准误 */
   significant?: boolean;
+  /** 序贯检验的停止原因（换算点数的测量才有）：显著即停、不显著即停、打满上限；n 是实际打的组数 */
+  stop?: Stop;
   /** 逐个样本的优势（只有 pair 给出，供同一批种子上配对比较） */
   advs?: number[];
   /** 被测的东西：位置与维度级数、特性或兵种，供汇总价目表与兵种实测表用 */
@@ -84,48 +87,62 @@ interface Series {
 }
 
 export class Measurer {
-  private cache = new Map<string, Promise<Series>>();
+  /** 每个对阵已派下去的样本：按种子表顺序的前 len 组，续打时只补缺的部分 */
+  private cache = new Map<string, { len: number; samples: Promise<Sample[]> }>();
   constructor(private runner: Runner) {}
 
-  /** a 对 b 打一批种子；相同的对阵、种子只跑一次 */
-  versus(a: ArmySpec, b: ArmySpec, seeds: number[]): Promise<Series> {
-    const key = JSON.stringify([a, b, seeds]);
+  /** a 对 b 打种子表的前 n 组；同一对阵已打（或正在打）的前缀不重复跑，只续打后面的 */
+  versus(a: ArmySpec, b: ArmySpec, n: number): Promise<Series> {
+    const key = JSON.stringify([a, b]);
     let hit = this.cache.get(key);
-    if (!hit) {
-      const job: Job = { a, b, seeds };
-      hit = this.runner.run([job]).then(([s]) => toSeries(s));
+    if (!hit || hit.len < n) {
+      const from = hit?.len ?? 0, prev = hit?.samples ?? Promise.resolve([]);
+      const job: Job = { a, b, seeds: seedList(from, n - from) };
+      // 续打的部分立即派下去，不等前缀打完
+      const more = this.runner.run([job]).then(([s]) => s);
+      hit = { len: n, samples: Promise.all([prev, more]).then(([p, m]) => [...p, ...m]) };
       this.cache.set(key, hit);
     }
-    return hit;
+    return hit.samples.then(s => toSeries(s.slice(0, n)));
   }
 
   /** 多个对阵一起派下去（并行度靠这个），返回与输入同序 */
-  versusAll(pairs: { a: ArmySpec; b: ArmySpec }[], seeds: number[]): Promise<Series[]> {
-    return Promise.all(pairs.map(p => this.versus(p.a, p.b, seeds)));
+  versusAll(pairs: { a: ArmySpec; b: ArmySpec }[], n: number): Promise<Series[]> {
+    return Promise.all(pairs.map(p => this.versus(p.a, p.b, n)));
   }
 
   /** 当地斜率：对手让 6 级时，被测一方（标准混编军）全军生命 ±3 级的优势之差 ÷ 级数差 */
   async slope(size: number, n: number): Promise<{ slope: number; se: number }> {
-    const seeds = seedList(0, n), opp = refSpec(size, { hp: HANDICAP });
+    const opp = refSpec(size, { hp: HANDICAP });
     const [hi, lo] = await this.versusAll([
       { a: refSpec(size, { hp: SLOPE_LEVELS }), b: opp },
       { a: refSpec(size, { hp: -SLOPE_LEVELS }), b: opp },
-    ], seeds);
+    ], n);
     const d = 2 * SLOPE_LEVELS;
     return { slope: (hi.stat.mean - lo.stat.mean) / d, se: Math.hypot(hi.stat.se, lo.stat.se) / d };
   }
 
-  /** 被测一方对让了 6 级的标准混编军，相对参照组（缺省是标准混编军本身）的增量，换算成点数 */
-  async points(kind: Row['kind'], label: string, test: ArmySpec, size: number, n: number, meta?: Row['meta'], ref: ArmySpec = refSpec(size)): Promise<Row> {
-    const seeds = seedList(0, n), opp = refSpec(size, { hp: HANDICAP });
-    const [t, base, sl] = await Promise.all([this.versus(test, opp, seeds), this.versus(ref, opp, seeds), this.slope(size, n)]);
-    const diff = pairedDiff(t.advs, base.advs);
-    const points = diff.mean / sl.slope;
-    const pointsSe = Math.hypot(diff.se / sl.slope, (points * sl.se) / sl.slope);
-    return {
-      kind, label, size, n, adv: t.stat.mean, advSe: t.stat.se, win: t.win,
-      delta: diff.mean, deltaSe: diff.se, slope: sl.slope, points, pointsSe, significant: significant(diff), meta,
-    };
+  /**
+   * 被测一方对让了 6 级的标准混编军，相对参照组（缺省是标准混编军本身）的增量，换算成点数。
+   * 按序贯检验分批打到 cap 组为止：被测军队每批续打，参照组与斜率被同规模的格子共用，一开始就打满 cap 组；
+   * 每批打完用回归估计（stats.ts 的 regressionDelta）算增量，停止判断说停就按这 n 组出结果
+   */
+  async points(kind: Row['kind'], label: string, test: ArmySpec, size: number, cap: number, meta?: Row['meta'], ref: ArmySpec = refSpec(size)): Promise<Row> {
+    const opp = refSpec(size, { hp: HANDICAP });
+    const shared = Promise.all([this.versus(ref, opp, cap), this.slope(size, cap)]);
+    for (const n of looks(cap)) {
+      const [t, [base, sl]] = await Promise.all([this.versus(test, opp, n), shared]);
+      const diff = regressionDelta(t.advs, base.advs);
+      const stop = stopRule(diff, cap);
+      if (!stop) continue;
+      const points = diff.mean / sl.slope;
+      const pointsSe = Math.hypot(diff.se / sl.slope, (points * sl.se) / sl.slope);
+      return {
+        kind, label, size, n, adv: t.stat.mean, advSe: t.stat.se, win: t.win,
+        delta: diff.mean, deltaSe: diff.se, slope: sl.slope, points, pointsSe, significant: significant(diff), stop, meta,
+      };
+    }
+    throw new Error('序贯检验到上限也没停（不应发生）');
   }
 
   /**
@@ -250,7 +267,7 @@ export class Measurer {
     const size = opts?.size ?? DEFAULTS.roundRobin.size, n = opts?.n ?? DEFAULTS.roundRobin.n;
     const [r] = await this.versusAll([{
       a: { type: 'faction', faction: a, size, ...opts?.modA }, b: { type: 'faction', faction: b, size, ...opts?.modB },
-    }], seedList(0, n));
+    }], n);
     const la = a + (opts?.modA ? `(${modLabel(opts.modA)})` : ''), lb = b + (opts?.modB ? `(${modLabel(opts.modB)})` : '');
     return { kind: 'roundrobin', label: `${la}|${lb}`, size, n, adv: r.stat.mean, advSe: r.stat.se, win: r.win, advs: r.advs };
   }
@@ -258,8 +275,7 @@ export class Measurer {
   /** 标尺：被测一方全军生命加减若干级，对标准混编军的优势曲线 */
   async ladder(levels: number[], opts?: { size?: number; n?: number }): Promise<Row[]> {
     const size = opts?.size ?? DEFAULTS.ladder.size, n = opts?.n ?? DEFAULTS.ladder.n;
-    const seeds = seedList(0, n);
-    const out = await this.versusAll(levels.map(L => ({ a: refSpec(size, { hp: L }), b: refSpec(size) })), seeds);
+    const out = await this.versusAll(levels.map(L => ({ a: refSpec(size, { hp: L }), b: refSpec(size) })), n);
     return levels.map((L, i) => ({ kind: 'ladder', label: `all:hp=${L}`, size, n, adv: out[i].stat.mean, advSe: out[i].stat.se, win: out[i].win }));
   }
 
@@ -267,10 +283,9 @@ export class Measurer {
   async roundRobin(opts?: { size?: number; n?: number; factions?: FactionId[] }): Promise<Row[]> {
     const size = opts?.size ?? DEFAULTS.roundRobin.size, n = opts?.n ?? DEFAULTS.roundRobin.n;
     const ids = opts?.factions ?? FACTION_IDS;
-    const seeds = seedList(0, n);
     const pairs: [FactionId, FactionId][] = [];
     for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) pairs.push([ids[i], ids[j]]);
-    const res = await this.versusAll(pairs.map(([a, b]) => ({ a: { type: 'faction', faction: a, size }, b: { type: 'faction', faction: b, size } })), seeds);
+    const res = await this.versusAll(pairs.map(([a, b]) => ({ a: { type: 'faction', faction: a, size }, b: { type: 'faction', faction: b, size } })), n);
     const rows: Row[] = pairs.map(([a, b], i) => ({
       kind: 'roundrobin', label: `${a}|${b}`, size, n, adv: res[i].stat.mean, advSe: res[i].stat.se, win: res[i].win,
     }));

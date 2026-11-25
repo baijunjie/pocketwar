@@ -8,10 +8,10 @@ import { createHash } from 'node:crypto';
 import {
   ARCHETYPES, ELITE, HP_SCALE, LEVELS, PRICES, RULES, SIZES, STEP, TRAITS, UNITS, UnitDef, isContentUnit,
 } from '../../src/sim/defs';
-import { PROTOCOL } from './battle';
+import { DECIDED, PROTOCOL } from './battle';
 import { DEFAULTS, HANDICAP, SLOPE_LEVELS, SPARSE_SLOTS } from './measure';
 import { FLOOR_DIMS, FLOOR_RATIO, MANPOWER_PROBE, PROBE } from './price';
-import { seedList } from './stats';
+import { SEQ, seedList } from './stats';
 import { POSITIONS, REF_SHARE } from './units';
 
 /** 键排序后序列化，函数略过 */
@@ -40,14 +40,14 @@ export function hash(parts: unknown): string {
 
 /**
  * 测量指纹：价目表的测量结果（price-measurements.json）依赖的东西——规则、等级、体型、原型、特性、位置与标准混编军，
- * 以及测量规程（对战规程、让级与斜率、各测量的规模与样本数、种子、测价的级数、兵员测几级）。它变了，测量就要重量
+ * 以及测量规程（对战规程与提前收兵、序贯检验、让级与斜率、各测量的规模与样本上限、种子、测价的级数、兵员测几级）。它变了，测量就要重量
  */
 export function measureFingerprint(): string {
   const rules: Record<string, unknown> = { ...RULES };
   for (const k of IRRELEVANT_RULES) delete rules[k];
   return hash({
     rules, LEVELS, ELITE, HP_SCALE, STEP, SIZES, ARCHETYPES, TRAITS, POSITIONS, REF_SHARE,
-    protocol: { ...PROTOCOL, HANDICAP, SLOPE_LEVELS, SPARSE_SLOTS, DEFAULTS, seeds: seedList(0, 4) },
+    protocol: { ...PROTOCOL, DECIDED, SEQ, HANDICAP, SLOPE_LEVELS, SPARSE_SLOTS, DEFAULTS, seeds: seedList(0, 4) },
     probes: { PROBE, MANPOWER_PROBE },
   });
 }
