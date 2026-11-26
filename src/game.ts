@@ -12,6 +12,7 @@ import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection } from './camInput';
 import { loadPref, savePref } from './prefs';
+import { Pinch, TouchGestures, UiMode, asUiMode, isMobileUi } from './touchInput';
 import { PointerLock } from './pointerLock';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
@@ -61,6 +62,18 @@ export class GameApp {
   private lastGroup = { t: 0, g: -1 };
   /** 镜头跟随的部队（按 C 开关）：镜头平滑地跟着他们的重心走，手动移动镜头即取消 */
   private follow: { slots: number[]; uids: number[] } | null = null;
+  /** 「界面」设置与据此得出的结果：移动版是上下分屏的竖屏触控布局（根上的 mobile 类） */
+  private uiMode: UiMode = asUiMode(loadPref('ui'));
+  private mobile = false;
+  private readonly portraitQuery = window.matchMedia('(pointer: coarse) and (orientation: portrait)');
+  /** 移动版画面上的手指手势（点、长按、框选、双指缩放旋转） */
+  private readonly touch = new TouchGestures({
+    tap: (x, y) => this.touchTap(x, y),
+    hold: (x, y) => this.touchHold(x, y),
+    canBox: () => !this.mode && !!this.world.humanTeam,
+    box: (x0, y0, x1, y1, done, commit) => this.touchBox(x0, y0, x1, y1, done, commit),
+    pinch: p => this.touchPinch(p),
+  });
   private uiTimer = 0;
   private mmTimer = 0;
   private over = false;
@@ -100,6 +113,12 @@ export class GameApp {
         this.wheelMode = m;
         savePref('wheel', m);
       },
+      uiMode: () => this.uiMode,
+      setUiMode: m => {
+        this.uiMode = m;
+        savePref('ui', m);
+        this.applyLayout();
+      },
       lockMouse: () => this.pointer.enabled,
       setLockMouse: on => {
         this.pointer.setEnabled(on);
@@ -124,6 +143,14 @@ export class GameApp {
       cam.zoom = 0.4;
     }
     this.bind();
+    this.applyLayout();
+    const onQuery = (): void => this.applyLayout();
+    this.portraitQuery.addEventListener('change', onQuery);
+    this.cleanup.push(() => this.portraitQuery.removeEventListener('change', onQuery));
+    // 小地图的显示尺寸随布局变（移动版里按下半屏剩下的空间放大）
+    const mmObserver = new ResizeObserver(() => this.minimap.resize());
+    mmObserver.observe(this.hud.minimap);
+    this.cleanup.push(() => mmObserver.disconnect());
     this.refreshUi();
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
@@ -131,6 +158,7 @@ export class GameApp {
 
   destroy(): void {
     cancelAnimationFrame(this.raf);
+    this.touch.cancel();
     for (const f of this.cleanup) f();
     this.pointer.destroy();
     this.hud.destroy();
@@ -154,6 +182,11 @@ export class GameApp {
       cv.focus();
       if (this.hud.helpOpen) return;
       const p = this.local(e);
+      if (this.mobile && e.button === 0) {
+        cv.setPointerCapture(e.pointerId);
+        this.touch.down(e.pointerId, p.x, p.y);
+        return;
+      }
       if (e.button === 1) {
         // 中键拖动旋转镜头；按住 Shift 改为平移
         this.pan = { x: p.x, y: p.y, rotate: !e.shiftKey };
@@ -177,6 +210,7 @@ export class GameApp {
     });
     this.on(cv, 'pointermove', e => {
       const p = this.local(e);
+      if (this.mobile) this.touch.move(e.pointerId, p.x, p.y);
       this.mouse.x = p.x;
       this.mouse.y = p.y;
       this.mouse.inside = true;
@@ -208,18 +242,14 @@ export class GameApp {
       if (d) {
         if (!d.active && Math.hypot(p.x - d.x, p.y - d.y) > 5) d.active = true;
         if (d.active) {
-          const s = this.box.style;
-          s.display = 'block';
-          s.left = `${Math.min(d.x, p.x)}px`;
-          s.top = `${Math.min(d.y, p.y)}px`;
-          s.width = `${Math.abs(p.x - d.x)}px`;
-          s.height = `${Math.abs(p.y - d.y)}px`;
+          this.showBox(d.x, d.y, p.x, p.y);
           this.hud.cards.markCards(this.clientRect(d.x, d.y, p.x, p.y));
         }
       }
     });
     this.on(cv, 'pointerup', e => {
       const p = this.local(e);
+      if (this.mobile && e.button === 0) this.touch.up(e.pointerId, p.x, p.y);
       if (this.pan && (e.button === 1 || e.button === 0)) this.pan = null;
       const rd = this.rdrag;
       if (rd && e.button === 2) {
@@ -240,6 +270,7 @@ export class GameApp {
         else this.clickSelect(p.x, p.y, e.shiftKey);
       }
     });
+    this.on(cv, 'pointercancel', () => this.touch.cancel());
     // 鼠标位置在整个窗口上跟踪（贴边卷屏不管底下是不是界面面板）
     this.on(window, 'pointermove', e => {
       const p = this.local(e), m = this.mouse;
@@ -279,6 +310,8 @@ export class GameApp {
     };
     const gestureChange = (e: Event): void => {
       e.preventDefault();
+      // 移动版的双指缩放由指针事件处理，Safari 同时发的手势事件不能再缩一次
+      if (this.mobile) return;
       const g = this.gesture, scale = (e as Event & { scale?: number }).scale;
       // 锁定时手势事件的 target 多半是锁定元素：改看虚拟光标下的元素
       const v = this.pointer.virtualPos;
@@ -411,6 +444,7 @@ export class GameApp {
       this.mouse.out = null;
       this.mouse.buttons = 0;
       this.gesture = null;
+      this.touch.cancel();
       // 拖框时切走窗口可能收不到松手：收起框，也给卡片解冻（框选扫卡片期间卡片不重建）
       if (this.drag) {
         this.drag = null;
@@ -481,8 +515,10 @@ export class GameApp {
     // 样式表给整个界面设了 !important 的剑形指针，指令模式的十字准星要同样 !important 才盖得过
     this.canvas.style.setProperty('cursor', m ? 'crosshair' : '', m ? 'important' : '');
     this.pointer.refreshCursor();
-    this.hud.setMode(m === 'amove' ? '攻击移动：左键指定目的地（右键取消）' : m === 'rally' ? `集结点：左键指定位置，${this.selSite >= 0 ? '只设所选据点' : '给全部据点设'}（右键退出；Shift+R 取消集结点）`
-      : m === 'outpost' ? `扎营：左键指定临时据点的位置，所选部队会赶去搭建（木材 ${RULES.economy.outpostCost}，右键取消）` : '');
+    const mb = this.mobile;
+    this.hud.setMode(m === 'amove' ? `攻击移动：${mb ? '点一下指定目的地（再点一次指令按钮取消）' : '左键指定目的地（右键取消）'}`
+      : m === 'rally' ? `集结点：${mb ? '点一下指定位置' : '左键指定位置'}，${this.selSite >= 0 ? '只设所选据点' : '给全部据点设'}${mb ? '（再点一次指令按钮退出）' : '（右键退出；Shift+R 取消集结点）'}`
+      : m === 'outpost' ? `扎营：${mb ? '点一下' : '左键'}指定临时据点的位置，所选部队会赶去搭建（木材 ${RULES.economy.outpostCost}，${mb ? '再点一次指令按钮取消' : '右键取消'}）` : '');
   }
 
   /** 设集结点模式下选中对象变了：提示跟着换；选中的据点设不了集结点就退出模式，并给出与按 R 时一样的提示 */
@@ -713,7 +749,7 @@ export class GameApp {
   /**
    * 画面上的框选：框住的己方单位，加上框扫到的卡片——兵种卡片的屏幕内这个兵种、编队卡片的这一队，合并成一次选择
    */
-  private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean): void {
+  private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean, withCards = true): void {
     const w = this.world;
     const human = w.humanTeam;
     if (!human) return;
@@ -732,9 +768,11 @@ export class GameApp {
       const p = rd.worldToScreen(w.x[i], w.y[i], 8);
       if (p && p.x >= ax && p.x <= bx && p.y >= ay && p.y <= by) push(i);
     }
-    const cards = this.hud.cards.cardsIn(this.clientRect(x0, y0, x1, y1));
-    for (const s of this.typeUnits(cards.types)) push(s);
-    for (const g of cards.groups) for (const s of this.groupAlive(g)) push(s);
+    if (withCards) {
+      const cards = this.hud.cards.cardsIn(this.clientRect(x0, y0, x1, y1));
+      for (const s of this.typeUnits(cards.types)) push(s);
+      for (const g of cards.groups) for (const s of this.groupAlive(g)) push(s);
+    }
     this.setSelection(list);
   }
 
@@ -838,16 +876,20 @@ export class GameApp {
   }
 
   // ------------------------------------------------------------------ 指令
-  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow'): void {
+  private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow' | 'deselect'): void {
     const w = this.world;
     if (!w.humanTeam) return;
-    if (c === 'follow') {
+    if (c === 'deselect') {
+      this.setMode('');
+      this.setSelection([]);
+      this.selectSite(-1);
+    } else if (c === 'follow') {
       if (this.follow) this.stopFollow();
       else if (!this.selList.length) this.hud.message('先选中要跟随的部队', 'info');
       else {
         this.follow = { slots: this.selList.slice(), uids: this.selUid.slice() };
         this.hud.following = true;
-        this.hud.message('镜头跟随所选部队（再按 C 或移动镜头即取消）', 'info');
+        this.hud.message(this.mobile ? '镜头跟随所选部队（再点一次「跟随」或移动镜头即取消）' : '镜头跟随所选部队（再按 C 或移动镜头即取消）', 'info');
       }
     } else if (c === 'all') {
       const list: number[] = [];
@@ -934,8 +976,8 @@ export class GameApp {
       if (!sites) return this.setMode('');
       for (const s of sites) s.rally = { x, y };
       this.renderer.addMarker(x, y, 1, 0.9, 0.3, false);
-      this.hud.message(this.selSite >= 0 ? `${sites[0].name}的集结点已设：之后它新出的援军开赴这里（Shift+R 取消）`
-        : '集结点已设：之后各据点新出的援军开赴这里（Shift+R 取消）', 'info', x, y);
+      this.hud.message(this.selSite >= 0 ? `${sites[0].name}的集结点已设：之后它新出的援军开赴这里${this.mobile ? '' : '（Shift+R 取消）'}`
+        : `集结点已设：之后各据点新出的援军开赴这里${this.mobile ? '（指令面板里可取消集结）' : '（Shift+R 取消）'}`, 'info', x, y);
       this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
     }
     this.setMode('');
@@ -993,6 +1035,80 @@ export class GameApp {
     }
     if (this.attackBuildingAt(p.x, p.y, force)) return;
     this.issueMove(p.x, p.y, false);
+  }
+
+  // ------------------------------------------------------------------ 移动版
+  /** 按「界面」设置与设备方向重新判定用哪套布局，变了就切换 */
+  private applyLayout(): void {
+    const on = isMobileUi(this.uiMode, this.portraitQuery.matches);
+    if (on === this.mobile) return;
+    this.mobile = on;
+    this.touch.cancel();
+    this.mouse.out = null;
+    this.mouse.inside = false;
+    this.hud.setMobile(on);
+    // 移动版没有锁定鼠标；回到桌面版按偏好恢复
+    this.pointer.setEnabled(!on && loadPref('lockMouse') === '1');
+    if (this.mode) this.setMode(this.mode);
+    this.minimap.resize();
+  }
+
+  /**
+   * 点一下：指令模式里在那里执行；点己方单位是选中；否则有选中部队时照右键的语义下令（点地面移动、点敌军或敌方建筑攻击，
+   * 点据点处是派人过去，可占领：不能把据点优先，否则部队的选择会被清掉）；没选部队时点据点是选中据点、点空地是取消选择
+   */
+  private touchTap(x: number, y: number): void {
+    if (this.mode) return this.modeClick(x, y);
+    const human = this.world.humanTeam;
+    if (!human) return;
+    if (this.unitAt(x, y, human, false) >= 0 || !this.selList.length) this.clickSelect(x, y, false);
+    else this.rightClick(x, y, false);
+  }
+
+  /** 长按：已选部队攻击移动到那里（点在敌方建筑上则直接攻打） */
+  private touchHold(x: number, y: number): void {
+    if (this.mode || !this.world.humanTeam || !this.selList.length) return;
+    const p = this.renderer.screenToWorld(x, y);
+    if (!this.attackBuildingAt(p.x, p.y, false)) this.issueMove(p.x, p.y, true);
+    navigator.vibrate?.(15);
+  }
+
+  /** 画面上拖出的选框（画布坐标） */
+  private showBox(x0: number, y0: number, x1: number, y1: number): void {
+    const s = this.box.style;
+    s.display = 'block';
+    s.left = `${Math.min(x0, x1)}px`;
+    s.top = `${Math.min(y0, y1)}px`;
+    s.width = `${Math.abs(x1 - x0)}px`;
+    s.height = `${Math.abs(y1 - y0)}px`;
+  }
+
+  /**
+   * 框选的拖动与结束。框的两端钳在上半屏的画面里：手指拖到下半屏时，框不该扫到画面外的单位；
+   * 卡片在下半屏、手指拖不进框里，移动版也不走卡片合并
+   */
+  private touchBox(x0: number, y0: number, x1: number, y1: number, done: boolean, commit: boolean): void {
+    const vw = this.renderer.viewW, vh = this.renderer.viewH;
+    const cx = (v: number): number => Math.max(0, Math.min(vw, v)), cy = (v: number): number => Math.max(0, Math.min(vh, v));
+    if (!done) return this.showBox(cx(x0), cy(y0), cx(x1), cy(y1));
+    this.box.style.display = 'none';
+    if (commit) this.boxSelect(cx(x0), cy(y0), cx(x1), cy(y1), false, false);
+  }
+
+  /** 双指：缩放、旋转都绕两指的中点，中点本身的移动就是平移——两指按住的那块地面始终跟着手指走 */
+  private touchPinch(g: Pinch): void {
+    const rd = this.renderer, cam = rd.cam;
+    const anchor = rd.screenToWorld(g.x0, g.y0);
+    cam.zoom *= g.scale;
+    cam.yaw += g.turn;
+    rd.clampCam();
+    // 镜头跟随中只缩放旋转，不往中点挪（挪了也会被拉回来）；手指拖动中点才算手动移动镜头
+    if (Math.hypot(g.x1 - g.x0, g.y1 - g.y0) > 2) this.stopFollow();
+    if (this.follow) return;
+    const now = rd.screenToWorld(g.x1, g.y1);
+    cam.x += anchor.x - now.x;
+    cam.y += anchor.y - now.y;
+    rd.clampCam();
   }
 
   // ------------------------------------------------------------------ 主循环
@@ -1056,7 +1172,7 @@ export class GameApp {
     // 鼠标贴到屏幕最外沿卷屏，底下是界面面板也卷；从某条边离开了网页就朝那边续卷。
     // 按着键拖动时不卷（画面上拖框、拖卡片、拖小地图）：拖过头卷走了镜头，松手时选中的就不是框住的那批人
     const m = this.mouse;
-    if (!m.buttons && !this.drag && !this.pan && !this.hud.helpOpen && document.hasFocus()) {
+    if (!this.mobile && !m.buttons && !this.drag && !this.pan && !this.hud.helpOpen && document.hasFocus()) {
       if (m.out) {
         dx += m.out.dx;
         dy += m.out.dy;
@@ -1144,7 +1260,7 @@ export class GameApp {
         continue;
       }
       if (e.kind === 'daynight') {
-        this.hud.message(e.night ? '入夜：视野缩小，可点火把（T）' : '天亮了', 'info');
+        this.hud.message(e.night ? `入夜：视野缩小，可点火把${this.mobile ? '' : '（T）'}` : '天亮了', 'info');
         continue;
       }
       if (e.kind === 'hunger') {

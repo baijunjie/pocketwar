@@ -5,6 +5,7 @@
  */
 import { LEVELS, UNITS } from '../sim/defs';
 import { World } from '../sim/world';
+import { cardIntent } from '../touchInput';
 import { unitTip } from './unitText';
 
 export interface CardBarCallbacks {
@@ -40,6 +41,8 @@ export class CardBar {
   /** 画面上的框选正扫着卡片：不重建，免得高亮丢掉 */
   private boxing = false;
   private readonly cleanup: (() => void)[] = [];
+  /** 移动版：卡片带横向滚动，按住后按方向区分是滚动还是拖卡片下令；拖拽中的卡片浮在手指上方 */
+  mobile = false;
 
   /**
    * area：两排卡片所在的容器（指针捕获挂在它上面）；overlay：拖拽中的卡片挂在这里；
@@ -105,7 +108,7 @@ export class CardBar {
     }
     const types = [...rows.keys()].sort((a, b) => UNITS[a].row - UNITS[b].row || a - b);
     const mAvg = sel.length ? Math.round(moraleSum / sel.length) : 0;
-    let key = `${w.humanTeam}|${sel.length}|${screen.length}|${Math.round(mAvg / 4)}|`;
+    let key = `${this.mobile}|${w.humanTeam}|${sel.length}|${screen.length}|${Math.round(mAvg / 4)}|`;
     for (const t of types) {
       const r = rows.get(t)!, k = r.n || r.scr;
       key += `${t}:${r.scr}:${r.n}:${Math.round((r.hp / k) * 20)}:${Math.round((r.lv / k) * 4)}:${r.top},`;
@@ -113,11 +116,11 @@ export class CardBar {
     if (key === this.rosterKey) return;
     this.rosterKey = key;
     if (!w.humanTeam) {
-      this.roster.innerHTML = '<div class="hint">观战模式：方向键 / 拖动小地图移动镜头，滚轮缩放</div>';
+      this.roster.innerHTML = `<div class="hint">观战模式：${this.mobile ? '拖动小地图或双指滑动移动镜头，双指捏合缩放' : '方向键 / 拖动小地图移动镜头，滚轮缩放'}</div>`;
       return;
     }
     if (!types.length) {
-      this.roster.innerHTML = '<div class="hint">屏幕内没有我方部队 · 拖框选择部队 · 右键移动或攻击 · 点据点可升级</div>';
+      this.roster.innerHTML = `<div class="hint">屏幕内没有我方部队 · 拖框选择部队 · ${this.mobile ? '点地面移动或攻击' : '右键移动或攻击'} · 点据点可升级</div>`;
       return;
     }
     const head = sel.length
@@ -211,9 +214,11 @@ export class CardBar {
   /**
    * 点击：兵种卡片选屏幕内这个兵种（Shift 加选 / 去掉，双击选全图），编队卡片选这一队（双击跳镜头）；
    * 按住拖动：卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人攻击移动过去；松在别处、按右键、按 Esc、窗口失去焦点都取消。
+   * 移动版（手指拖）：按住后竖直位移占主导才是拖卡片，横向占主导是滚动卡片带（area 自己是滚动容器）；按在卡片之间的空隙上只能滚动。
    */
   private bind(area: HTMLElement): void {
-    let down: { card: HTMLElement; x: number; y: number; add: boolean; id: number } | null = null;
+    let down: { card: HTMLElement | null; x: number; y: number; add: boolean; id: number; scroll0: number;
+      intent: 'wait' | 'drag' | 'scroll' } | null = null;
     let ghost: HTMLElement | null = null;
     let last = { t: 0, key: '' };
     const kindOf = (c: HTMLElement): 'type' | 'group' => (c.dataset.g !== undefined ? 'group' : 'type');
@@ -223,7 +228,8 @@ export class CardBar {
     };
     const place = (x: number, y: number): void => {
       if (!ghost) return;
-      ghost.style.transform = `translate(${x + 14}px, ${y + 14}px) scale(0.8)`;
+      // 手指会挡住卡片：移动版把卡片放到手指上方
+      ghost.style.transform = this.mobile ? `translate(${x - 30}px, ${y - 112}px) scale(0.8)` : `translate(${x + 14}px, ${y + 14}px) scale(0.8)`;
       ghost.classList.toggle('nodrop', !target(x, y));
     };
     const stop = (): void => {
@@ -264,9 +270,10 @@ export class CardBar {
     };
     area.addEventListener('pointerdown', e => {
       const card = (e.target as HTMLElement).closest<HTMLElement>('.cardrow .ucard');
-      if (!card || e.button !== 0) return;
-      const id = Number(card.dataset.g ?? card.dataset.t);
-      down = { card, x: e.clientX, y: e.clientY, add: e.shiftKey || e.ctrlKey || e.metaKey, id };
+      if ((!card && !this.mobile) || e.button !== 0) return;
+      const id = card ? Number(card.dataset.g ?? card.dataset.t) : -1;
+      down = { card, x: e.clientX, y: e.clientY, add: e.shiftKey || e.ctrlKey || e.metaKey, id, scroll0: area.scrollLeft,
+        intent: card && this.mobile ? 'wait' : this.mobile ? 'scroll' : 'drag' };
       this.held = true;
       area.setPointerCapture(e.pointerId);
       window.addEventListener('keydown', onKey, true);
@@ -280,8 +287,13 @@ export class CardBar {
         stop();
         return;
       }
+      if (down.intent === 'wait') down.intent = cardIntent(e.clientX - down.x, e.clientY - down.y);
+      if (down.intent === 'scroll') {
+        area.scrollLeft = down.scroll0 - (e.clientX - down.x);
+        return;
+      }
       if (!ghost) {
-        if (Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) return;
+        if (down.intent === 'wait' || !down.card || Math.hypot(e.clientX - down.x, e.clientY - down.y) < (this.mobile ? 0 : 6)) return;
         ghost = down.card.cloneNode(true) as HTMLElement;
         // 「选 N」角标与选中态不跟着走：松手后出动的是这张卡代表的全部人，不只是选着的那些
         ghost.removeAttribute('title');
@@ -296,9 +308,11 @@ export class CardBar {
       if (!e.buttons) unguardMenu();
       const d = down;
       if (!d || e.button !== 0) return;
-      const dragged = !!ghost;
+      const dragged = !!ghost, scrolled = d.intent === 'scroll';
       stop();
       if (area.hasPointerCapture(e.pointerId)) area.releasePointerCapture(e.pointerId);
+      // 空隙上按下、或横向滚动了卡片带：不是点卡片
+      if (!d.card || scrolled) return;
       const kind = kindOf(d.card);
       if (dragged) {
         const t = target(e.clientX, e.clientY);

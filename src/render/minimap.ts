@@ -9,7 +9,8 @@ export class Minimap {
   private readonly fogCv: HTMLCanvasElement;
   private readonly fogCtx: CanvasRenderingContext2D;
   private readonly fogImg: ImageData;
-  private readonly size: number;
+  private size: number;
+  private dpr = 1;
   pings: { x: number; y: number; t: number; color: string }[] = [];
   /** 镜头的水平转角：小地图跟着转，屏幕的「上」就是小地图的「上」 */
   yaw = 0;
@@ -19,11 +20,11 @@ export class Minimap {
 
   constructor(readonly canvas: HTMLCanvasElement, private readonly world: World, miniColors: Uint8ClampedArray,
     private readonly colors: string[]) {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
     this.size = canvas.clientWidth || 220;
-    canvas.width = canvas.height = this.size * dpr;
+    canvas.width = canvas.height = this.size * this.dpr;
     this.ctx = canvas.getContext('2d')!;
-    this.ctx.scale(dpr, dpr);
+    this.ctx.scale(this.dpr, this.dpr);
     const map = world.map;
     this.base = document.createElement('canvas');
     this.base.width = map.w;
@@ -34,6 +35,15 @@ export class Minimap {
     this.fogCv.height = world.vh;
     this.fogCtx = this.fogCv.getContext('2d')!;
     this.fogImg = this.fogCtx.createImageData(world.vw, world.vh);
+  }
+
+  /** 画布的显示尺寸变了（移动版里它按下半屏剩下的空间放大）：按新尺寸重设画布分辨率 */
+  resize(): void {
+    const s = this.canvas.clientWidth;
+    if (!s || s === this.size) return;
+    this.size = s;
+    this.canvas.width = this.canvas.height = s * this.dpr;
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
   }
 
   /** 小地图上的像素位置 → 世界坐标 */

@@ -24,6 +24,9 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 20px var(--serif); color: var(--gold); letter-spacing: 4px; background: var(--bg); z-index: 20; }
 .selbox { position: absolute; display: none; border: 1px solid #7dff8a; background: rgba(125, 255, 138, 0.12); pointer-events: none; z-index: 5; }
 
+/* 只在一种界面里出现的元素：移动版由根上的 .mobile 类切换 */
+.mobile-only { display: none !important; }
+
 /* ---------- 游戏内界面 ---------- */
 .hud { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
 .hud > * { pointer-events: auto; position: absolute; }
@@ -68,6 +71,8 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mini canvas { width: 220px; height: 220px; } /* 圆形由画布自己裁，右上角留给风向标 */
 .bottom { left: 240px; right: 228px; bottom: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none !important; }
 .bottom > * { pointer-events: auto; }
+/* 两排卡片的容器：桌面版里只是把它们竖着叠起来，不挡鼠标（移动版里是横向滚动的卡片带） */
+.cardwrap { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 100%; pointer-events: none !important; }
 .bottom [hidden] { display: none !important; }
 /* 详情：选中单个单位 / 据点时浮在兵种栏上方 */
 .detail { width: max-content; max-width: 100%; box-sizing: border-box; padding: 8px 12px; }
@@ -115,6 +120,8 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .msg.bad { border-color: #e2584a; color: #ffc9c0; }
 .msg.fade { opacity: 0; }
 .modetip { display: none; top: 48px; left: 50%; transform: translateX(-50%); padding: 5px 16px; border-radius: 4px; background: rgba(160, 60, 30, 0.9); font-weight: 600; pointer-events: none !important; }
+/* 浮层叠放次序的顶层：帮助与结算遮罩盖过设置、菜单、抽屉与把手 */
+.overlay { z-index: 50; }
 .overlay { inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8, 6, 4, 0.62); }
 .overlay[hidden] { display: none; }
 .card { padding: 22px 30px; max-width: 640px; text-align: center; }
@@ -269,3 +276,98 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .vcursor.cross svg:first-child { display: none; }
 .vcursor.cross svg + svg { display: block; }
 .lock-tip { position: fixed; left: 0; top: 0; max-width: 360px; padding: 4px 8px; font-size: 12px; line-height: 1.5; white-space: pre-line; color: var(--text); background: rgba(20, 16, 12, 0.96); border: 1px solid var(--line); border-radius: 4px; pointer-events: none; z-index: 10001; will-change: transform; }
+
+/* ---------- 移动版（竖屏触控）：根 #app 上有 .mobile 类 ----------
+   层级（.hud 内）：常驻面板 < 把手 10 < 抽屉遮罩 20 < 抽屉 30 < 菜单与设置 40 < 帮助与结算遮罩 50
+   上半屏是游戏画面，下半屏顶部是紧贴分屏线的卡片带，卡片带下面是小地图；据点列表与指令面板是两侧滑出的抽屉。 */
+#app.mobile { --strip: 112px; --bar: 34px; touch-action: manipulation; -webkit-touch-callout: none; }
+.mobile .desktop-only { display: none !important; }
+.mobile .mobile-only { display: revert !important; }
+.mobile .cmds button.mobile-only { display: flex !important; }
+.mobile canvas.view { height: 50%; touch-action: none; }
+.mobile .hud > * { touch-action: none; }
+.mobile button { min-height: 40px; }
+/* 顶栏缩成上半屏顶端一条细栏：只留双方人数、时间、粮、木石金，其余收进菜单 */
+.mobile .topbar { width: 100%; max-width: none; height: var(--bar); gap: 6px; padding: 2px 6px; border-right: none; border-radius: 0; font-size: 11px; overflow: visible; }
+.mobile .topbar .env, .mobile .topbar .wind, .mobile .topbar .morale, .mobile .topbar .dbg, .mobile .counts .vs { display: none !important; }
+.mobile .topbar .counts, .mobile .topbar .clock, .mobile .topbar .food, .mobile .topbar .res { font-size: 11px; padding-left: 0; padding-right: 0; background: none; }
+.mobile .counts { gap: 4px; }
+.mobile .counts .tag { padding: 0 5px; }
+.mobile .topbar .res { gap: 4px; }
+.mobile .topbar .food { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mobile .topbar .menubtn { position: relative; flex-shrink: 0; margin-left: auto; min-height: 28px; padding: 0 12px; }
+/* 命中范围扩到约 40px 高，向左右多伸一点 */
+.mobile .topbar .menubtn::after { content: ''; position: absolute; inset: -6px -4px -6px -8px; }
+/* 菜单：右上角按钮弹出的按钮组 */
+.mobile .ctl { display: none; top: var(--bar); right: 4px; z-index: 40; width: 232px; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(20, 16, 12, 0.96); }
+.mobile .ctl.open { display: grid; }
+.mobile .ctl button { padding: 4px 2px; white-space: nowrap; }
+.mobile .settings { top: var(--bar); z-index: 40; right: 4px; width: min(300px, calc(100% - 8px)); max-height: calc(50% - 40px); overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; touch-action: pan-y; }
+.mobile .modetip { top: var(--bar); left: 3%; right: 3%; transform: none; width: auto; text-align: center; font-size: 12px; }
+/* 战报占满宽度，提示条出现时让到它下面（提示条最多两行） */
+.mobile .feed { top: var(--bar); left: 3%; right: 3%; transform: none; max-width: none; align-items: stretch; }
+.mobile .has-mode .feed { top: calc(var(--bar) + 50px); }
+.mobile .feed .msg { max-width: 100%; }
+.mobile .msg { font-size: 12px; }
+.mobile .help .card { max-height: 100%; }
+.mobile .help-content { touch-action: pan-y; }
+/* 详情浮在上半屏底部、紧贴分屏线 */
+.mobile .bottom { display: contents; }
+.mobile .detail { position: absolute; left: 46px; right: 46px; bottom: 50%; width: auto; max-height: 25%; overflow-y: auto; touch-action: pan-y; padding: 6px 8px; border-bottom: none; border-radius: 6px 6px 0 0; }
+/* 左右各让出把手的宽度（把手 26px 加向内伸出的命中范围），详情不盖住把手 */
+.mobile .udetail, .mobile .sdetail { min-width: 0; font-size: 11px; }
+.mobile .sdetail { flex-direction: column; align-items: stretch; gap: 4px; }
+.mobile .sdetail .who { width: auto; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start; gap: 2px 8px; text-align: left; }
+.mobile .sdetail .who span { display: inline-block; }
+.mobile .sdetail .grid span { white-space: nowrap; }
+.mobile .sdetail .grid b { white-space: normal; }
+.mobile .udetail .who { width: 64px; }
+.mobile .udetail .rows { min-width: 0; }
+.mobile .udetail .lvrow { flex-wrap: wrap; }
+.mobile .udetail .grid { grid-template-columns: auto 1fr; }
+.mobile .sdetail .rows { min-width: 0; }
+.mobile .sdetail .picks { flex-wrap: nowrap; overflow-x: auto; touch-action: pan-x pan-y; scrollbar-width: none; }
+.mobile .sdetail .picks button { flex: none; }
+.mobile .sdetail .acts { min-width: 0; flex-direction: row; flex-wrap: wrap; }
+/* 卡片带：编队卡片在前、兵种卡片在后，排成一行横向滑动（滚动由 CardBar 按手指位移驱动，手势方向区分滚动与拖卡片） */
+.mobile .cardwrap { position: absolute; left: 0; right: 0; top: 50%; height: var(--strip); flex-direction: row; align-items: stretch; justify-content: flex-start; gap: 0;
+  max-width: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; touch-action: none; pointer-events: auto !important; background: rgba(22, 18, 13, 0.96); border-top: 2px solid var(--gold); }
+.mobile .cardwrap::-webkit-scrollbar { display: none; }
+.mobile .cardrow { flex: none; flex-wrap: nowrap; width: max-content; max-width: none; min-height: 0; padding: 14px 4px 6px; gap: 6px; pointer-events: auto !important; }
+.mobile .groups { padding-right: 8px; margin-right: 2px; border-right: 1px solid var(--line); }
+.mobile .unitbar .total { width: 60px; }
+.mobile .unitbar .hint { white-space: normal; width: min(260px, 70vw); }
+.mobile .ucard { width: 76px; }
+.mobile .ucard img { width: 52px; height: 52px; }
+.mobile .ucard .nm { font-size: 12px; }
+.mobile .gcard { width: 66px; }
+.mobile .gcard img { width: 40px; height: 40px; }
+.mobile .ucard.ghost { width: 76px; }
+.mobile .ucard.ghost.gcard { width: 66px; }
+/* 小地图：下半屏剩下的空间里尽量放大（圆形，按容器短边取正方形） */
+.mobile .mini { left: 0; right: 0; top: calc(50% + var(--strip)); bottom: 0; padding: 6px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 0; background: none; backdrop-filter: none; container-type: size; }
+.mobile .mini canvas { width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); touch-action: none; }
+/* 抽屉与把手 */
+.mobile .rightcol { display: contents; }
+.scrim { display: none; }
+.mobile .scrim.show { display: block; position: absolute; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.3); }
+.mobile .drawer { position: absolute; top: var(--bar); bottom: 50%; z-index: 30; width: min(78%, 320px); overflow-y: auto; touch-action: pan-y; visibility: hidden; transition: transform 0.18s ease-out, visibility 0s 0.18s; }
+.mobile .drawer.left { left: 0; flex: none; transform: translateX(-102%); border-left: none; border-right: 1px solid var(--line); border-radius: 0 6px 6px 0; }
+.mobile .drawer.right { right: 0; transform: translateX(102%); border-right: none; border-left: 1px solid var(--line); border-radius: 6px 0 0 6px; }
+.mobile .drawer.left.open, .mobile .drawer.right.open { visibility: visible; transform: none; transition-delay: 0s; }
+.mobile .drawer .list { overflow: visible; }
+.mobile .sites.folded .list { display: block; }
+.mobile .sites .fold { pointer-events: none; }
+.mobile .sites .fold i { display: none; }
+.mobile .sites .fold b::before, .mobile .sites.folded .fold b::before { content: ''; }
+.mobile .site { min-height: 40px; padding: 4px; font-size: 13px; }
+.mobile .chips { gap: 6px; }
+.mobile .chip { display: flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 4px 10px; font-size: 14px; }
+.mobile .handle { position: absolute; top: calc(25% - 36px); z-index: 10; width: 22px; height: 72px; background: var(--panel); border: 1px solid var(--line); }
+.mobile .handle.left { left: 4px; border-radius: 0 10px 10px 0; border-left: none; }
+.mobile .handle.right { right: 4px; border-radius: 10px 0 0 10px; border-right: none; }
+/* 命中范围向内多伸出去一截，凑够手指能点的宽度；靠屏幕边的一侧不伸（离边留的几像素避开系统的边缘返回手势） */
+.mobile .handle.left::after { content: ''; position: absolute; top: -8px; bottom: -8px; left: 0; right: -20px; }
+.mobile .handle.right::after { content: ''; position: absolute; top: -8px; bottom: -8px; right: 0; left: -20px; }
+.mobile .handle i { position: absolute; top: 50%; left: 50%; width: 4px; height: 28px; margin: -14px 0 0 -2px; border-radius: 2px; background: var(--gold); opacity: 0.7; }
+.mobile .cgrid button i { display: none; }

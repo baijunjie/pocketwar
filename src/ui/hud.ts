@@ -10,6 +10,7 @@ import { campBatch, factionUnits, militaryLeft, pickedUnit, reinfPaused } from '
 import { S_BRACE, S_CHARGE, S_COMBAT, S_SHIELD, S_TORCH, S_WALL, Site, World } from '../sim/world';
 import { unitPortrait } from '../render/portrait';
 import { WheelMode } from '../camInput';
+import { TAP_SLOP, UiMode, swipeDir } from '../touchInput';
 import { loadPref, savePref } from '../prefs';
 import { CardBar, CardBarCallbacks } from './cardBar';
 import { auraPct, num, rangeText, unitTip } from './unitText';
@@ -56,7 +57,7 @@ export interface UpgradeOffers {
 export type UpgradeAction = 'sel' | 'all' | 'cities' | 'camps';
 
 export interface HudCallbacks extends CardBarCallbacks {
-  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow'): void;
+  command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow' | 'deselect'): void;
   /** 点了某个升级按钮 */
   upgrade(act: UpgradeAction): void;
   /** 选中一个据点（-1 = 取消） */
@@ -74,6 +75,9 @@ export interface HudCallbacks extends CardBarCallbacks {
   /** 锁定鼠标（光标出不了画面，甩到边就卷屏） */
   lockMouse(): boolean;
   setLockMouse(on: boolean): void;
+  /** 「界面」设置：自动 / 桌面 / 移动 */
+  uiMode(): UiMode;
+  setUiMode(m: UiMode): void;
 }
 
 /** 设置面板里「滚轮 / 双指」的选项 */
@@ -81,6 +85,13 @@ const WHEEL_MODES: { mode: WheelMode; label: string; tip: string }[] = [
   { mode: 'auto', label: '自动', tip: '自动判断是鼠标滚轮还是触控板（判断不准时改选另外两项）' },
   { mode: 'trackpad', label: '触控板', tip: '双指滑动平移镜头，捏合缩放，Option（Alt）+ 双指滑动旋转' },
   { mode: 'mouse', label: '鼠标', tip: '滚轮缩放镜头' },
+];
+
+/** 设置面板里「界面」的选项 */
+const UI_MODES: { mode: UiMode; label: string; tip: string }[] = [
+  { mode: 'auto', label: '自动', tip: '触屏设备竖屏时用移动版，其余用桌面版' },
+  { mode: 'desktop', label: '桌面', tip: '键鼠操作的桌面版界面' },
+  { mode: 'mobile', label: '移动', tip: '竖屏触控的移动版界面（电脑上也可用，方便调试）' },
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''): HTMLElementTagNameMap[K] {
@@ -115,6 +126,16 @@ export class Hud {
   /** 镜头正在跟随部队：「跟随」按钮高亮，没选部队时也能点它取消 */
   following = false;
   private readonly feed: HTMLDivElement;
+  /** 战报最多几条：移动版只有 3 条 */
+  private feedMax = 5;
+  /** 移动版：抽屉手势、据点列表的点选方式、部分文案只在移动版生效（元素在桌面版里照样存在，不能只靠样式隐藏） */
+  private mobile = false;
+  /** 移动版：右上角「菜单」弹出的按钮组（桌面版里就是右上角的按钮组本身） */
+  private readonly ctl: HTMLDivElement;
+  private readonly menuBtn: HTMLButtonElement;
+  /** 移动版的两个抽屉（据点列表在左、指令面板在右）与它们后面的遮罩 */
+  private readonly drawers: { left: HTMLElement; right: HTMLElement };
+  private readonly scrim: HTMLDivElement;
   private readonly modeTip: HTMLDivElement;
   private readonly help: HTMLDivElement;
   private readonly helpContent: HTMLDivElement;
@@ -137,10 +158,10 @@ export class Hud {
   /** 挂在 window 上的监听，销毁时摘掉 */
   private readonly disposers: (() => void)[] = [];
 
-  constructor(parent: HTMLElement, private readonly world: World, private readonly teamRgb: [number, number, number][],
+  constructor(private readonly host: HTMLElement, private readonly world: World, private readonly teamRgb: [number, number, number][],
     private readonly cb: HudCallbacks) {
     const root = (this.root = el('div', 'hud'));
-    parent.appendChild(root);
+    host.appendChild(root);
     const human = world.humanTeam;
 
     // ---- 顶栏 ----
@@ -154,10 +175,23 @@ export class Hud {
     this.foodBox = el('span', 'food');
     this.moraleBox = el('span', 'morale');
     this.resBox = el('span', 'res');
-    top.append(this.counts, this.clock, this.envBox, this.windBox, this.foodBox, this.resBox, this.moraleBox, this.dbg);
+    this.menuBtn = el('button', 'menubtn mobile-only', '菜单');
+    this.menuBtn.setAttribute('aria-label', '菜单');
+    top.append(this.counts, this.clock, this.envBox, this.windBox, this.foodBox, this.resBox, this.moraleBox, this.dbg, this.menuBtn);
     root.appendChild(top);
 
-    const ctl = el('div', 'panel ctl');
+    const ctl = (this.ctl = el('div', 'panel ctl'));
+    this.menuBtn.onclick = () => this.setMenu(!ctl.classList.contains('open'));
+    // 点菜单里的按钮后收起；点菜单与「菜单」按钮以外的地方也收起
+    ctl.addEventListener('click', e => {
+      if ((e.target as HTMLElement).closest('button')) this.setMenu(false);
+    });
+    const closeMenu = (e: PointerEvent): void => {
+      if (!ctl.classList.contains('open') || ctl.contains(e.target as Node) || this.menuBtn.contains(e.target as Node)) return;
+      this.setMenu(false);
+    };
+    window.addEventListener('pointerdown', closeMenu, true);
+    this.disposers.push(() => window.removeEventListener('pointerdown', closeMenu, true));
     for (const [label, sp] of [['暂停', 0], ['1×', 1], ['2×', 2], ['4×', 4]] as [string, number][]) {
       const b = el('button', sp === 1 ? 'on' : '', label);
       b.onclick = () => cb.setSpeed(sp);
@@ -170,6 +204,8 @@ export class Hud {
       if (document.fullscreenElement) void document.exitFullscreen();
       else void document.documentElement.requestFullscreen();
     };
+    // iPhone 的 Safari 没有全屏接口
+    if (!document.documentElement.requestFullscreen) fs.hidden = true;
     this.soundBtn = el('button', '', '');
     this.soundBtn.title = '开 / 关音效（M）';
     this.soundBtn.onclick = () => this.setSound(cb.toggleSound());
@@ -191,6 +227,7 @@ export class Hud {
       else {
         this.settings.hidden = false;
         sb.classList.add('on');
+        this.syncScrim();
       }
     };
     // 点面板与「设置」按钮以外的地方收起
@@ -211,12 +248,32 @@ export class Hud {
     this.sitesBox.append(head, this.sitesList);
     if (loadPref('sitesFolded') === '1') this.sitesBox.classList.add('folded');
     // 列表会被定时重建，用事件委托响应点击
-    this.sitesList.onpointerdown = e => {
-      const row = (e.target as HTMLElement).closest<HTMLElement>('[data-id]');
-      if (!row) return;
-      const s = world.sites[Number(row.dataset.id)];
+    const pickSite = (id: number): void => {
+      const s = world.sites[id];
       cb.focus(s.x, s.y);
       cb.selectSite(s.id);
+      // 移动版：选好了收起抽屉，露出镜头跳到的地方
+      this.openDrawer(null);
+    };
+    const rowId = (e: Event): number => {
+      const row = (e.target as HTMLElement).closest<HTMLElement>('[data-id]');
+      return row ? Number(row.dataset.id) : -1;
+    };
+    // 移动版里手指在列表上按下可能是要滚动：触屏记下按下的行，没怎么动就抬起才算点（列表会定时重建，不能靠 click）；桌面版与鼠标按下即选
+    let touchRow: { pid: number; id: number; x: number; y: number } | null = null;
+    this.sitesList.onpointerdown = e => {
+      const id = rowId(e);
+      if (id < 0) return;
+      if (e.pointerType === 'mouse' || !this.mobile) pickSite(id);
+      else touchRow = { pid: e.pointerId, id, x: e.clientX, y: e.clientY };
+    };
+    this.sitesList.onpointerup = e => {
+      const t = touchRow;
+      touchRow = null;
+      if (t && t.pid === e.pointerId && Math.hypot(e.clientX - t.x, e.clientY - t.y) <= TAP_SLOP) pickSite(t.id);
+    };
+    this.sitesList.onpointercancel = () => {
+      touchRow = null;
     };
     // 右侧一列：上面据点列表（占满剩下的高度），下面指令面板
     const right = el('div', 'rightcol');
@@ -239,9 +296,12 @@ export class Hud {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-act]');
       if (b && !b.disabled && (e.detail <= 1 || b.dataset.act === 'pick')) cb.siteAction(b.dataset.act as 'upgrade' | 'tower' | 'pick', Number(b.dataset.site), b.dataset.unit === undefined ? undefined : Number(b.dataset.unit));
     });
-    this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root, cb, bottom);
+    // 两排卡片包在一个容器里：移动版里它是横向滚动的卡片带，编队卡片与兵种卡片排成一行
+    const cardwrap = el('div', 'cardwrap');
+    this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root, cb, cardwrap);
     this.disposers.push(() => this.cards.destroy());
-    bottom.append(this.selBox, this.cards.groupRow, this.cards.roster);
+    cardwrap.append(this.cards.groupRow, this.cards.roster);
+    bottom.append(this.selBox, cardwrap);
     root.appendChild(bottom);
 
     // ---- 右下：指令面板，分「部队」「援军」「升级」三栏 ----
@@ -249,7 +309,10 @@ export class Hud {
     const btn = (name: string, key: string, cmd: Parameters<HudCallbacks['command']>[0], tip: string): HTMLButtonElement => {
       const b = el('button', '', `<b>${name}</b><i>${key}</i>`);
       b.title = tip;
-      b.onclick = () => cb.command(cmd);
+      b.onclick = () => {
+        cb.command(cmd);
+        this.openDrawer(null);
+      };
       this.cmdBtns.set(cmd, b);
       return b;
     };
@@ -268,7 +331,9 @@ export class Hud {
         btn('扎营', 'B', 'outpost', `派所选部队到指定位置搭一座临时据点（木材 ${RULES.economy.outpostCost}，最多 ${RULES.economy.outpostMax} 座）：部队在里面休整回血，被毁不会重生`),
         btn('跟随', 'C', 'follow', '镜头平滑地跟着所选部队走；再按一次、或手动移动镜头即取消'),
         btn('全军', 'Ctrl+A', 'all', '选中全图的全部部队'),
+        btn('取消选择', 'Esc', 'deselect', '退出指令模式并取消选择（部队和据点）；移动版里点空地是下令移动，取消选择靠它'),
       );
+      this.cmdBtns.get('deselect')!.classList.add('mobile-only');
       const reinf = el('div', 'cgrid');
       reinf.append(
         btn('集结点', 'R', 'rally', '设置援军集结点：选中己方据点时只设它的，没选据点时给全部据点设；之后新出的援军自动开赴那里（已经出来的部队不受影响）'),
@@ -291,6 +356,29 @@ export class Hud {
     }
     right.appendChild(cmds);
 
+    // ---- 移动版的抽屉：据点列表从左、指令面板从右滑出，上半屏两侧边缘各一个把手 ----
+    this.drawers = { left: this.sitesBox, right: cmds };
+    this.sitesBox.classList.add('drawer', 'left');
+    cmds.classList.add('drawer', 'right');
+    this.scrim = el('div', 'scrim');
+    // 遮罩盖住画面：点菜单、设置、抽屉以外的地方只收起它们，这一下不落到画面上下令
+    this.scrim.onpointerdown = e => {
+      e.preventDefault();
+      this.openDrawer(null);
+      this.setMenu(false);
+      this.closeSettings();
+    };
+    root.appendChild(this.scrim);
+    for (const side of ['left', 'right'] as const) {
+      const h = el('div', `handle mobile-only ${side}`, '<i></i>');
+      h.setAttribute('role', 'button');
+      h.setAttribute('aria-label', side === 'left' ? '据点列表' : '指令面板');
+      h.setAttribute('aria-expanded', 'false');
+      this.bindDrawerGestures(h, side, true);
+      this.bindDrawerGestures(this.drawers[side], side, false);
+      root.appendChild(h);
+    }
+
     this.feed = el('div', 'feed');
     this.modeTip = el('div', 'modetip');
     root.append(this.feed, this.modeTip);
@@ -301,7 +389,17 @@ export class Hud {
         <div class="help-content" tabindex="0">
           <h2 id="help-title">快速上手</h2>
           <p class="help-goal">丢光城池和营寨的一方战败：攻占敌方所有城池与营寨即可获胜。</p>
-          <table aria-label="基本操作">
+          <table class="mobile-only" aria-label="触屏基本操作">
+            <tr><th scope="row">点单位 / 据点</th><td>选中</td></tr>
+            <tr><th scope="row">单指拖动</th><td>框选部队</td></tr>
+            <tr><th scope="row">点地面 / 敌人 / 据点</th><td>已选部队移动 / 攻击 / 派去占领（没选部队时点据点是选中它）</td></tr>
+            <tr><th scope="row">长按地面</th><td>攻击移动</td></tr>
+            <tr><th scope="row">双指捏合 / 拧转</th><td>缩放 / 旋转镜头</td></tr>
+            <tr><th scope="row">拖动小地图</th><td>移动镜头</td></tr>
+            <tr><th scope="row">卡片竖着拖到地图上</th><td>这批人攻击移动过去</td></tr>
+            <tr><th scope="row">两侧边缘的把手</th><td>拉出据点列表 / 指令面板</td></tr>
+          </table>
+          <table class="desktop-only" aria-label="基本操作">
             <tr><th scope="row">左键点击 / 拖框</th><td>选择部队</td></tr>
             <tr><th scope="row">右键点地面</th><td>命令部队移动</td></tr>
             <tr><th scope="row">右键点敌军或敌方建筑</th><td>命令部队攻击</td></tr>
@@ -309,7 +407,7 @@ export class Hud {
           </table>
           <details>
             <summary>详细操作与规则</summary>
-            <table>
+            <table class="desktop-only">
               <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
               <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；Shift 加选 / 去掉；双击：选中全图的这个兵种；按住拖到地面或小地图上松开：这个兵种攻击移动过去（右键或 Esc 取消）。从画面上拉框扫过卡片：一并选中这些兵种。选中的兵种卡片会上前一步</td></tr>
               <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
@@ -366,7 +464,7 @@ export class Hud {
 
   toggleHelp(): void {
     this.help.hidden = !this.help.hidden;
-    // 设置面板浮在遮罩之上，不收起会留在帮助上面还能点
+    // 打开帮助时收起设置面板：关掉帮助后不残留一个没人在看的设置面板
     if (this.helpOpen) this.closeSettings();
     if (this.helpOpen) this.helpContent.focus({ preventScroll: true });
   }
@@ -384,6 +482,7 @@ export class Hud {
   closeSettings(): void {
     this.settings.hidden = true;
     this.settingsBtn.classList.remove('on');
+    this.syncScrim();
   }
 
   private buildSettings(): void {
@@ -401,9 +500,10 @@ export class Hud {
     });
     seg.append(...btns);
     row.appendChild(seg);
-    this.settings.append(row, el('div', 'shint', '触控板：双指滑动平移，捏合缩放，Option（Alt）+ 双指旋转。<br>鼠标：滚轮缩放，中键拖动旋转。<br>PageUp / PageDown（Mac：fn + ↑ / ↓）也能缩放'));
+    row.classList.add('desktop-only');
+    this.settings.append(row, el('div', 'shint desktop-only', '触控板：双指滑动平移，捏合缩放，Option（Alt）+ 双指旋转。<br>鼠标：滚轮缩放，中键拖动旋转。<br>PageUp / PageDown（Mac：fn + ↑ / ↓）也能缩放'));
 
-    const lrow = el('div', 'srow', '<span title="开启后在画面上点一下，光标就出不了画面，甩到边缘即卷屏">锁定鼠标</span>');
+    const lrow = el('div', 'srow desktop-only', '<span title="开启后在画面上点一下，光标就出不了画面，甩到边缘即卷屏">锁定鼠标</span>');
     const lseg = el('div', 'seg');
     const lbtns = [true, false].map(on => {
       const b = el('button', '', on ? '开' : '关');
@@ -416,7 +516,98 @@ export class Hud {
     });
     lseg.append(...lbtns);
     lrow.appendChild(lseg);
-    this.settings.append(lrow, el('div', 'shint', '开启后在画面上点一下进入锁定，光标改由游戏自己画。按 Esc 退出锁定：全屏时（Chrome / Edge）锁定中 Esc 照常交给游戏（取消选择、退出指令模式），改为长按 Esc 退出锁定；其他浏览器与非全屏时，第一下 Esc 只解锁、不取消选择。解锁后再点一下画面重新锁定'));
+    this.settings.append(lrow, el('div', 'shint desktop-only', '开启后在画面上点一下进入锁定，光标改由游戏自己画。按 Esc 退出锁定：全屏时（Chrome / Edge）锁定中 Esc 照常交给游戏（取消选择、退出指令模式），改为长按 Esc 退出锁定；其他浏览器与非全屏时，第一下 Esc 只解锁、不取消选择。解锁后再点一下画面重新锁定'));
+
+    const urow = el('div', 'srow', '<span title="触屏设备竖屏时自动用移动版；在电脑上调试移动版时手动选「移动」">界面</span>');
+    const useg = el('div', 'seg');
+    const ubtns = UI_MODES.map(({ mode, label, tip }) => {
+      const b = el('button', '', label);
+      b.title = tip;
+      b.onclick = () => {
+        this.cb.setUiMode(mode);
+        for (const x of ubtns) x.classList.toggle('on', x === b);
+      };
+      b.classList.toggle('on', this.cb.uiMode() === mode);
+      return b;
+    });
+    useg.append(...ubtns);
+    urow.appendChild(useg);
+    this.settings.append(urow);
+  }
+
+  /** 移动版弹出 / 收起右上角「菜单」里的按钮组 */
+  private setMenu(on: boolean): void {
+    this.ctl.classList.toggle('open', on);
+    this.menuBtn.classList.toggle('on', on);
+    this.syncScrim();
+  }
+
+  /** 抽屉、菜单、设置面板任何一个开着就盖上遮罩 */
+  private syncScrim(): void {
+    this.scrim.classList.toggle('show', this.drawers.left.classList.contains('open') || this.drawers.right.classList.contains('open')
+      || this.ctl.classList.contains('open') || this.settingsOpen);
+  }
+
+  /**
+   * 抽屉与把手上的横向滑动：把手上往里滑或点一下拉出抽屉，抽屉上往回滑（城镇面板左滑、操作面板右滑）收起。
+   * 抽屉里的按钮照常点，所以不设指针捕获；滑动后吞掉紧跟着的那一下 click，免得滑过的按钮被点中。
+   */
+  private bindDrawerGestures(target: HTMLElement, side: 'left' | 'right', handle: boolean): void {
+    let from: { id: number; x: number; y: number } | null = null;
+    const inward = side === 'left' ? 'right' : 'left';
+    const finish = (dx: number, dy: number): boolean => {
+      const dir = swipeDir(dx, dy);
+      if (handle ? dir === inward : dir === side) {
+        this.openDrawer(handle ? side : null);
+        return true;
+      }
+      return false;
+    };
+    // 桌面版里据点列表与指令面板是常驻面板：鼠标在上面拖动、点按钮不该被当成滑动，滑动后吞掉 click 还会吞掉正常的点击
+    target.addEventListener('pointerdown', e => {
+      if (!this.mobile) return;
+      from = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      if (handle) target.setPointerCapture(e.pointerId);
+    });
+    target.addEventListener('pointermove', e => {
+      if (!from || from.id !== e.pointerId) return;
+      if (finish(e.clientX - from.x, e.clientY - from.y)) {
+        from = null;
+        if (!handle) {
+          const eat = (ev: Event): void => ev.stopPropagation();
+          target.addEventListener('click', eat, { capture: true, once: true });
+          setTimeout(() => target.removeEventListener('click', eat, true), 400);
+        }
+      }
+    });
+    target.addEventListener('pointerup', e => {
+      const f = from;
+      from = null;
+      // 把手上点一下（没怎么动）也拉出抽屉
+      if (handle && f && f.id === e.pointerId && Math.hypot(e.clientX - f.x, e.clientY - f.y) <= TAP_SLOP) this.openDrawer(side);
+    });
+    target.addEventListener('pointercancel', () => {
+      from = null;
+    });
+  }
+
+  /** 移动版：拉出（left / right）或收起（null）抽屉，同一时间只开一个 */
+  openDrawer(side: 'left' | 'right' | null): void {
+    this.drawers.left.classList.toggle('open', side === 'left');
+    this.drawers.right.classList.toggle('open', side === 'right');
+    for (const s of ['left', 'right'] as const) this.root.querySelector(`.handle.${s}`)!.setAttribute('aria-expanded', String(side === s));
+    this.syncScrim();
+  }
+
+  /** 切换到移动版 / 桌面版：根上的 mobile 类让样式表换布局，收起抽屉与菜单，战报条数与卡片带跟着换 */
+  setMobile(on: boolean): void {
+    this.mobile = on;
+    this.host.classList.toggle('mobile', on);
+    this.cards.mobile = on;
+    this.openDrawer(null);
+    this.setMenu(false);
+    this.feedMax = on ? 3 : 5;
+    while (this.feed.children.length > this.feedMax) this.feed.lastChild!.remove();
   }
 
   setSound(on: boolean): void {
@@ -430,6 +621,8 @@ export class Hud {
 
   setMode(text: string): void {
     this.modeTip.textContent = text;
+    // 移动版里战报条要让到提示条下面
+    this.root.classList.toggle('has-mode', !!text);
     this.modeTip.style.display = text ? 'block' : 'none';
   }
 
@@ -443,7 +636,7 @@ export class Hud {
       m.onclick = () => this.cb.focus(x, y);
     }
     this.feed.prepend(m);
-    while (this.feed.children.length > 5) this.feed.lastChild!.remove();
+    while (this.feed.children.length > this.feedMax) this.feed.lastChild!.remove();
     setTimeout(() => m.classList.add('fade'), 6000);
     setTimeout(() => m.remove(), 7200);
   }
@@ -497,7 +690,8 @@ export class Hud {
     if (w.upkeep0[human] > 0) {
       const net = w.foodIn[human] - w.foodOut[human];
       this.foodBox.hidden = false;
-      this.foodBox.textContent = `粮草 ${Math.round(w.food[human])}（${net >= 0 ? '+' : ''}${Math.round(net)}/分）`;
+      this.foodBox.textContent = this.mobile ? `粮 ${Math.round(w.food[human])}（${net >= 0 ? '+' : ''}${Math.round(net)}）`
+        : `粮草 ${Math.round(w.food[human])}（${net >= 0 ? '+' : ''}${Math.round(net)}/分）`;
       this.foodBox.className = `food${w.hunger[human] > 0.15 ? ' bad' : net < 0 ? ' warn' : ''}`;
       this.foodBox.title = `每分钟产 ${Math.round(w.foodIn[human])}、耗 ${Math.round(w.foodOut[human])}，粮仓上限 ${Math.round(w.foodCap[human])}`
         + (w.hunger[human] > 0.01 ? `\n断粮：士气 −${Math.round(w.hunger[human] * RULES.morale.hunger)}` : '');
@@ -644,7 +838,7 @@ export class Hud {
             ${mine && info.reinf ? `<span>集结点</span><b>${s.rally ? '已设（地上的旗）' : '未设，援军留在据点里'}</b>` : ''}
           </div>
           ${info.captureTime > 0 && !mine && military > 0 ? `<div class="dim">要先摧毁全部军事建筑才能占领（还剩 ${military} 座）</div>` : ''}
-          ${!s.owner && shooters > 0 ? '<div class="dim">中立的军事建筑会向双方放箭，可以直接右键攻击</div>' : ''}
+          ${!s.owner && shooters > 0 ? `<div class="dim">中立的军事建筑会向双方放箭，可以直接${this.mobile ? '点它' : '右键'}攻击</div>` : ''}
           ${afterCapture ? `<div class="dim">占领后可以${afterCapture}</div>` : ''}
           ${mine && info.reinf === 'pick' ? this.pickList(s) : ''}
         </div>
@@ -786,6 +980,7 @@ export class Hud {
     // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
     for (const [cmd, b] of this.cmdBtns) {
       const off = cmd === 'unrally' ? !this.rallySet(site) : cmd === 'follow' ? !sel.length && !this.following
+        : cmd === 'deselect' ? !sel.length && site < 0
         : cmd !== 'all' && cmd !== 'rally' && !sel.length;
       if (b.disabled !== off) b.disabled = off;
       if (cmd === 'follow') b.classList.toggle('on', this.following);
@@ -821,6 +1016,7 @@ export class Hud {
   }
 
   destroy(): void {
+    this.host.classList.remove('mobile');
     for (const f of this.disposers) f();
     this.root.remove();
   }
