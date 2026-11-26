@@ -94,6 +94,9 @@ export function auraEffect(a: UnitAura): string {
   return `${AURA_KINDS[a.kind].name} ${auraPct(a)}`;
 }
 
+/** 面板与兵种提示的数值保留一位小数（级数算出来的攻击、间隔、冲撞伤害是无限小数） */
+const num = (v: number): string => String(Math.round(v * 10) / 10);
+
 /** 射程一栏：远程写射程；近战写「近战」，攻击距离比贴身长的再写出距离 */
 function rangeText(d: UnitDef): string {
   if (!d.melee) return String(d.main.range);
@@ -103,12 +106,12 @@ function rangeText(d: UnitDef): string {
 export function unitTip(d: UnitDef): string {
   const lines = [
     `${d.name}（${unitKind(d)}）`, d.desc,
-    `生命 ${d.hp}　攻击 ${d.main.lvDmg[0]}${d.main.splash ? '（范围）' : ''}　攻速 ${d.main.lvCd[0]}s`,
+    `生命 ${d.hp}　攻击 ${num(d.main.lvDmg[0])}${d.main.splash ? '（范围）' : ''}　攻速 ${num(d.main.lvCd[0])}s`,
     `射程 ${rangeText(d)}　护甲 ${d.armM}/${d.armP}`,
     `体型 ${SIZES[d.size].name}　行军 ${d.walk}　奔跑 ${d.speed}　口粮 ${d.upkeep}`,
   ];
   const ab = d.abilities;
-  if (ab.charge) lines.push(`冲锋：远距离接敌时突进，冲撞伤害 ${ab.charge.impact}`);
+  if (ab.charge) lines.push(`冲锋：远距离接敌时突进，冲撞伤害 ${num(ab.charge.impact)}`);
   if (ab.brace) lines.push(`拒马：敌人冲来时立枪，反伤 ${ab.brace.dmg}`);
   if (ab.shield) lines.push(`举盾：遇远程敌人时远程伤害 −${Math.round(ab.shield.block * 100)}%，移动稍慢`);
   for (const a of d.auras) lines.push(`光环「${a.name}」：半径 ${a.radius} 内的其他友军${auraEffect(a)}`);
@@ -650,7 +653,6 @@ export class Hud {
     if (key === this.selKey) return;
     this.selKey = key;
     const pct = (v: number): string => (lv > 0 && v ? ` <i>+${Math.round(v * lv * 100)}%</i>` : '');
-    const num = (v: number): string => String(Math.round(v * 10) / 10);
     const next = lv + 1 < max ? LEVELS.thresholds[lv + 1] : 0;
     const base = LEVELS.thresholds[lv];
     const xpPct = next ? Math.round(((w.xp[s] - base) / (next - base)) * 100) : 100;
@@ -664,7 +666,7 @@ export class Hud {
     if (st & S_TORCH) flags.push('火把');
     const ab = d.abilities;
     const perks: string[] = [];
-    if (ab.charge) perks.push(`冲锋 ${ab.charge.impact}`);
+    if (ab.charge) perks.push(`冲锋 ${num(ab.charge.impact)}`);
     if (ab.brace) perks.push(`拒马 ${ab.brace.dmg}`);
     if (ab.shield) perks.push(`举盾 −${Math.round(ab.shield.block * 100)}%`);
     if (d.mobile) perks.push('可边走边打');

@@ -11,10 +11,63 @@ describe('兵种提示', () => {
       expect(lines[0], d.key).toBe(`${d.name}（${unitKind(d)}）`);
       expect(lines[1], d.key).toBe(d.desc);
       expect(lines[2], d.key).toContain(`生命 ${d.hp}`);
-      expect(lines[2], d.key).toContain(`攻击 ${d.main.lvDmg[0]}`);
-      expect(lines[2], d.key).toContain(`攻速 ${d.main.lvCd[0]}s`);
+      expect(lines[2], d.key).toMatch(/攻击 \d+(\.\d)?[　（]/);
+      expect(lines[2], d.key).toMatch(/攻速 \d+(\.\d)?s$/);
       expect(lines[3], d.key).toContain(`护甲 ${d.armM}/${d.armP}`);
       expect(lines[4], d.key).toContain(`体型 ${SIZES[d.size].name}`);
+    }
+  });
+
+  it('攻击与攻速保留一位小数（四舍五入），整数不带小数点：长戟兵「攻击 7.8　攻速 1.3s」', () => {
+    const stat = (k: string): string => unitTip(UNIT_BY_KEY[k]).split('\n')[2].replace('（范围）', '');
+    // 无限小数
+    expect(stat('ji')).toBe('生命 ' + UNIT_BY_KEY.ji.hp + '　攻击 7.8　攻速 1.3s');
+    expect(stat('nu')).toContain('攻击 20.8　攻速 2.8s');
+    expect(stat('cataphract')).toContain('攻速 1.3s');
+    expect(stat('ozutsu')).toContain('攻击 61.5　攻速 7.8s');
+    expect(stat('onager')).toContain('攻击 53.5　攻速 7.9s');
+    // 本来就是整数或一位小数
+    expect(stat('yari')).toBe('生命 ' + UNIT_BY_KEY.yari.hp + '　攻击 9　攻速 1.2s');
+    expect(stat('scorpio')).toContain('攻击 90　攻速 4.5s');
+    expect(stat('elephant')).toContain('攻击 28　攻速 2s');
+    expect(stat('yumi')).toContain('攻击 9　攻速 1.9s');
+  });
+
+  it('高级形态的攻击与攻速同样保留一位小数', () => {
+    const stat = (k: string): string => unitTip(UNITS[UNIT_BY_KEY[k].elite]).split('\n')[2].replace('（范围）', '');
+    expect(stat('ji')).toContain('攻击 9.8　攻速 1.3s');
+    expect(stat('dao')).toContain('攻击 11.3　攻速 1.1s');
+    expect(stat('yari')).toContain('攻击 11.3　攻速 1.2s');
+    expect(stat('scorpio')).toContain('攻击 112.5　攻速 4.5s');
+    expect(stat('elephant')).toContain('攻击 35　攻速 2s');
+  });
+
+  it('所有兵种（初级与高级）的攻击、攻速都不超过一位小数，且与数值的四舍五入一致，带范围杀伤的在攻击后标「（范围）」', () => {
+    const fmt = (v: number): string => v.toFixed(1).replace(/\.0$/, '');
+    for (const d of UNITS.filter(isContentUnit)) {
+      const line = unitTip(d).split('\n')[2];
+      expect(line, d.key).toBe(`生命 ${d.hp}　攻击 ${fmt(d.main.lvDmg[0])}${d.main.splash ? '（范围）' : ''}　攻速 ${fmt(d.main.lvCd[0])}s`);
+      expect(line, d.key).not.toMatch(/\d\.\d{2,}/);
+    }
+  });
+
+  it('冲锋的冲撞伤害保留一位小数（四舍五入）：罗马骑兵 125、铁甲骑兵 157.5，本来是整数的骑兵不变', () => {
+    const charge = (d: typeof UNITS[number]): string => unitTip(d).split('\n').find(l => l.startsWith('冲锋：'))!;
+    for (const k of ['equites', 'cataphract', 'tieqi', 'kiba']) {
+      const d = UNIT_BY_KEY[k];
+      for (const f of [d, UNITS[d.elite]]) {
+        const want = { equites: '125', cataphract: '157.5', tieqi: '135', kiba: '135' }[k]!;
+        expect(charge(f), f.key).toBe(`冲锋：远距离接敌时突进，冲撞伤害 ${want}`);
+      }
+    }
+  });
+
+  it('所有带冲锋的兵种（初级与高级），冲撞伤害都不超过一位小数且与数值的四舍五入一致', () => {
+    const fmt = (v: number): string => v.toFixed(1).replace(/\.0$/, '');
+    for (const d of UNITS.filter(d => isContentUnit(d) && d.abilities.charge)) {
+      const line = unitTip(d).split('\n').find(l => l.startsWith('冲锋：'))!;
+      expect(line, d.key).toBe(`冲锋：远距离接敌时突进，冲撞伤害 ${fmt(d.abilities.charge!.impact)}`);
+      expect(line, d.key).not.toMatch(/\d\.\d{2,}/);
     }
   });
 
