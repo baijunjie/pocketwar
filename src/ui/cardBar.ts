@@ -1,7 +1,7 @@
 /**
- * 底部的卡片：兵种卡片（屏幕内以及已选中的每个己方兵种一张）与其上方一排编队卡片（每个还有活人的编队一张）。
+ * 底部的卡片：兵种栏最左的全选卡片（屏幕内的全部己方部队）、兵种卡片（屏幕内以及已选中的每个己方兵种一张）与其上方一排编队卡片（每个还有活人的编队一张）。
  * 卡片直接浮在画面底部、不包外框，卡片之间的空隙就是画面：从画面上拉的框扫到卡片时，game 用 `cardsIn` 把这些兵种 / 编队并进框选。
- * 点击选择；按住拖动时卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人攻击移动过去。
+ * 点击选择；按住拖动时卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）。
  */
 import { LEVELS, UNITS } from '../sim/defs';
 import { World } from '../sim/world';
@@ -11,17 +11,29 @@ import { unitTip } from './unitText';
 export interface CardBarCallbacks {
   /** 点兵种卡片：replace = 改选屏幕内这个兵种；toggle = 选着就去掉、没选就加上；map = 选中全图的这个兵种（双击） */
   pickTypes(types: number[], mode: 'replace' | 'toggle' | 'map'): void;
+  /** 点全选卡片：replace = 改选屏幕内的全部己方部队；add = 加选它们；map = 选中全图的己方部队（双击） */
+  pickAll(mode: 'replace' | 'add' | 'map'): void;
   /** 点编队卡片：选中这一队；jump = 双击，镜头再跳到这队 */
   selectGroup(g: number, jump: boolean): void;
-  /** 把兵种卡片 / 编队卡片拖到地面（view）或小地图（mini）上松开：这批人攻击移动到松开处（clientX / clientY） */
-  dropCard(kind: 'type' | 'group', id: number, x: number, y: number, target: 'view' | 'mini'): void;
+  /**
+   * 把卡片拖到地面（view）或小地图（mini）上松开（clientX / clientY）：这批人去松开处——松在敌军身上是攻击它（同右键），否则攻击移动。
+   * kind：type = 兵种卡片（id 是兵种），group = 编队卡片（id 是队号），all = 全选卡片（id 不用）
+   */
+  dropCard(kind: CardKind, id: number, x: number, y: number, target: 'view' | 'mini'): void;
 }
+
+export type CardKind = 'type' | 'group' | 'all';
 
 export interface Rect {
   ax: number;
   ay: number;
   bx: number;
   by: number;
+}
+
+/** 卡片元素是哪种卡片 */
+function kindOf(c: HTMLElement): CardKind {
+  return c.dataset.all !== undefined ? 'all' : c.dataset.g !== undefined ? 'group' : 'type';
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLElementTagNameMap[K] {
@@ -108,7 +120,10 @@ export class CardBar {
     }
     const types = [...rows.keys()].sort((a, b) => UNITS[a].row - UNITS[b].row || a - b);
     const mAvg = sel.length ? Math.round(moraleSum / sel.length) : 0;
-    let key = `${this.mobile}|${w.humanTeam}|${sel.length}|${screen.length}|${Math.round(mAvg / 4)}|`;
+    // 全选卡片在屏幕内的人全都选着时上前一步
+    const picked = new Set(sel);
+    const allOn = screen.length > 0 && screen.every(s => picked.has(s));
+    let key = `${this.mobile}|${w.humanTeam}|${sel.length}|${screen.length}|${Math.round(mAvg / 4)}|${allOn}|`;
     for (const t of types) {
       const r = rows.get(t)!, k = r.n || r.scr;
       key += `${t}:${r.scr}:${r.n}:${Math.round((r.hp / k) * 20)}:${Math.round((r.lv / k) * 4)}:${r.top},`;
@@ -123,17 +138,23 @@ export class CardBar {
       this.roster.innerHTML = `<div class="hint">屏幕内没有我方部队 · 拖框选择部队 · ${this.mobile ? '点地面移动或攻击' : '右键移动或攻击'} · 点据点可升级</div>`;
       return;
     }
-    const head = sel.length
-      ? `<div class="total">已选 <b>${sel.length}</b><span class="${mAvg < 40 ? 'bad' : mAvg < 55 ? 'warn' : ''}">士气 ${mAvg}</span></div>`
-      : `<div class="total">屏幕内 <b>${screen.length}</b><span>拖去下令</span></div>`;
-    let html = head;
+    const allTip = `屏幕内 ${screen.length} 人${sel.length ? `，已选 ${sel.length} 人，平均士气 ${mAvg}` : ''}`
+      + '\n—\n点击：选中屏幕内的全部部队　Shift+点击：加选它们　双击：选中全图的部队'
+      + '\n拖到地面或小地图上松开：这些部队攻击移动过去，松在敌军身上则攻击它　从画面上拉框扫过卡片：一并选中它们';
+    // 屏幕内没人（选着的全在屏幕外）时全选卡片变暗、按下不响应（见 bind）：点它只会把选择清空
+    let html = `<div class="ucard acard${allOn ? ' on' : ''}${screen.length ? '' : ' off'}" data-all="1" title="${allTip}">
+      <span class="ah">全选</span>
+      <b>${screen.length}</b>
+      ${sel.length ? `<span class="mor${mAvg < 40 ? ' bad' : mAvg < 55 ? ' warn' : ''}">士气 ${mAvg}</span>` : '<span>拖去下令</span>'}
+      ${sel.length ? `<span class="sel">选 ${sel.length}</span>` : ''}</div>`;
     for (const t of types) {
       const r = rows.get(t)!, d = UNITS[t], k = r.n || r.scr;
       const lv = Math.round(r.lv / k);
       const routAt = d.lvRout[lv];
       const tip = `${unitTip(d)}\n—\n屏幕内 ${r.scr} 人${r.n ? `，已选 ${r.n} 人` : ''}　平均等级 ${lv + 1}（${LEVELS.names[lv]}），最高 ${r.top + 1} 级`
         + `　士气 ${Math.round(r.morale / k)}　${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}`
-        + '\n—\n点击：选中屏幕内的这个兵种　Shift+点击：加选 / 去掉　双击：选中全图的这个兵种\n拖到地面或小地图上松开：这个兵种攻击移动过去　从画面上拉框扫过卡片：一并选中这些兵种';
+        + '\n—\n点击：选中屏幕内的这个兵种　Shift+点击：加选 / 去掉　双击：选中全图的这个兵种'
+        + '\n拖到地面或小地图上松开：这个兵种攻击移动过去，松在敌军身上则攻击它　从画面上拉框扫过卡片：一并选中这些兵种';
       html += `<div class="ucard${d.tier ? ' elite' : ''}${r.n ? ' on' : ''}" data-t="${t}" title="${tip.replace(/"/g, '&quot;')}">
         <img src="${this.portrait(t, w.humanTeam)}" draggable="false">
         <span class="n">${r.scr}</span>
@@ -164,7 +185,8 @@ export class CardBar {
       const pct = Math.round((hp / slots.length) * 100);
       key += `${g}:${slots.length}:${kinds[0][0]}:${kinds.length}:${Math.round(pct / 5)}:${on},`;
       const tip = `第 ${g} 队，共 ${slots.length} 人：${kinds.map(([t, n]) => `${UNITS[t].name} ${n}`).join('、')}`
-        + '\n—\n点击：选中这一队（同按数字键）　双击：镜头跳到这一队\n拖到地面或小地图上松开：整队攻击移动过去　从画面上拉框扫过卡片：一并选中这一队';
+        + '\n—\n点击：选中这一队（同按数字键）　双击：镜头跳到这一队'
+        + '\n拖到地面或小地图上松开：整队攻击移动过去，松在敌军身上则攻击它　从画面上拉框扫过卡片：一并选中这一队';
       cards.push(`<div class="ucard gcard${on ? ' on' : ''}" data-g="${g}" title="${tip}">
         <img src="${this.portrait(main.idx, w.humanTeam)}" draggable="false">
         <span class="gno">${g}</span>
@@ -178,14 +200,17 @@ export class CardBar {
     this.groupRow.hidden = !cards.length;
   }
 
-  /** 画面上拉的框扫到了哪些卡片（框是视口坐标） */
-  cardsIn(r: Rect): { types: number[]; groups: number[] } {
+  /** 画面上拉的框扫到了哪些卡片（框是视口坐标）；all：扫到了全选卡片 */
+  cardsIn(r: Rect): { types: number[]; groups: number[]; all: boolean } {
     const types: number[] = [], groups: number[] = [];
+    let all = false;
     for (const c of this.cardsHit(r)) {
-      if (c.dataset.g !== undefined) groups.push(Number(c.dataset.g));
+      const kind = kindOf(c);
+      if (kind === 'all') all = true;
+      else if (kind === 'group') groups.push(Number(c.dataset.g));
       else types.push(Number(c.dataset.t));
     }
-    return { types, groups };
+    return { types, groups, all };
   }
 
   /** 框选拖动中：被框扫到的卡片亮起来，期间不重建卡片；null 收起 */
@@ -203,7 +228,8 @@ export class CardBar {
   /** 按卡片的布局位置判定（选中的卡片上移是 transform，不算进去：否则框的边缘压在卡片附近时，命中与否跟着上移来回跳） */
   private cardsHit(r: Rect): HTMLElement[] {
     return this.cards().filter(c => {
-      if (c.offsetParent === null) return false;
+      // 禁用的卡片（屏幕内没人的全选卡片）扫到也不亮
+      if (c.offsetParent === null || c.classList.contains('off')) return false;
       const b = c.getBoundingClientRect();
       const t = new DOMMatrixReadOnly(getComputedStyle(c).transform);
       const left = b.left - t.m41, top = b.top - t.m42;
@@ -212,8 +238,9 @@ export class CardBar {
   }
 
   /**
-   * 点击：兵种卡片选屏幕内这个兵种（Shift 加选 / 去掉，双击选全图），编队卡片选这一队（双击跳镜头）；
-   * 按住拖动：卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人攻击移动过去；松在别处、按右键、按 Esc、窗口失去焦点都取消。
+   * 点击：全选卡片选屏幕内的全部部队（Shift 加选，双击选全图），兵种卡片选屏幕内这个兵种（Shift 加选 / 去掉，双击选全图），
+   * 编队卡片选这一队（双击跳镜头）；
+   * 按住拖动：卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）；松在别处、按右键、按 Esc、窗口失去焦点都取消。
    * 移动版（手指拖）：按住后竖直位移占主导才是拖卡片，横向占主导是滚动卡片带（area 自己是滚动容器）；按在卡片之间的空隙上只能滚动。
    */
   private bind(area: HTMLElement): void {
@@ -221,7 +248,6 @@ export class CardBar {
       intent: 'wait' | 'drag' | 'scroll' } | null = null;
     let ghost: HTMLElement | null = null;
     let last = { t: 0, key: '' };
-    const kindOf = (c: HTMLElement): 'type' | 'group' => (c.dataset.g !== undefined ? 'group' : 'type');
     const target = (x: number, y: number): 'view' | 'mini' | null => {
       const e = document.elementFromPoint(x, y);
       return e === this.minimap ? 'mini' : e instanceof HTMLCanvasElement && e.classList.contains('view') ? 'view' : null;
@@ -269,9 +295,18 @@ export class CardBar {
       stop();
     };
     area.addEventListener('pointerdown', e => {
-      const card = (e.target as HTMLElement).closest<HTMLElement>('.cardrow .ucard');
+      let card = (e.target as HTMLElement).closest<HTMLElement>('.cardrow .ucard');
+      // 禁用的卡片（屏幕内没人的全选卡片）：桌面版在这里吃掉，不能放给底下的画面（会变成点选、框选或指令模式里的下令）；
+      // 移动版当作按在空隙上，只能滚动卡片带
+      if (card?.classList.contains('off')) {
+        if (!this.mobile) {
+          e.preventDefault();
+          return;
+        }
+        card = null;
+      }
       if ((!card && !this.mobile) || e.button !== 0) return;
-      const id = card ? Number(card.dataset.g ?? card.dataset.t) : -1;
+      const id = card && kindOf(card) !== 'all' ? Number(card.dataset.g ?? card.dataset.t) : -1;
       down = { card, x: e.clientX, y: e.clientY, add: e.shiftKey || e.ctrlKey || e.metaKey, id, scroll0: area.scrollLeft,
         intent: card && this.mobile ? 'wait' : this.mobile ? 'scroll' : 'drag' };
       this.held = true;
@@ -298,6 +333,12 @@ export class CardBar {
         // 「选 N」角标与选中态不跟着走：松手后出动的是这张卡代表的全部人，不只是选着的那些
         ghost.removeAttribute('title');
         ghost.querySelector('.sel')?.remove();
+        // 全选卡片上的士气说的也是选着的人，拖动时换回「拖去下令」
+        const mor = ghost.querySelector('.mor');
+        if (mor) {
+          mor.className = '';
+          mor.textContent = '拖去下令';
+        }
         ghost.classList.remove('hover', 'hot', 'on');
         ghost.classList.add('ghost');
         this.overlay.appendChild(ghost);
@@ -322,7 +363,8 @@ export class CardBar {
       const now = performance.now(), key = `${kind}${d.id}`;
       const double = last.key === key && now - last.t < 350;
       last = double ? { t: 0, key: '' } : { t: now, key };
-      if (kind === 'group') this.cb.selectGroup(d.id, double);
+      if (kind === 'all') this.cb.pickAll(double ? 'map' : d.add ? 'add' : 'replace');
+      else if (kind === 'group') this.cb.selectGroup(d.id, double);
       else if (double) this.cb.pickTypes([d.id], 'map');
       else this.cb.pickTypes([d.id], d.add ? 'toggle' : 'replace');
     });

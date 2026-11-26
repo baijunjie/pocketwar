@@ -8,6 +8,7 @@ import { canUpgradeSite, siteUpgradeCost, unitUpgradeCost, upgradeQueue } from '
 import { MAX_UNITS, S_ROUT, Site, World } from './sim/world';
 import { Minimap } from './render/minimap';
 import { Renderer } from './render/renderer';
+import { CardKind } from './ui/cardBar';
 import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection } from './camInput';
@@ -101,6 +102,7 @@ export class GameApp {
       selectSite: id => this.selectSite(id),
       siteAction: (act, id, unit) => this.siteAction(act, id, unit),
       pickTypes: (types, mode) => this.pickTypes(types, mode),
+      pickAll: mode => this.pickAll(mode),
       selectGroup: (g, jump) => this.selectGroup(g, jump),
       dropCard: (kind, id, x, y, target) => this.dropCard(kind, id, x, y, target),
       setSpeed: s => this.setSpeed(s),
@@ -748,7 +750,7 @@ export class GameApp {
   }
 
   /**
-   * 画面上的框选：框住的己方单位，加上框扫到的卡片——兵种卡片的屏幕内这个兵种、编队卡片的这一队，合并成一次选择
+   * 画面上的框选：框住的己方单位，加上框扫到的卡片——全选卡片的屏幕内全部部队、兵种卡片的屏幕内这个兵种、编队卡片的这一队，合并成一次选择
    */
   private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean, withCards = true): void {
     const w = this.world;
@@ -771,6 +773,7 @@ export class GameApp {
     }
     if (withCards) {
       const cards = this.hud.cards.cardsIn(this.clientRect(x0, y0, x1, y1));
+      if (cards.all) for (const s of this.screenUnits()) push(s);
       for (const s of this.typeUnits(cards.types)) push(s);
       for (const g of cards.groups) for (const s of this.groupAlive(g)) push(s);
     }
@@ -824,12 +827,13 @@ export class GameApp {
   }
 
   /**
-   * 卡片拖到地面或小地图上松开：兵种卡片是屏幕内这个兵种（连同选着、但不在屏幕内的同兵种），编队卡片是这一队；
-   * 选中这批人并攻击移动到松开处（松在敌方建筑上则直接攻打它，同攻击移动指令）
+   * 卡片拖到地面或小地图上松开：全选卡片是屏幕内的全部部队，兵种卡片是屏幕内这个兵种（连同选着、但不在屏幕内的同兵种），编队卡片是这一队；
+   * 选中这批人，松在画面上的敌军身上就攻击它（同右键），松在敌方建筑上直接攻打它，否则攻击移动到松开处（同攻击移动指令）
    */
-  private dropCard(kind: 'type' | 'group', id: number, x: number, y: number, target: 'view' | 'mini'): void {
+  private dropCard(kind: CardKind, id: number, x: number, y: number, target: 'view' | 'mini'): void {
     if (!this.world.humanTeam) return;
-    if (kind === 'group') this.selectGroup(id, false);
+    if (kind === 'all') this.pickAll('replace');
+    else if (kind === 'group') this.selectGroup(id, false);
     else this.pickTypes([id], 'replace');
     if (this.mode) this.setMode('');
     if (!this.selList.length) return;
@@ -839,6 +843,7 @@ export class GameApp {
       p = this.minimap.toWorld(x - r.left, y - r.top);
     } else {
       const c = this.canvas.getBoundingClientRect();
+      if (this.attackUnitAt(x - c.left, y - c.top)) return;
       p = this.renderer.screenToWorld(x - c.left, y - c.top);
     }
     if (!this.attackBuildingAt(p.x, p.y, false)) this.issueMove(p.x, p.y, true);
@@ -856,6 +861,14 @@ export class GameApp {
       if (p && p.x > 0 && p.y > 0 && p.x < rd.viewW && p.y < rd.viewH) out.push(i);
     }
     return out;
+  }
+
+  /** 点全选卡片（见 CardBarCallbacks.pickAll） */
+  private pickAll(mode: 'replace' | 'add' | 'map'): void {
+    if (mode === 'map') return this.command('all');
+    if (mode === 'replace') return this.setSelection(this.screenUnits());
+    const have = new Set(this.selList);
+    this.setSelection([...this.selList, ...this.screenUnits().filter(s => !have.has(s))]);
   }
 
   /** 点兵种卡片（见 CardBarCallbacks.pickTypes） */
@@ -1026,16 +1039,23 @@ export class GameApp {
     const w = this.world;
     const human = w.humanTeam;
     if (!human || !this.selList.length) return;
+    if (this.attackUnitAt(sx, sy)) return;
     const p = this.renderer.screenToWorld(sx, sy);
-    const enemy = this.unitAt(sx, sy, 3 - human, true);
-    if (enemy >= 0) {
-      w.orderAttackUnit(this.selList, enemy);
-      this.sound.ui('attack');
-      this.renderer.addMarker(w.x[enemy], w.y[enemy], 1, 0.25, 0.2);
-      return;
-    }
     if (this.attackBuildingAt(p.x, p.y, force)) return;
     this.issueMove(p.x, p.y, false);
+  }
+
+  /** 画布坐标 (sx, sy) 处有看得见的敌军就让选着的部队攻击它，返回 true；没有则返回 false */
+  private attackUnitAt(sx: number, sy: number): boolean {
+    const w = this.world;
+    const human = w.humanTeam;
+    if (!human || !this.selList.length) return false;
+    const enemy = this.unitAt(sx, sy, 3 - human, true);
+    if (enemy < 0) return false;
+    w.orderAttackUnit(this.selList, enemy);
+    this.sound.ui('attack');
+    this.renderer.addMarker(w.x[enemy], w.y[enemy], 1, 0.25, 0.2);
+    return true;
   }
 
   // ------------------------------------------------------------------ 移动版

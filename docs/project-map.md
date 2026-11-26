@@ -38,7 +38,7 @@
 | `src/render/assets.ts`、`src/render/materials.ts`、`src/render/prims.ts` | glTF 加载与几何处理；材质补丁（迷雾、骨骼贴图动画）；代码生成的基本体 |
 | `src/render/models/` | 模型：`catalog.ts` 登记兵种用哪个模型（换素材改这里），`spec.ts` 说明格式与总入口，`builders.ts`、`human.ts` 代码建模 |
 | `src/ui/` | 主菜单（`menu.ts`）与游戏内界面：`hud.ts`（`Hud`，含右上角设置面板，创建并持有底部卡片 `hud.cards`；移动版另有菜单按钮、左右抽屉与边缘把手、遮罩、「取消选择」按钮，由 `setMobile` 切换）、`cardBar.ts`、`unitText.ts`、`sword.svg` |
-| `src/ui/cardBar.ts` | 底部卡片（`CardBar`）：兵种卡片与其上一排编队卡片的渲染、点击选择、拖拽下令（拖到地面或小地图上松开，让这批人攻击移动）、画面框选扫卡片时的命中（`cardsIn`、`markCards`）；移动版的卡片带横向滚动与竖向拖卡片；回调接口 `CardBarCallbacks` 由 `game.ts` 实现（`HudCallbacks` 继承它） |
+| `src/ui/cardBar.ts` | 底部卡片（`CardBar`）：最左的全选卡片（屏幕内全部己方部队，回调 `pickAll`）、兵种卡片与其上一排编队卡片的渲染（卡片种类 `CardKind`：`type` / `group` / `all`）、点击选择、拖拽下令（拖到地面或小地图上松开，松在敌军身上是攻击该单位，否则攻打建筑或让这批人攻击移动）、画面框选扫卡片时的命中（`cardsIn` 返回兵种、编队与是否含全选卡片，`markCards`）；移动版的卡片带横向滚动与竖向拖卡片；回调接口 `CardBarCallbacks` 由 `game.ts` 实现（`HudCallbacks` 继承它） |
 | `src/ui/unitText.ts` | 兵种的文字说明（悬停提示 `unitTip`、光环加成与面板数值的写法），`hud.ts`、`cardBar.ts`、`menu.ts` 共用，单独成文件以免 hud 与 cardBar 互相引用 |
 | `src/ui/sword.svg` | 游戏内的剑形鼠标指针，样式表（`src/style.css`）与锁定鼠标的自绘光标（`src/pointerLock.ts`）共用 |
 | `src/audio/sound.ts` | 音效：Web Audio 现场合成，战斗声取自模拟层的特效事件 |

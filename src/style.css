@@ -84,9 +84,12 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .groups { padding-top: 12px; }
 .unitbar .hint, .cmds .hint { color: var(--dim); padding: 0 8px; align-self: center; }
 .unitbar .hint { padding: 6px 12px; border-radius: 4px; background: var(--panel); }
-.unitbar .total { color: var(--dim); align-self: stretch; display: flex; flex-direction: column; justify-content: center; text-align: center; font-size: 12px; width: 76px; flex: none; border-radius: 6px; background: var(--panel); text-shadow: 0 1px 2px #000; }
-.unitbar .total b { display: block; font-size: 22px; color: var(--text); }
-.unitbar .total span { display: block; font-size: 11px; }
+/* 全选卡片：兵种栏最左，与兵种卡片同高，写屏幕内人数 */
+.ucard.acard { width: 76px; align-self: stretch; flex: none; display: flex; flex-direction: column; justify-content: center; color: var(--dim); font-size: 11px; text-shadow: 0 1px 2px #000; }
+.acard .ah { font-size: 13px; color: var(--text); }
+.acard b { display: block; font-size: 22px; line-height: 1.3; color: var(--text); }
+.ucard.acard.off { opacity: 0.5; }
+.ucard.acard.off:hover, .ucard.acard.off.hover { background: rgba(20, 16, 12, 0.82); }
 .ucard { position: relative; width: 88px; padding: 4px 3px 6px; box-sizing: border-box; text-align: center; border: 1px solid var(--line); border-radius: 6px; background: rgba(20, 16, 12, 0.82); box-shadow: 0 3px 8px rgba(0, 0, 0, 0.45); transition: transform 0.12s ease-out, box-shadow 0.12s, background 0.12s; }
 .ucard:hover, .ucard.hover { background: rgba(60, 46, 24, 0.9); }
 .ucard.on { transform: translateY(-12px); border-color: var(--gold); background: rgba(70, 54, 26, 0.92); box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5), 0 0 8px rgba(216, 176, 96, 0.35); }
@@ -335,7 +338,6 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .cardwrap::-webkit-scrollbar { display: none; }
 .mobile .cardrow { flex: none; flex-wrap: nowrap; width: max-content; max-width: none; min-height: 0; padding: 14px 4px 6px; gap: 6px; pointer-events: auto !important; }
 .mobile .groups { padding-right: 8px; margin-right: 2px; border-right: 1px solid var(--line); }
-.mobile .unitbar .total { width: 60px; }
 .mobile .unitbar .hint { white-space: normal; width: min(260px, 70vw); }
 .mobile .ucard { width: 76px; }
 .mobile .ucard img { width: 52px; height: 52px; }
@@ -344,6 +346,7 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .gcard img { width: 40px; height: 40px; }
 .mobile .ucard.ghost { width: 76px; }
 .mobile .ucard.ghost.gcard { width: 66px; }
+.mobile .ucard.acard, .mobile .ucard.ghost.acard { width: 60px; }
 /* 小地图：下半屏剩下的空间里尽量放大（圆形，按容器短边取正方形） */
 .mobile .mini { left: 0; right: 0; top: calc(50% + var(--strip)); bottom: 0; padding: 6px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 0; background: none; backdrop-filter: none; container-type: size; }
 .mobile .mini canvas { width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); touch-action: none; }
