@@ -34,7 +34,10 @@
 | `src/render/quads.ts`、`src/render/portrait.ts`、`src/render/minimap.ts` | 贴地标记、粒子、血条与文字；兵种头像；小地图 |
 | `src/render/assets.ts`、`src/render/materials.ts`、`src/render/prims.ts` | glTF 加载与几何处理；材质补丁（迷雾、骨骼贴图动画）；代码生成的基本体 |
 | `src/render/models/` | 模型：`catalog.ts` 登记兵种用哪个模型（换素材改这里），`spec.ts` 说明格式与总入口，`builders.ts`、`human.ts` 代码建模 |
-| `src/ui/` | 主菜单（`menu.ts`）与游戏内界面（`hud.ts`，含右上角设置面板） |
+| `src/ui/` | 主菜单（`menu.ts`）与游戏内界面：`hud.ts`（`Hud`，含右上角设置面板，创建并持有底部卡片 `hud.cards`）、`cardBar.ts`、`unitText.ts`、`sword.svg` |
+| `src/ui/cardBar.ts` | 底部卡片（`CardBar`）：兵种卡片与其上一排编队卡片的渲染、点击选择、拖拽下令（拖到地面或小地图上松开，让这批人攻击移动）、画面框选扫卡片时的命中（`cardsIn`、`markCards`）；回调接口 `CardBarCallbacks` 由 `game.ts` 实现（`HudCallbacks` 继承它） |
+| `src/ui/unitText.ts` | 兵种的文字说明（悬停提示 `unitTip`、光环加成与面板数值的写法），`hud.ts`、`cardBar.ts`、`menu.ts` 共用，单独成文件以免 hud 与 cardBar 互相引用 |
+| `src/ui/sword.svg` | 游戏内的剑形鼠标指针，样式表（`src/style.css`）与锁定鼠标的自绘光标（`src/pointerLock.ts`）共用 |
 | `src/audio/sound.ts` | 音效：Web Audio 现场合成，战斗声取自模拟层的特效事件 |
 | `src/dev/viewer.ts` | 开发用预览页（兵种与动画、静态素材、glTF） |
 | [`tools/measure/`](../tools/measure/README.md) | 对战测量工具（开发用，游戏运行时不引用）：无头对战量出兵种点数与价目表，核对阵营点数与预算；生成 `content/prices.json` 与自带的实测表 |

@@ -1,7 +1,6 @@
 /** 游戏内界面：顶栏、据点与援军、选中面板、指令按钮、战报、帮助与结算 */
 import {
-  AURA_KINDS, BuildingDef, ELITE, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RES_SHORT, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_INFO, SIZES, UNITS,
-  UnitAura, UnitDef, unitKind,
+  BuildingDef, FactionDef, LEVELS, RES_KINDS, RES_NAMES, RES_SHORT, RULES, ResKind, SITE_CATEGORY_NAMES, SITE_INFO, SIZES, UNITS, unitKind,
 } from '../sim/defs';
 import { SITE_MAX_LEVEL, siteUpgradeCost, towerCount, unitUpgradeCost } from '../sim/systems/economy';
 import { teamMoraleFactors } from '../sim/systems/morale';
@@ -12,6 +11,8 @@ import { S_BRACE, S_CHARGE, S_COMBAT, S_SHIELD, S_TORCH, S_WALL, Site, World } f
 import { unitPortrait } from '../render/portrait';
 import { WheelMode } from '../camInput';
 import { loadPref, savePref } from '../prefs';
+import { CardBar, CardBarCallbacks } from './cardBar';
+import { auraPct, num, rangeText, unitTip } from './unitText';
 
 /** 城池、营寨名字后面的星数 = 据点等级；其他据点不能升级，不显示。compact：据点列表里写成「★3」省地方 */
 function starsHtml(s: Site, compact = false): string {
@@ -54,7 +55,7 @@ export interface UpgradeOffers {
 }
 export type UpgradeAction = 'sel' | 'all' | 'cities' | 'camps';
 
-export interface HudCallbacks {
+export interface HudCallbacks extends CardBarCallbacks {
   command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow'): void;
   /** 点了某个升级按钮 */
   upgrade(act: UpgradeAction): void;
@@ -62,11 +63,6 @@ export interface HudCallbacks {
   selectSite(id: number): void;
   /** 对选中的据点：升级 / 建一座哨塔 / 营寨改选援军兵种（unit 是兵种下标） */
   siteAction(act: 'upgrade' | 'tower' | 'pick', id: number, unit?: number): void;
-  /**
-   * 兵种栏里点选 / 框选卡片：replace = 改选屏幕内这些兵种；add = 加选；toggle = 这个兵种选着就去掉、没选就加上；
-   * map = 选中全图的这个兵种（双击卡片）
-   */
-  pickTypes(types: number[], mode: 'replace' | 'add' | 'toggle' | 'map'): void;
   setSpeed(s: number): void;
   focus(x: number, y: number): void;
   exit(): void;
@@ -96,48 +92,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''):
 
 const css = (c: [number, number, number]): string => `rgb(${c[0]},${c[1]},${c[2]})`;
 
-/** 光环加成相对无加成值的增减，如「−20%」：正负号按数值本身判断，取整成 0 的保留一位小数 */
-export function auraPct(a: UnitAura): string {
-  const k = AURA_KINDS[a.kind];
-  const r = a.value / k.neutral - 1;
-  const abs = Math.abs(r) * 100;
-  return `${r < 0 ? '−' : '+'}${Math.round(abs) || Math.round(abs * 10) / 10}%`;
-}
-
-/** 光环的加成写成「所受远程伤害 −20%」 */
-export function auraEffect(a: UnitAura): string {
-  return `${AURA_KINDS[a.kind].name} ${auraPct(a)}`;
-}
-
-/** 面板与兵种提示的数值保留一位小数（级数算出来的攻击、间隔、冲撞伤害是无限小数） */
-const num = (v: number): string => String(Math.round(v * 10) / 10);
-
-/** 射程一栏：远程写射程；近战写「近战」，攻击距离比贴身长的再写出距离 */
-function rangeText(d: UnitDef): string {
-  if (!d.melee) return String(d.main.range);
-  return d.main.range > RULES.combat.meleeContact ? `近战 ${d.main.range}` : '近战';
-}
-
-export function unitTip(d: UnitDef): string {
-  const lines = [
-    `${d.name}（${unitKind(d)}）`, d.desc,
-    `生命 ${d.hp}　攻击 ${num(d.main.lvDmg[0])}${d.main.splash ? '（范围）' : ''}　攻速 ${num(d.main.lvCd[0])}s`,
-    `射程 ${rangeText(d)}　护甲 ${d.armM}/${d.armP}`,
-    `体型 ${SIZES[d.size].name}　行军 ${d.walk}　奔跑 ${d.speed}　口粮 ${d.upkeep}`,
-  ];
-  const ab = d.abilities;
-  if (ab.charge) lines.push(`冲锋：远距离接敌时突进，冲撞伤害 ${num(ab.charge.impact)}`);
-  if (ab.brace) lines.push(`拒马：敌人冲来时立枪，反伤 ${ab.brace.dmg}`);
-  if (ab.shield) lines.push(`举盾：遇远程敌人时远程伤害 −${Math.round(ab.shield.block * 100)}%，移动稍慢`);
-  for (const a of d.auras) lines.push(`光环「${a.name}」：半径 ${a.radius} 内的其他友军${auraEffect(a)}`);
-  if (ab.torch) lines.push('夜间可打火把');
-  lines.push(d.siege ? '工程类：能破坏城墙与城门' : '打建筑时投掷火把，烧不动城墙');
-  if (d.vsBld >= 2) lines.push(`对建筑 ×${d.vsBld}`);
-  if (d.elite >= 0) lines.push(`可花 ${unitUpgradeCost(d)} 黄金升为「${UNITS[d.elite].name}」：生命 ×${ELITE.hp}、攻击 ×${ELITE.dmg}、护甲 +${ELITE.armor}`);
-  else if (d.tier) lines.push('高级形态');
-  return lines.join('\n');
-}
-
 export class Hud {
   readonly root: HTMLDivElement;
   readonly minimap: HTMLCanvasElement;
@@ -155,11 +109,8 @@ export class Hud {
   /** 选中单个单位 / 据点时的详情（兵种栏上方） */
   private readonly selBox: HTMLDivElement;
   /** 兵种栏：屏幕内每个己方兵种一张卡片 */
-  private readonly roster: HTMLDivElement;
-  private rosterKey = '?';
-  private readonly boxEl: HTMLDivElement;
-  /** 正在兵种栏里拖框（拖动期间不重建卡片） */
-  private dragging = false;
+  /** 底部的兵种卡片与编队卡片 */
+  readonly cards: CardBar;
   private readonly cmdBtns = new Map<string, HTMLButtonElement>();
   /** 镜头正在跟随部队：「跟随」按钮高亮，没选部队时也能点它取消 */
   following = false;
@@ -288,11 +239,9 @@ export class Hud {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-act]');
       if (b && !b.disabled && (e.detail <= 1 || b.dataset.act === 'pick')) cb.siteAction(b.dataset.act as 'upgrade' | 'tower' | 'pick', Number(b.dataset.site), b.dataset.unit === undefined ? undefined : Number(b.dataset.unit));
     });
-    this.roster = el('div', 'panel unitbar');
-    this.boxEl = el('div', 'rbox');
-    this.boxEl.hidden = true;
-    this.bindRoster();
-    bottom.append(this.selBox, this.roster);
+    this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root, cb, bottom);
+    this.disposers.push(() => this.cards.destroy());
+    bottom.append(this.selBox, this.cards.groupRow, this.cards.roster);
     root.appendChild(bottom);
 
     // ---- 右下：指令面板，分「部队」「援军」「升级」三栏 ----
@@ -362,7 +311,7 @@ export class Hud {
             <summary>详细操作与规则</summary>
             <table>
               <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
-              <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；在卡片上拖框：一次选几个兵种（框住全部即选中屏幕内所有部队）；Shift 加选 / 去掉；双击：选中全图的这个兵种。选中的兵种卡片会上前一步</td></tr>
+              <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；Shift 加选 / 去掉；双击：选中全图的这个兵种；按住拖到地面或小地图上松开：这个兵种攻击移动过去（右键或 Esc 取消）。从画面上拉框扫过卡片：一并选中这些兵种。选中的兵种卡片会上前一步</td></tr>
               <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
               <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
               <tr><td>右键敌军 / 敌方建筑</td><td>攻击（中立的军事建筑会放箭，也直接右键就打；Ctrl+右键可强攻中立的城墙、门楼、木栅、营门；带着器械或战象时，中立的城墙、门楼直接右键就砸；普通建筑不可攻击）</td></tr>
@@ -374,6 +323,7 @@ export class Hud {
               <tr><td>B + 左键</td><td>扎营：派所选部队去搭一座临时据点（耗木材）</td></tr>
               <tr><td>左键点据点</td><td>选中据点：升级城池、营寨，或给资源点建哨塔；己方营寨还可以选出哪个兵种</td></tr>
               <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
+              <tr><td>编队卡片</td><td>兵种卡片上方一排，每个编队一张。点击选中这一队，双击镜头跳过去；拖到地面或小地图上松开：整队攻击移动过去</td></tr>
               <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
               <tr><td>鼠标顶到屏幕最外沿、W A S D / 方向键、小地图</td><td>移动镜头（压在界面上也卷；鼠标冲出网页会接着往那边卷，回来即停）</td></tr>
               <tr><td>滚轮、捏合、PageUp / PageDown</td><td>缩放（Mac 上 PageUp / PageDown 是 fn + ↑ / ↓）</td></tr>
@@ -490,7 +440,6 @@ export class Hud {
   message(text: string, kind: 'good' | 'bad' | 'info', x?: number, y?: number): void {
     const m = el('div', `msg ${kind}`, text);
     if (x !== undefined && y !== undefined) {
-      m.style.cursor = 'pointer';
       m.onclick = () => this.cb.focus(x, y);
     }
     this.feed.prepend(m);
@@ -613,7 +562,7 @@ export class Hud {
     const key = defIdx * 4 + team;
     let url = this.portraits.get(key);
     if (!url) {
-      url = unitPortrait(UNITS[defIdx].model, this.teamRgb[team], 44).toDataURL();
+      url = unitPortrait(UNITS[defIdx].model, this.teamRgb[team], 64).toDataURL();
       this.portraits.set(key, url);
     }
     return url;
@@ -841,139 +790,9 @@ export class Hud {
       if (b.disabled !== off) b.disabled = off;
       if (cmd === 'follow') b.classList.toggle('on', this.following);
     }
-    if (!this.dragging) this.renderRoster(sel, screen);
+    this.cards.update(sel, screen);
   }
 
-  /** 兵种栏：屏幕内（以及已选中）的每个己方兵种一张卡片；选中的兵种卡片上前一步 */
-  private renderRoster(sel: number[], screen: number[]): void {
-    const w = this.world;
-    interface Row { scr: number; n: number; hp: number; lv: number; top: number; morale: number }
-    const rows = new Map<number, Row>();
-    const row = (t: number): Row => {
-      let r = rows.get(t);
-      if (!r) rows.set(t, (r = { scr: 0, n: 0, hp: 0, lv: 0, top: 0, morale: 0 }));
-      return r;
-    };
-    for (const s of screen) row(w.type[s]).scr++;
-    let moraleSum = 0;
-    for (const s of sel) {
-      const r = row(w.type[s]);
-      r.n++;
-      r.hp += w.hp[s] / w.maxHp[s];
-      r.lv += w.level[s];
-      if (w.level[s] > r.top) r.top = w.level[s];
-      r.morale += w.morale[s];
-      moraleSum += w.morale[s];
-    }
-    // 没选中的兵种，等级与血量按屏幕内的人算
-    for (const s of screen) {
-      const r = rows.get(w.type[s])!;
-      if (r.n) continue;
-      r.hp += w.hp[s] / w.maxHp[s];
-      r.lv += w.level[s];
-      if (w.level[s] > r.top) r.top = w.level[s];
-      r.morale += w.morale[s];
-    }
-    const types = [...rows.keys()].sort((a, b) => UNITS[a].row - UNITS[b].row || a - b);
-    const mAvg = sel.length ? Math.round(moraleSum / sel.length) : 0;
-    let key = `${w.humanTeam}|${sel.length}|${screen.length}|${Math.round(mAvg / 4)}|`;
-    for (const t of types) {
-      const r = rows.get(t)!, k = r.n || r.scr;
-      key += `${t}:${r.scr}:${r.n}:${Math.round((r.hp / k) * 20)}:${Math.round((r.lv / k) * 4)}:${r.top},`;
-    }
-    if (key === this.rosterKey) return;
-    this.rosterKey = key;
-    if (!w.humanTeam) {
-      this.roster.innerHTML = '<div class="hint">观战模式：方向键 / 拖动小地图移动镜头，滚轮缩放</div>';
-      return;
-    }
-    if (!types.length) {
-      this.roster.innerHTML = '<div class="hint">屏幕内没有我方部队 · 拖框选择部队 · 右键移动或攻击 · 点据点可升级</div>';
-      return;
-    }
-    const head = sel.length
-      ? `<div class="total">已选 <b>${sel.length}</b><span class="${mAvg < 40 ? 'bad' : mAvg < 55 ? 'warn' : ''}">士气 ${mAvg}</span></div>`
-      : `<div class="total">屏幕内 <b>${screen.length}</b><span>点卡片选择</span></div>`;
-    let html = head;
-    for (const t of types) {
-      const r = rows.get(t)!, d = UNITS[t], k = r.n || r.scr;
-      const lv = Math.round(r.lv / k);
-      const routAt = d.lvRout[lv];
-      const tip = `${unitTip(d)}\n—\n屏幕内 ${r.scr} 人${r.n ? `，已选 ${r.n} 人` : ''}　平均等级 ${lv + 1}（${LEVELS.names[lv]}），最高 ${r.top + 1} 级`
-        + `　士气 ${Math.round(r.morale / k)}　${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}`
-        + '\n—\n点击：选中屏幕内的这个兵种　Shift+点击：加选 / 去掉　双击：选中全图的这个兵种　在卡片上拖框：一次选几个兵种';
-      html += `<div class="ucard${d.tier ? ' elite' : ''}${r.n ? ' on' : ''}" data-t="${t}" title="${tip.replace(/"/g, '&quot;')}">
-        <img src="${this.portrait(t, w.humanTeam)}" draggable="false">
-        <span class="n">${r.scr}</span>
-        <span class="nm">${d.name}</span>
-        <span class="lv">Lv${lv + 1}</span>
-        <span class="hp"><u style="width:${Math.round((r.hp / k) * 100)}%"></u></span>
-        ${r.n ? `<span class="sel">选 ${r.n}</span>` : ''}</div>`;
-    }
-    this.roster.innerHTML = html;
-  }
-
-  /** 兵种栏的点选、双击、拖框 */
-  private bindRoster(): void {
-    const R = this.roster, box = this.boxEl;
-    this.root.appendChild(box);
-    let sx = 0, sy = 0, add = false, down = false, last = { t: 0, type: -1 };
-    const hits = (ex: number, ey: number): HTMLElement[] => {
-      const ax = Math.min(sx, ex), ay = Math.min(sy, ey), bx = Math.max(sx, ex), by = Math.max(sy, ey);
-      return [...R.querySelectorAll<HTMLElement>('.ucard')].filter(c => {
-        const r = c.getBoundingClientRect();
-        return r.right >= ax && r.left <= bx && r.bottom >= ay && r.top <= by;
-      });
-    };
-    R.addEventListener('pointerdown', e => {
-      if (e.button !== 0) return;
-      down = true;
-      sx = e.clientX;
-      sy = e.clientY;
-      add = e.shiftKey || e.ctrlKey || e.metaKey;
-      R.setPointerCapture(e.pointerId);
-      e.preventDefault();
-    });
-    R.addEventListener('pointermove', e => {
-      if (!down) return;
-      if (!this.dragging && Math.hypot(e.clientX - sx, e.clientY - sy) < 5) return;
-      this.dragging = true;
-      box.hidden = false;
-      box.style.left = `${Math.min(sx, e.clientX)}px`;
-      box.style.top = `${Math.min(sy, e.clientY)}px`;
-      box.style.width = `${Math.abs(e.clientX - sx)}px`;
-      box.style.height = `${Math.abs(e.clientY - sy)}px`;
-      const hot = new Set(hits(e.clientX, e.clientY));
-      for (const c of R.querySelectorAll<HTMLElement>('.ucard')) c.classList.toggle('hot', hot.has(c));
-    });
-    const end = (e: PointerEvent, cancel: boolean): void => {
-      if (!down) return;
-      down = false;
-      if (R.hasPointerCapture(e.pointerId)) R.releasePointerCapture(e.pointerId);
-      if (this.dragging) {
-        this.dragging = false;
-        box.hidden = true;
-        const types = cancel ? [] : hits(e.clientX, e.clientY).map(c => Number(c.dataset.t));
-        this.rosterKey = '?';
-        if (types.length) this.cb.pickTypes(types, add ? 'add' : 'replace');
-        else for (const c of R.querySelectorAll<HTMLElement>('.ucard')) c.classList.remove('hot');
-        return;
-      }
-      if (cancel) return;
-      const card = (document.elementFromPoint(sx, sy) as HTMLElement | null)?.closest<HTMLElement>('.ucard');
-      if (!card) return;
-      const t = Number(card.dataset.t), now = performance.now();
-      if (last.type === t && now - last.t < 350) {
-        this.cb.pickTypes([t], 'map');
-        last = { t: 0, type: -1 };
-      } else {
-        this.cb.pickTypes([t], add ? 'toggle' : 'replace');
-        last = { t: now, type: t };
-      }
-    };
-    R.addEventListener('pointerup', e => end(e, false));
-    R.addEventListener('pointercancel', e => end(e, true));
-  }
 
   showGameOver(win: boolean | null, onAgain: () => void): void {
     this.closeSettings();

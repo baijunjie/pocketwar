@@ -2,7 +2,7 @@
 import { FACTIONS, FACTION_IDS, FactionId, UNIT_BY_KEY } from '../sim/defs';
 import { GameOptions, MENU_SIZES } from '../sim/setup';
 import { unitPortrait } from '../render/portrait';
-import { unitTip } from './hud';
+import { unitTip } from './unitText';
 
 interface Saved {
   faction: FactionId;

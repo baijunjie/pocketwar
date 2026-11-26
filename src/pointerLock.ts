@@ -6,6 +6,7 @@
  * 用 setPointerCapture、靠 :hover 与 title，一概不用知道有锁定这回事。
  * 合成事件靠 `synth` 标记让自己的捕获层放行。顶层不碰 DOM（纯函数在文件开头），Node 里可直接 import 测试。
  */
+import SWORD from './ui/sword.svg?raw';
 
 /** 虚拟光标累加鼠标位移后夹在视口内：贴边后继续推也只停在最外一个像素，贴边卷屏靠这个一直触发 */
 export function moveCursor(x: number, y: number, mx: number, my: number, w: number, h: number): { x: number; y: number } {
@@ -58,7 +59,7 @@ interface KeyboardLock {
   unlock(): void;
 }
 
-const ARROW = '<svg viewBox="0 0 16 24" width="16" height="24"><path d="M1.5 1.5v17l4.2-4 3.2 7.6 2.6-1.1-3.2-7.4h5.7z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+/** 指令模式的十字准星；平时的光标是 SWORD，与样式表里的剑形指针同一张图，热点在剑尖（左上角） */
 const CROSS = '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 2v7M12 15v7M2 12h7M15 12h7" stroke="#000" stroke-width="4" stroke-linecap="round"/><path d="M12 2v7M12 15v7M2 12h7M15 12h7" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>';
 
 function ancestors(e: Element | null): Element[] {
@@ -105,7 +106,7 @@ export class PointerLock {
     this.enabled = enabled;
     this.cursor.className = 'vcursor';
     this.cursor.hidden = true;
-    this.cursor.innerHTML = ARROW + CROSS;
+    this.cursor.innerHTML = SWORD + CROSS;
     this.tip.className = 'lock-tip';
     this.tip.hidden = true;
     document.body.append(this.cursor, this.tip);
@@ -237,14 +238,18 @@ export class PointerLock {
 
   /**
    * 合成事件不是真实的指针，浏览器不认它的 pointerId 时 setPointerCapture 会抛错。
-   * 真正的「捕获」由 captured 实现，这里只让调用不抛：锁定期间给 Element 上的两个方法打补丁，解锁摘掉。
+   * 真正的「捕获」由 captured 实现：锁定期间给 Element 上的两个方法打补丁，调用者成为 captured（与真实捕获一致，
+   * 按下时的元素可能在拖动中被界面重建、脱离文档，容器捕获的才收得到后续事件），调用本身不抛；解锁摘掉。
+   * 没人调 setPointerCapture 时 captured 仍是按下时光标下的元素。
    */
   private patchCapture(on: boolean): void {
     const proto = Element.prototype;
     if (on && !this.patched) {
+      const self = this;
       const set = proto.setPointerCapture, release = proto.releasePointerCapture;
       this.patched = { set, release };
       proto.setPointerCapture = function (id: number): void {
+        self.captured = this;
         try {
           set.call(this, id);
         } catch {
@@ -252,6 +257,7 @@ export class PointerLock {
         }
       };
       proto.releasePointerCapture = function (id: number): void {
+        if (self.captured === this) self.captured = null;
         try {
           release.call(this, id);
         } catch {
@@ -469,9 +475,9 @@ export class PointerLock {
     this.drawCursor(target);
   }
 
-  /** 光标样式跟着目标元素的 CSS cursor：十字（指令模式、小地图）画十字，其余画箭头 */
+  /** 光标样式跟着目标元素的 CSS cursor：十字（指令模式）画十字准星，其余画剑 */
   private drawCursor(target: Element): void {
-    const kind = getComputedStyle(target).cursor === 'crosshair' ? 'cross' : 'arrow';
+    const kind = getComputedStyle(target).cursor === 'crosshair' ? 'cross' : 'sword';
     if (kind === this.cursorKind) return;
     this.cursorKind = kind;
     this.cursor.classList.toggle('cross', kind === 'cross');

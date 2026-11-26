@@ -46,7 +46,7 @@ export class GameApp {
    * mx / my：最近一次移动的方向（判断鼠标从哪条边离开网页）；
    * out：鼠标从某条边离开了网页，朝那个方向续卷，直到鼠标回来或窗口失去焦点
    */
-  /** buttons：按着的鼠标键（拖框、拖小地图、在兵种栏拖框时不边缘卷屏） */
+  /** buttons：按着的鼠标键（拖框、拖小地图、拖卡片时不边缘卷屏） */
   private mouse = { x: 0, y: 0, mx: 0, my: 0, buttons: 0, inside: false, out: null as { dx: number; dy: number } | null };
   private wheelMode: WheelMode = asWheelMode(loadPref('wheel'));
   private readonly wheel = new WheelClassifier();
@@ -88,6 +88,8 @@ export class GameApp {
       selectSite: id => this.selectSite(id),
       siteAction: (act, id, unit) => this.siteAction(act, id, unit),
       pickTypes: (types, mode) => this.pickTypes(types, mode),
+      selectGroup: (g, jump) => this.selectGroup(g, jump),
+      dropCard: (kind, id, x, y, target) => this.dropCard(kind, id, x, y, target),
       setSpeed: s => this.setSpeed(s),
       focus: (x, y) => this.focus(x, y),
       exit: () => this.onExit(),
@@ -212,6 +214,7 @@ export class GameApp {
           s.top = `${Math.min(d.y, p.y)}px`;
           s.width = `${Math.abs(p.x - d.x)}px`;
           s.height = `${Math.abs(p.y - d.y)}px`;
+          this.hud.cards.markCards(this.clientRect(d.x, d.y, p.x, p.y));
         }
       }
     });
@@ -232,6 +235,7 @@ export class GameApp {
       if (d && e.button === 0) {
         this.drag = null;
         this.box.style.display = 'none';
+        this.hud.cards.markCards(null);
         if (d.active) this.boxSelect(d.x, d.y, p.x, p.y, e.shiftKey);
         else this.clickSelect(p.x, p.y, e.shiftKey);
       }
@@ -370,6 +374,8 @@ export class GameApp {
           e.preventDefault();
           this.groups[g] = { slots: this.selList.slice(), uids: this.selUid.slice() };
           this.hud.message(`已编为第 ${g} 队（${this.selList.length} 人）`, 'info');
+          this.pushGroups();
+          this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
         } else if (e.shiftKey) {
           // 追加编队：把当前选中的并入该队，并选中合并后的整队
           const w = this.world;
@@ -382,23 +388,13 @@ export class GameApp {
             added++;
           }
           this.groups[g] = { slots, uids: slots.map(s => w.uid[s]) };
+          this.pushGroups();
           this.setSelection(slots.slice());
           this.hud.message(`第 ${g} 队追加 ${added} 人，共 ${slots.length} 人`, 'info');
         } else {
-          const grp = this.groups[g];
-          if (!grp) return;
-          const w = this.world;
-          const alive = grp.slots.filter((s, i) => w.controllable(s) && w.uid[s] === grp.uids[i]);
-          this.setSelection(alive);
+          if (!this.groups[g]) return;
           const now = performance.now();
-          if (this.lastGroup.g === g && now - this.lastGroup.t < 400 && alive.length) {
-            let cx = 0, cy = 0;
-            for (const s of alive) {
-              cx += w.x[s];
-              cy += w.y[s];
-            }
-            this.focus(cx / alive.length, cy / alive.length);
-          }
+          this.selectGroup(g, this.lastGroup.g === g && now - this.lastGroup.t < 400);
           this.lastGroup = { t: now, g };
         }
       }
@@ -415,6 +411,12 @@ export class GameApp {
       this.mouse.out = null;
       this.mouse.buttons = 0;
       this.gesture = null;
+      // 拖框时切走窗口可能收不到松手：收起框，也给卡片解冻（框选扫卡片期间卡片不重建）
+      if (this.drag) {
+        this.drag = null;
+        this.box.style.display = 'none';
+        this.hud.cards.markCards(null);
+      }
     });
   }
 
@@ -476,7 +478,8 @@ export class GameApp {
 
   private setMode(m: Mode): void {
     this.mode = m;
-    this.canvas.style.cursor = m ? 'crosshair' : 'default';
+    // 样式表给整个界面设了 !important 的剑形指针，指令模式的十字准星要同样 !important 才盖得过
+    this.canvas.style.setProperty('cursor', m ? 'crosshair' : '', m ? 'important' : '');
     this.pointer.refreshCursor();
     this.hud.setMode(m === 'amove' ? '攻击移动：左键指定目的地（右键取消）' : m === 'rally' ? `集结点：左键指定位置，${this.selSite >= 0 ? '只设所选据点' : '给全部据点设'}（右键退出；Shift+R 取消集结点）`
       : m === 'outpost' ? `扎营：左键指定临时据点的位置，所选部队会赶去搭建（木材 ${RULES.economy.outpostCost}，右键取消）` : '');
@@ -624,6 +627,7 @@ export class GameApp {
 
   private refreshUi(): void {
     this.hud.update();
+    this.pushGroups();
     this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
     this.hud.updateUpgrades(this.offers());
   }
@@ -706,6 +710,9 @@ export class GameApp {
     this.lastClick = { t: now, type };
   }
 
+  /**
+   * 画面上的框选：框住的己方单位，加上框扫到的卡片——兵种卡片的屏幕内这个兵种、编队卡片的这一队，合并成一次选择
+   */
   private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean): void {
     const w = this.world;
     const human = w.humanTeam;
@@ -715,12 +722,87 @@ export class GameApp {
     rd.updateCamera();
     const list = add ? this.selList.slice() : [];
     const have = new Set(list);
+    const push = (i: number): void => {
+      if (have.has(i)) return;
+      have.add(i);
+      list.push(i);
+    };
     for (let i = 0; i < w.n; i++) {
       if (!w.controllable(i) || w.team[i] !== human || have.has(i)) continue;
       const p = rd.worldToScreen(w.x[i], w.y[i], 8);
-      if (p && p.x >= ax && p.x <= bx && p.y >= ay && p.y <= by) list.push(i);
+      if (p && p.x >= ax && p.x <= bx && p.y >= ay && p.y <= by) push(i);
     }
+    const cards = this.hud.cards.cardsIn(this.clientRect(x0, y0, x1, y1));
+    for (const s of this.typeUnits(cards.types)) push(s);
+    for (const g of cards.groups) for (const s of this.groupAlive(g)) push(s);
     this.setSelection(list);
+  }
+
+  /** 画布坐标的框换成视口坐标（卡片的位置按视口算） */
+  private clientRect(x0: number, y0: number, x1: number, y1: number): { ax: number; ay: number; bx: number; by: number } {
+    const c = this.canvas.getBoundingClientRect();
+    return { ax: Math.min(x0, x1) + c.left, ay: Math.min(y0, y1) + c.top, bx: Math.max(x0, x1) + c.left, by: Math.max(y0, y1) + c.top };
+  }
+
+  /** 把还有活人的编队交给编队卡片 */
+  private pushGroups(): void {
+    this.hud.cards.setGroups(this.groups.flatMap((_, g) => {
+      const slots = this.groupAlive(g);
+      return slots.length ? [{ g, slots }] : [];
+    }));
+  }
+
+  /**
+   * 兵种卡片代表的人：屏幕内的这些兵种，加上已选着、但不在屏幕内的同兵种（卡片也给这部分人出，选它不该把他们丢掉）。
+   * 点卡片、拖卡片、画面框扫到卡片都按这个口径
+   */
+  private typeUnits(types: number[]): number[] {
+    if (!types.length) return [];
+    const w = this.world, want = new Set(types);
+    const list = this.screenUnits().filter(s => want.has(w.type[s]));
+    const got = new Set(list);
+    for (const s of this.selList) if (want.has(w.type[s]) && !got.has(s)) list.push(s);
+    return list;
+  }
+
+  /** 第 g 队里还活着、能操控的人 */
+  private groupAlive(g: number): number[] {
+    const grp = this.groups[g], w = this.world;
+    return grp ? grp.slots.filter((s, i) => w.controllable(s) && w.uid[s] === grp.uids[i]) : [];
+  }
+
+  /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键、双击编队卡片） */
+  private selectGroup(g: number, jump: boolean): void {
+    const w = this.world, alive = this.groupAlive(g);
+    this.setSelection(alive);
+    if (!jump || !alive.length) return;
+    let cx = 0, cy = 0;
+    for (const s of alive) {
+      cx += w.x[s];
+      cy += w.y[s];
+    }
+    this.focus(cx / alive.length, cy / alive.length);
+  }
+
+  /**
+   * 卡片拖到地面或小地图上松开：兵种卡片是屏幕内这个兵种（连同选着、但不在屏幕内的同兵种），编队卡片是这一队；
+   * 选中这批人并攻击移动到松开处（松在敌方建筑上则直接攻打它，同攻击移动指令）
+   */
+  private dropCard(kind: 'type' | 'group', id: number, x: number, y: number, target: 'view' | 'mini'): void {
+    if (!this.world.humanTeam) return;
+    if (kind === 'group') this.selectGroup(id, false);
+    else this.pickTypes([id], 'replace');
+    if (this.mode) this.setMode('');
+    if (!this.selList.length) return;
+    let p: { x: number; y: number };
+    if (target === 'mini') {
+      const r = this.hud.minimap.getBoundingClientRect();
+      p = this.minimap.toWorld(x - r.left, y - r.top);
+    } else {
+      const c = this.canvas.getBoundingClientRect();
+      p = this.renderer.screenToWorld(x - c.left, y - c.top);
+    }
+    if (!this.attackBuildingAt(p.x, p.y, false)) this.issueMove(p.x, p.y, true);
   }
 
   /** 屏幕内的己方可操控单位 */
@@ -737,8 +819,8 @@ export class GameApp {
     return out;
   }
 
-  /** 兵种栏里点选 / 框选卡片（见 HudCallbacks.pickTypes） */
-  private pickTypes(types: number[], mode: 'replace' | 'add' | 'toggle' | 'map'): void {
+  /** 点兵种卡片（见 CardBarCallbacks.pickTypes） */
+  private pickTypes(types: number[], mode: 'replace' | 'toggle' | 'map'): void {
     const w = this.world;
     const want = new Set(types);
     if (mode === 'map') {
@@ -747,19 +829,12 @@ export class GameApp {
       this.setSelection(list);
       return;
     }
-    if (mode === 'toggle' && this.selList.some(s => want.has(w.type[s]))) {
-      this.setSelection(this.selList.filter(s => !want.has(w.type[s])));
+    if (mode === 'toggle') {
+      if (this.selList.some(s => want.has(w.type[s]))) this.setSelection(this.selList.filter(s => !want.has(w.type[s])));
+      else this.setSelection([...this.selList, ...this.typeUnits(types)]);
       return;
     }
-    const base = mode === 'replace' ? [] : this.selList.slice();
-    const have = new Set(base);
-    for (const s of this.screenUnits()) if (want.has(w.type[s]) && !have.has(s)) base.push(s);
-    // 屏幕内没有这个兵种（只是选着、镜头挪开了）：保留原来选着的那些
-    if (mode === 'replace') {
-      const got = new Set(base);
-      for (const s of this.selList) if (want.has(w.type[s]) && !got.has(s)) base.push(s);
-    }
-    this.setSelection(base);
+    this.setSelection(this.typeUnits(types));
   }
 
   // ------------------------------------------------------------------ 指令
@@ -979,7 +1054,7 @@ export class GameApp {
     if (k.has('ArrowUp') || k.has('w')) dy -= 1;
     if (k.has('ArrowDown') || k.has('s')) dy += 1;
     // 鼠标贴到屏幕最外沿卷屏，底下是界面面板也卷；从某条边离开了网页就朝那边续卷。
-    // 按着键拖动时不卷（画面上拖框、兵种栏拖框、拖小地图）：拖过头卷走了镜头，松手时选中的就不是框住的那批人
+    // 按着键拖动时不卷（画面上拖框、拖卡片、拖小地图）：拖过头卷走了镜头，松手时选中的就不是框住的那批人
     const m = this.mouse;
     if (!m.buttons && !this.drag && !this.pan && !this.hud.helpOpen && document.hasFocus()) {
       if (m.out) {

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { AU_RANGED_TAKEN, ELITE, EXPAND_RULES, SIZES, SITE_CAMP, SITE_CITY, UNITS, UNIT_BY_KEY, expandUnit, isContentUnit, unitKind } from '../../src/sim/defs';
 import { unitUpgradeCost } from '../../src/sim/systems/economy';
 import { createGame } from '../../src/sim/setup';
-import { auraEffect, auraPct, tier3Perks, unitTip } from '../../src/ui/hud';
+import { tier3Perks } from '../../src/ui/hud';
+import { auraEffect, auraPct, unitTip } from '../../src/ui/unitText';
 
 describe('兵种提示', () => {
   it('第一行是名称与类别，第二行是说明，随后是生命、攻击、攻速与射程护甲', () => {
