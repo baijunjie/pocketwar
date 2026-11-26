@@ -79,18 +79,21 @@ describe('胜负已分：battle 收兵', () => {
     expect(early).toBeGreaterThan(0);
   }, 120000);
 
-  it('生命差 6 级的对阵：强的一方赢、提前收兵，弱的一方记 0', () => {
-    const strong = buildArmy(refSpec(20)), weak = buildArmy(refSpec(20, { hp: -6 }));
-    const r = battle(strong, weak, seedList(0, 1)[0]);
-    expect(r.early).toBe(true);
-    expect(r.fb).toBe(0);
-    expect(r.fa).toBeGreaterThan(0);
-    expect(r.adv).toBe(r.fa);
-    const flip = battle(weak, strong, seedList(0, 1)[0]);
-    expect(flip.early).toBe(true);
-    expect(flip.fa).toBe(0);
-    expect(flip.fb).toBeGreaterThan(0);
-    expect(flip.adv).toBe(-flip.fb);
+  it('生命差悬殊（10 级）的对阵：强的一方赢、提前收兵，弱的一方记 0；强方做 A 方或 B 方、换几个种子都一样', () => {
+    // 差距小了（6 级）在 20 份兵力的小对阵里不是必胜，胜负会随种子翻，这里要的是记分口径，所以拉到不会翻
+    const strong = buildArmy(refSpec(20)), weak = buildArmy(refSpec(20, { hp: -10 }));
+    for (const seed of seedList(0, 3)) {
+      const r = battle(strong, weak, seed);
+      expect(r.early, `强方做 A / ${seed}`).toBe(true);
+      expect(r.fb, `强方做 A / ${seed}`).toBe(0);
+      expect(r.fa, `强方做 A / ${seed}`).toBeGreaterThan(0);
+      expect(r.adv, `强方做 A / ${seed}`).toBe(r.fa);
+      const flip = battle(weak, strong, seed);
+      expect(flip.early, `强方做 B / ${seed}`).toBe(true);
+      expect(flip.fa, `强方做 B / ${seed}`).toBe(0);
+      expect(flip.fb, `强方做 B / ${seed}`).toBeGreaterThan(0);
+      expect(flip.adv, `强方做 B / ${seed}`).toBe(-flip.fb);
+    }
   }, 60000);
 
   it('同样的军队与种子，结果完全一致（含 early）', () => {

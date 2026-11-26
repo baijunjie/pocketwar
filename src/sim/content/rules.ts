@@ -85,8 +85,14 @@ export const RULES = {
     wallSeek: 1000,
     /** 冲锋中的骑兵被立枪拦下后的停顿（秒） */
     braceStun: 0.8,
-    /** 多远之内有敌人在冲锋，枪兵就立枪 */
+    /** 多远之内有敌人冲着自己冲锋过来，枪兵就立枪 */
     braceRadius: 190,
+    /**
+     * 算不算「冲着自己来」：自己是那个冲锋者的目标，或站在它到目标的冲锋线上，离线不超过 braceLane、沿线不超过目标身后 braceDepth。
+     * braceLane 约两三个步兵站位（冲锋途中会撞到线两侧的人），braceDepth 约两排（冲锋撞到目标为止，更后排的碰不到）
+     */
+    braceLane: 36,
+    braceDepth: 30,
     braceHold: 2.5,
     shieldHold: 6,
     /** 站定出手的单位只有被挤到重叠超过这个比例（两者半径和的占比）才会让位 */

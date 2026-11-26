@@ -164,7 +164,9 @@ export function updateUnits(w: World): void {
               break;
             }
           }
-          if (on) w.braceT[i] = C.braceHold;
+          // 士气格（本格加相邻格）只是粗筛，盖住的范围比立枪的距离宽得多：有冲锋的敌人在附近，还要它是冲着自己这里来的才立枪。
+          // 否则离冲锋两三百像素、排在后面的枪兵也跟着立枪，几乎走不动，还把身后的人堵住
+          if (on && chargedAt(w, i, tm, ux, uy)) w.braceT[i] = C.braceHold;
         }
         const hill = tt === T_HILL && !melee ? 1.12 : 1;
         // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击（城池里的自动登城），
@@ -869,6 +871,40 @@ function guardKeep(w: World, i: number, d: UnitDef, ord: number): ((foe: number)
 function bldDist(b: Building, ux: number, uy: number): number {
   const px = ux < b.x0 ? b.x0 : ux > b.x1 ? b.x1 : ux, py = uy < b.y0 ? b.y0 : uy > b.y1 ? b.y1 : uy;
   return Math.hypot(px - ux, py - uy);
+}
+
+/**
+ * 有没有敌人正冲着 i 冲锋过来：braceRadius 以内有冲锋中的敌人，而且 i 就是它的目标，
+ * 或 i 站在它到目标的那条冲锋线上（离线不超过 braceLane，沿线不超过目标身后 braceDepth）
+ */
+function chargedAt(w: World, i: number, tm: number, ux: number, uy: number): boolean {
+  const C = RULES.combat, R = C.braceRadius;
+  const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
+  let gx0 = ((ux - R) / GRID) | 0, gx1 = ((ux + R) / GRID) | 0;
+  let gy0 = ((uy - R) / GRID) | 0, gy1 = ((uy + R) / GRID) | 0;
+  if (gx0 < 0) gx0 = 0;
+  if (gy0 < 0) gy0 = 0;
+  if (gx1 >= gw) gx1 = gw - 1;
+  if (gy1 >= gh) gy1 = gh - 1;
+  const x = w.x, y = w.y;
+  for (let gy = gy0; gy <= gy1; gy++) {
+    const row = gy * gw;
+    for (let k = cs[row + gx0], e = cs[row + gx1 + 1]; k < e; k++) {
+      const j = items[k];
+      if (w.team[j] === tm || !w.alive[j] || !(w.state[j] & S_CHARGE)) continue;
+      const px = ux - x[j], py = uy - y[j];
+      if (px * px + py * py > R * R) continue;
+      const t = w.target[j];
+      if (t === i) return true;
+      if (t < 0) continue;
+      const lx = x[t] - x[j], ly = y[t] - y[j];
+      const ll = Math.sqrt(lx * lx + ly * ly);
+      if (ll < 1) continue;
+      const along = (px * lx + py * ly) / ll, off = (px * ly - py * lx) / ll;
+      if (along >= 0 && along <= ll + C.braceDepth && off <= C.braceLane && off >= -C.braceLane) return true;
+    }
+  }
+  return false;
 }
 
 /**

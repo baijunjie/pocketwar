@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BUILDINGS, P_TORCH, RULES, SITE_CAMP, SITE_CITY, STEP, T_MOUNTAIN, TILE, TRAITS, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { fightState, siteContains } from '../../../src/sim/siteArea';
 import { S_COMBAT } from '../../../src/sim/world';
-import { BLD_SKIP_ALL, ENG_CLOSE, ENG_NONE, ENG_REACH, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_CHARGE, S_ROUT, S_SHIELD, S_WALL } from '../../../src/sim/state';
+import { BLD_SKIP_ALL, ENG_CLOSE, ENG_NONE, ENG_REACH, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_ROUT, S_SHIELD, S_WALL } from '../../../src/sim/state';
 import { createGame } from '../../../src/sim/setup';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE } from '../../../src/sim/systems/around';
 import { tryDetour } from '../../../src/sim/systems/detour';
@@ -3440,6 +3440,202 @@ describe('据点里待命的近战守军迎击进了据点的敌人', () => {
       const r = track(w, u, 3);
       expect(r.targets.has(e)).toBe(false);
       expect(w.y[u], '往目的地走了').toBeLessThan(C - 20);
+    });
+  });
+});
+
+describe('立枪拒马：只在敌人冲着自己冲锋过来时立枪', () => {
+  const R = RULES.combat;
+  /** 冲锋的骑兵起点离目标的距离（比 braceRadius 远，立枪必须等它进来） */
+  const START = 330;
+  const HOLD = R.braceHold * 30;
+
+  /**
+   * 一匹铁骑从 (C-START, C) 冲向 (C, C) 的目标，subject 是另一方站定不动的单位。
+   * at 为 'target'：subject 自己就是目标；为 [dx, dy]：目标是一个血量无限的 dao（站在 (C, C)），subject 站在目标的 (dx, dy) 处。
+   * 返回整个过程里 subject 第一次立枪的帧与那一帧冲锋者离它的距离，以及冲锋有没有发起过。
+   */
+  const scene = (key: string, at: 'target' | [number, number], opts: { seed?: number } = {}) => {
+    const w = flatWorld(120, opts.seed ?? 7);
+    const cav = w.spawnUnit(idx('tieqi'), 1, C - START, C);
+    let subject: number, target: number;
+    if (at === 'target') {
+      subject = target = w.spawnUnit(idx(key), 2, C, C);
+    } else {
+      target = w.spawnUnit(idx('dao'), 2, C, C);
+      w.hp[target] = w.maxHp[target] = 1e7;
+      subject = w.spawnUnit(idx(key), 2, C + at[0], C + at[1]);
+    }
+    w.orderStop([target, subject], true);
+    w.orderAttackUnit([cav], target);
+    return { w, cav, target, subject };
+  };
+
+  const observe = (sc: ReturnType<typeof scene>, secs = 5) => {
+    const { w, cav, subject } = sc;
+    let firstBrace = -1, distAtBrace = NaN, charged = false;
+    for (let t = 0; t < secs * 30; t++) {
+      w.tick();
+      w.fxN = 0;
+      if (w.state[cav] & S_CHARGE) charged = true;
+      if (firstBrace < 0 && w.alive[subject] && w.state[subject] & S_BRACE) {
+        firstBrace = t;
+        distAtBrace = Math.hypot(w.x[cav] - w.x[subject], w.y[cav] - w.y[subject]);
+      }
+    }
+    return { firstBrace, distAtBrace, charged };
+  };
+
+  it('规则项：braceRadius 190、braceLane 36、braceDepth 30', () => {
+    expect(R.braceRadius).toBe(190);
+    expect(R.braceLane).toBe(36);
+    expect(R.braceDepth).toBe(30);
+  });
+
+  describe('自己就是冲锋目标', () => {
+    for (const key of ['ji', 'yari', 'auxilia', 'spara']) {
+      it(`${key}：冲锋者进到 190 以内才立枪`, () => {
+        const o = observe(scene(key, 'target'));
+        expect(o.charged).toBe(true);
+        expect(o.firstBrace).toBeGreaterThanOrEqual(0);
+        // 逐帧一次的位移与每 8 帧一次的判断留出余量
+        expect(o.distAtBrace).toBeLessThanOrEqual(R.braceRadius + 15);
+        expect(o.distAtBrace).toBeGreaterThan(R.braceRadius - 90);
+      });
+    }
+
+    it('冲锋者离自己超过 190 的那段路上，一帧都没立枪', () => {
+      const { w, cav, subject } = scene('ji', 'target');
+      let far = 0, braceWhileFar = 0;
+      for (let t = 0; t < 150; t++) {
+        w.tick();
+        w.fxN = 0;
+        const d = Math.hypot(w.x[cav] - w.x[subject], w.y[cav] - w.y[subject]);
+        if (w.state[cav] & S_CHARGE && d > R.braceRadius + 15) {
+          far++;
+          if (w.state[subject] & S_BRACE) braceWhileFar++;
+        }
+      }
+      expect(far, '冲锋途中有一段离自己超过 190').toBeGreaterThan(10);
+      expect(braceWhileFar).toBe(0);
+    });
+  });
+
+  describe('站在冲锋线上', () => {
+    it('冲锋者与目标之间、离线 20：立枪', () => {
+      const o = observe(scene('ji', [-100, 20]));
+      expect(o.charged).toBe(true);
+      expect(o.firstBrace).toBeGreaterThanOrEqual(0);
+      expect(o.distAtBrace).toBeLessThanOrEqual(R.braceRadius + 15);
+    });
+
+    it('目标身后 20（没超过 braceDepth）、在线上：立枪', () => {
+      const o = observe(scene('ji', [20, 0]));
+      expect(o.charged).toBe(true);
+      expect(o.firstBrace).toBeGreaterThanOrEqual(0);
+    });
+
+    it('线另一侧离线 -20：立枪', () => {
+      const o = observe(scene('yari', [-100, -20]));
+      expect(o.firstBrace).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('不是冲着自己来的：不立枪', () => {
+    const never = (key: string, at: [number, number]): void => {
+      const o = observe(scene(key, at));
+      expect(o.charged, '冲锋发起了').toBe(true);
+      expect(o.firstBrace).toBe(-1);
+    };
+
+    it('冲锋冲着旁边别人去，自己在侧面 80', () => never('ji', [-100, 80]));
+    it('侧面 80、与目标并排', () => never('ji', [0, 80]));
+    it('离线 50（超过 braceLane）', () => never('ji', [-100, 50]));
+    it('在冲锋目标身后 100、同一条线上（后排）', () => never('ji', [100, 0]));
+    it('在冲锋目标身后 55（超过 braceDepth）', () => never('ji', [55, 0]));
+    it('在冲锋者身后：冲锋者起点往后 40', () => never('ji', [-START - 40, 0]));
+  });
+
+  it('没有立枪动作的近战（dao）同样处境下不立枪：自己是目标、站在线上都不', () => {
+    expect(UNIT_BY_KEY.dao.abilities.brace).toBeUndefined();
+    const a = observe(scene('dao', 'target'));
+    expect(a.charged).toBe(true);
+    expect(a.firstBrace).toBe(-1);
+    const b = observe(scene('dao', [-100, 0]));
+    expect(b.firstBrace).toBe(-1);
+  });
+
+  describe('立枪的效果', () => {
+    it('立枪 2.5 秒：冲锋者撞上、冲锋结束后，枪还要举将近 2.5 秒才收', () => {
+      const { w, cav, subject } = scene('ji', 'target');
+      let chargeEnd = -1, braceEnd = -1, braceOn = false;
+      for (let t = 0; t < 30 * 9; t++) {
+        w.tick();
+        w.fxN = 0;
+        if (w.state[cav] & S_CHARGE) chargeEnd = t;
+        const b = (w.state[subject] & S_BRACE) !== 0;
+        if (b) braceEnd = t;
+        braceOn ||= b;
+      }
+      expect(braceOn).toBe(true);
+      expect(chargeEnd).toBeGreaterThan(0);
+      // 最后一次立枪判断落在冲锋结束前的 8 帧内；冷却 8 秒内骑兵不会再冲
+      expect(braceEnd - chargeEnd).toBeGreaterThanOrEqual(HOLD - 12);
+      expect(braceEnd - chargeEnd).toBeLessThanOrEqual(HOLD + 3);
+      expect(w.state[subject] & S_BRACE).toBe(0);
+    });
+
+    it('立枪期间速度 ×0.15', () => {
+      const w = flatWorld(120, 7);
+      const cav = w.spawnUnit(idx('tieqi'), 1, C - START, C);
+      const ji = w.spawnUnit(idx('ji'), 2, C, C);
+      // 冲着枪兵冲锋，枪兵朝侧面赶路
+      w.orderAttackUnit([cav], ji);
+      w.orderMove([ji], C, C + 2000, true);
+      const v = UNIT_BY_KEY.ji.speed;
+      let run = 0, settled = 0, freeMax = 0;
+      for (let t = 0; t < 30 * 3; t++) {
+        w.tick();
+        w.fxN = 0;
+        const sp = Math.hypot(w.vx[ji], w.vy[ji]);
+        run = w.state[ji] & S_BRACE ? run + 1 : 0;
+        // 举枪满 20 帧之后速度已经降到位
+        if (run > 20) {
+          settled++;
+          expect(sp).toBeLessThanOrEqual(v * UNIT_BY_KEY.ji.abilities.brace!.speedMul + 1);
+        } else if (!run && !settled) freeMax = Math.max(freeMax, sp);
+      }
+      expect(settled).toBeGreaterThan(5);
+      expect(freeMax).toBeGreaterThan(v * 0.5);
+    });
+
+    it('冲锋者撞上立枪的单位：冲锋被拦停、受伤；被撞的不吃冲撞伤害。没立枪的被撞照常吃', () => {
+      const hits = (key: string) => {
+        const { w, cav, subject } = scene(key, 'target');
+        const hp0 = w.hp[cav], sp0 = w.hp[subject];
+        let stopHp = NaN, subjHp = NaN, stopped = false;
+        for (let t = 0; t < 30 * 5 && !stopped; t++) {
+          w.tick();
+          w.fxN = 0;
+          if (w.chargeHits[cav] > 0 && !(w.state[cav] & S_CHARGE)) {
+            stopped = true;
+            stopHp = w.hp[cav];
+            subjHp = w.hp[subject];
+          }
+        }
+        return { stopped, cavLoss: hp0 - stopHp, subjLoss: sp0 - subjHp };
+      };
+      const impact = UNIT_BY_KEY.tieqi.abilities.charge!.impact;
+      expect(impact).toBeGreaterThan(0);
+      const braced = hits('ji');
+      expect(braced.stopped).toBe(true);
+      expect(braced.cavLoss).toBeGreaterThan(0);
+      // 被撞的只可能挨到同一帧里的普通出手，不会有整份冲撞伤害
+      expect(braced.subjLoss).toBeLessThan(impact * 0.5);
+      const plain = hits('dao');
+      expect(plain.stopped).toBe(true);
+      expect(plain.subjLoss).toBeGreaterThan(impact * 0.5);
+      expect(braced.cavLoss).toBeGreaterThan(plain.cavLoss * 3);
     });
   });
 });
