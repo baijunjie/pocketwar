@@ -4,8 +4,9 @@ import type { Field } from '../nav';
 import { NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT } from '../state';
 import type { Building, World } from '../world';
 import { formation } from './formation';
+import type { Formation } from './formation';
 import { P_POSTED, P_SHIFT, leavePost } from './garrison';
-import { createMarch } from './march';
+import { createMarch, rerouteMarch } from './march';
 import { canAttackBuilding } from './targeting';
 
 function obey(w: World, units: number[]): number[] {
@@ -63,40 +64,60 @@ export function orderMove(w: World, all: number[], tx: number, ty: number, amove
     fx /= fl;
     fy /= fl;
   }
-  // 同一队人重复收到去同一处的命令（电脑指挥官常这样）：沿用现有的编队，不重新整队
+  // 这道命令里的人正好是某一个编队的全部成员
   const g0 = w.grp[units[0]];
-  if (n > 1 && g0 >= 0) {
-    const g = w.marches[g0];
-    if (g.alive && !g.arrived && g.n === n && (g.destX - tx) ** 2 + (g.destY - ty) ** 2 < 48 * 48 && units.every(s => w.grp[s] === g0)) {
-      g.amove = amove;
-      for (const s of units) if (w.order[s] === O_MOVE || w.order[s] === O_AMOVE) w.order[s] = amove ? O_AMOVE : O_MOVE;
-      return;
-    }
+  const g = n > 1 && g0 >= 0 ? w.marches[g0] : null;
+  const whole = !!g && g.alive && !g.arrived && g.n === n && units.every(s => w.grp[s] === g0);
+  // 同一队人重复收到去同一处的命令（电脑指挥官常这样）：沿用现有的编队，不重新整队
+  if (whole && (g.destX - tx) ** 2 + (g.destY - ty) ** 2 < 48 * 48) {
+    g.amove = amove;
+    for (const s of units) if (w.order[s] === O_MOVE || w.order[s] === O_AMOVE) w.order[s] = amove ? O_AMOVE : O_MOVE;
+    return;
   }
   const destCell = w.nav.nearestFree(tm, w.cellAt(tx, ty));
   if (destCell !== w.cellAt(tx, ty)) {
     tx = (destCell % mw + 0.5) * TILE;
     ty = (((destCell / mw) | 0) + 0.5) * TILE;
   }
-  const defIdxs = units.map(s => w.type[s]);
-  const f = formation(w, defIdxs, tx, ty, fx, fy, units);
+  // 行军途中改去别处、又不用掉头：不重新整队，队列照旧，最前排直接拐过去（在打、被挡住的照常重新整队）
+  const kept = whole && !g.loose && !g.blocked && rerouteMarch(w, g, tx, ty, destCell, amove, fx, fy) ? g : null;
+  let f: Formation | null = null;
   let field: Field | null = null;
-  // 编队行军：散得太开的不编（否则全军要先跑到重心集合）
-  let march = -1;
-  if (n > 1) {
-    let sp2 = 0;
-    for (const s of units) sp2 += (w.x[s] - mx) ** 2 + (w.y[s] - my) ** 2;
-    if (Math.sqrt(sp2 / n) <= RULES.march.maxSpread && (tx - mx) ** 2 + (ty - my) ** 2 > 60 * 60) {
-      march = createMarch(w, tm, mx, my, tx, ty, destCell, slow, slowRun, amove, fx, fy, n, f.width, f.depth).id;
+  let march = -1, radius: number, keptFront = 0;
+  if (kept) {
+    march = kept.id;
+    radius = Math.hypot(kept.width, kept.depth) / 2;
+    // 最前排相对队列中心的偏移：落点照原来的队列偏移、按新的朝向排在新目的地
+    keptFront = kept.depth / 2 - kept.rowD[0] / 2;
+  } else {
+    f = formation(w, units.map(s => w.type[s]), tx, ty, fx, fy, units);
+    radius = f.radius;
+    // 编队行军：散得太开的不编（否则全军要先跑到重心集合）
+    if (n > 1) {
+      let sp2 = 0;
+      for (const s of units) sp2 += (w.x[s] - mx) ** 2 + (w.y[s] - my) ** 2;
+      if (Math.sqrt(sp2 / n) <= RULES.march.maxSpread && (tx - mx) ** 2 + (ty - my) ** 2 > 60 * 60) {
+        march = createMarch(w, tm, mx, my, tx, ty, destCell, slow, slowRun, amove, fx, fy, n, f).id;
+      }
     }
   }
   const face = Math.atan2(fy, fx);
-  // 行军时领队走在最前面：队列位置都排在它身后
+  // 行军时最前排走在最前面：队列位置都排在它身后
   let front = -1e9;
-  for (let m = 0; m < n; m++) if (f.fa[m] > front) front = f.fa[m];
+  if (f) for (let m = 0; m < n; m++) if (f.fa[m] > front) front = f.fa[m];
   for (let m = 0; m < n; m++) {
     const s = units[m];
-    let sx = Math.min(w.W - 24, Math.max(24, f.sx[m])), sy = Math.min(w.H - 24, Math.max(24, f.sy[m]));
+    let sx: number, sy: number;
+    if (f) {
+      sx = f.sx[m];
+      sy = f.sy[m];
+    } else {
+      const fa = w.offA[s] + keptFront, fl = w.offL[s];
+      sx = tx - fy * fl + fx * fa;
+      sy = ty + fx * fl + fy * fa;
+    }
+    sx = Math.min(w.W - 24, Math.max(24, sx));
+    sy = Math.min(w.H - 24, Math.max(24, sy));
     const c = w.cellAt(sx, sy);
     if (blk[c] || w.nav.deck[tm][c]) {
       const nc = w.nav.nearestFree(tm, c, 6);
@@ -115,16 +136,20 @@ export function orderMove(w: World, all: number[], tx: number, ty: number, amove
       }
     }
     leavePost(w, s);
-    w.grp[s] = march;
-    w.offA[s] = f.fa[m] - front;
-    w.offL[s] = f.fl[m];
+    if (f) {
+      w.grp[s] = march;
+      w.offA[s] = f.fa[m] - front;
+      w.offL[s] = f.fl[m];
+      w.marchRow[s] = f.row[m];
+      w.marchCol[s] = f.col[m];
+    }
     w.faceA[s] = face;
     w.order[s] = amove ? O_AMOVE : O_MOVE;
     w.target[s] = w.otarget[s] = NONE;
     w.destX[s] = sx;
     w.destY[s] = sy;
     w.destCell[s] = destCell;
-    w.seekR[s] = f.radius + 48;
+    w.seekR[s] = radius + 48;
     // 同一道命令里的部队按最慢的那个行军，队形才不会散
     w.grpSpeed[s] = n > 1 ? slow : 0;
     reset(w, s);

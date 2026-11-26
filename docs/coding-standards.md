@@ -20,7 +20,7 @@
   否则贴着格线时判断用的值还在本格，存进去却被舍入到隔壁格，绕过了检查。
 - 改「相邻两格之间能不能直接走」的规则（墙顶、城内、城外这类），`src/sim/nav.ts` 的 `canStep` / `canStepDiag`（位移碰撞、绕行前瞻、流场搜索、追击绕行都调它们）
   与 `src/sim/world.ts` 的 `lineBlocked` 两处同改：漏一处，寻路、直线判断与实际位移就对不上。
-- 改移动速度的系数（天气、风、地形之类），`src/sim/systems/units.ts` 的单位期望速度与 `src/sim/systems/march.ts` 的领队步长两处同改：
+- 改移动速度的系数（天气、风、地形之类），`src/sim/systems/units.ts` 的单位期望速度与 `src/sim/systems/march.ts` 里最前排的速度（`updateMarches`）两处同改：
   只改一处，编队成员与队列位置会对不上。
 - 新增下令函数、或在 `src/sim/systems/orders.ts` 之外改单位的命令或目的地时，先调 `leavePost`（腾垛口、取消出击与预留的站位），
   再照 `orders.ts` 里 `reset()` 清掉寻路进度（`stuck`、`bestD`、`noGain` 等）：漏清 `bestD / noGain`，单位刚派出去就被判到达、又被派出，原地循环。

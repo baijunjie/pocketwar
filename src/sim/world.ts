@@ -212,6 +212,9 @@ export class World {
   readonly grp = new Int16Array(MAX_UNITS).fill(-1);
   readonly offA = new Float32Array(MAX_UNITS);
   readonly offL = new Float32Array(MAX_UNITS);
+  /** 在队列里第几排（0 是最前排）、排内第几个（从左往右）：过窄处折排时用 */
+  readonly marchRow = new Int16Array(MAX_UNITS);
+  readonly marchCol = new Int16Array(MAX_UNITS);
   /** 编队行军时这一帧够不着队列里自己的位置（每帧重算）：编队统计掉队时，这些人与跟着位置走的人分开算 */
   readonly apart = new Uint8Array(MAX_UNITS);
   /** 到位后面朝的方向（弧度） */

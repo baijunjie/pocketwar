@@ -193,7 +193,7 @@ export class Minimap {
     c.restore();
   }
 
-  /** 编队按领队画一条；不在编队里的按目的地归堆，从这一堆人的重心画起 */
+  /** 编队从队列最前排画一条；不在编队里的按目的地归堆，从这一堆人的重心画起 */
   private drawRoutes(k: number, dt: number): void {
     const c = this.ctx, w = this.world, human = w.humanTeam;
     if (!human) return;

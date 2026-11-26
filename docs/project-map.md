@@ -15,6 +15,7 @@
 | `src/sim/` | 纯逻辑的模拟层（世界状态、地图、寻路、开局部署） |
 | `src/sim/world.ts` | 世界状态（单位、建筑、据点、投射物、环境、补给）与系统管线 `World.tick()` |
 | `src/sim/state.ts` | 模拟层共用常量：容量上限、指令、交手状态（`ENG_*`，`World.engaged` 的三态）、状态位、特效种类，不依赖任何模块 |
+| `src/sim/ease.ts` | 通用缓动函数（平滑阶跃 `smooth`），不依赖任何模块 |
 | `src/sim/map.ts`、`src/sim/nav.ts`、`src/sim/rng.ts`、`src/sim/setup.ts` | 程序化地图生成；通行网格与流场寻路；可复现随机数；开局建图、摆放据点与部署双方部队 |
 | `src/sim/siteArea.ts` | 据点范围判定：有围墙的据点（城池、营寨）按围墙矩形，没有的（资源点、临时据点）按占领圈，提供点在范围内与到范围边缘距离，以及据点是否在交战（`fightState`，选址、索敌、修复共用，放这里免得索敌与据点系统互相引用） |
 | `src/sim/rally.ts` | 集结点：哪些据点能设（只有出援军的）、玩家指令作用于哪几座，界面、渲染与指令共用 |
@@ -25,6 +26,7 @@
 | `src/sim/systems/sites.ts`、`economy.ts`、`targeting.ts` | 据点逻辑所在：`sites.ts` 管占领（军事建筑拆光才能读秒）、休整、按据点的援军（营寨按占领方所选兵种出）与集结点、丢光城池与营寨判负；`economy.ts` 管据点三级升级、资源点哨塔与临时据点；`targeting.ts` 的 `canAttackBuilding` 判定建筑能否被攻击、`crowded()` 判定目标是否已被围满 |
 | `src/sim/systems/combat.ts` | 战斗结算：单位出手统一走 `strike()`（按武器表出手），以及伤害、阵亡、经验升级、投射物与防御建筑的放箭 |
 | `src/sim/systems/units.ts`、`detour.ts`、`around.ts` | 单位每帧行为（`units.ts`）及它调用的两块接敌辅助：`detour.ts` 近战被挡时绕到敌群外缘的空位，`around.ts` 追击时绕开小障碍的局部寻路；索敌（含远程去打墙顶敌兵）在 `targeting.ts` |
+| `src/sim/systems/orders.ts`、`formation.ts`、`march.ts`、`marchTrail.ts`、`marchChoke.ts`、`marchSlots.ts` | 移动命令与编队行军：`orders.ts` 落实玩家指令（含行军途中改道能否沿用原编队的判断）；`formation.ts` 把一批人排成横队，给出每人的排与排内序号、各排的宽、深、最大半径、最慢奔跑速度；编队行军（弹性队列：过窄处按通道宽度收窄、折排，过后展开）拆在四个 `march*.ts`。一道命令里的部队共用两个看不见的点：**探路点**走在队列前方，照单个单位的最短路线沿流场前瞻，每隔一小段记一个行迹点；**最前排**是行迹上落后探路点一段路程的那一点，队列各排沿行迹往后排。`march.ts` 管编队对象、建立与重新整队、行军途中改道、探路点怎么走与每帧最前排走多快；`marchTrail.ts` 管行迹缓冲，以及每个行迹点上记的通道宽度（含按坡度的包络）；`marchChoke.ts` 在行迹点上认窄处、量宽度；`marchSlots.ts` 管各排占行迹的哪一段、成员的队列位置，以及成员跟着哪一点走、到达后何时离队。成员的排与排内序号存在 `World.marchRow`、`World.marchCol` |
 | `src/sim/systems/aura.ts` | 光环：定期重新判定，由带光环特性的存活单位给半径内的其他己方单位写入加成（`World.aura`），伤害结算读它 |
 | `src/sim/ai/` | 指挥官接口与登记表（`commander.ts`），战略 AI（`strategic.ts`），以及电脑给营寨选兵种的办法（`picker.ts`） |
 | `src/render/` | three.js 渲染层：把模拟状态每帧写进实例缓冲并绘制 |

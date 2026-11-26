@@ -10,7 +10,7 @@ import type { Building, World } from '../world';
 import { damageUnit, strike } from './combat';
 import { orderAttackUnit, orderMove } from './orders';
 import { P_NONE, P_POSTED, stepPost } from './garrison';
-import { FOLLOW, FOLLOW_APART, FOLLOW_SLOT, SLOT, marchFollow, marchSlot } from './march';
+import { FOLLOW, FOLLOW_APART, FOLLOW_SLOT, SLOT, marchFollow, marchRelease, marchSlot } from './marchSlots';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
 import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from './targeting';
@@ -429,26 +429,36 @@ export function updateUnits(w: World): void {
           const gi = w.grp[i];
           if (gi >= 0 && tgt === NONE) {
             const g = marches[gi];
-            if (!g.alive || g.arrived) w.grp[i] = -1;
+            if (!g.alive || (g.arrived && !g.tail)) w.grp[i] = -1;
             else if (!g.blocked && !g.loose && !inCombat) {
               // 只有不在打仗的时候才排队：自己进入战斗状态、或队伍已经打起来了，就各走各的
-              const l = w.offL[i];
-              marchSlot(g, w.offA[i], l);
+              marchSlot(g, w.marchRow[i], w.marchCol[i], w.offL[i]);
               // 位置在自己前方多远（沿队列在那里的行进方向量；负数是落到了身后）
               const behind = (SLOT.x - ux) * SLOT.hx + (SLOT.y - uy) * SLOT.hy < -RULES.march.waitAhead;
-              if (behind && g.battleT > 0) {
+              if (g.tail && marchRelease(w, g, ux, uy, w.destX[i], w.destY[i])) {
+                // 收尾时：本排已走过终点，或前方再没有窄处、又看得见落点，离队去落点
+                w.grp[i] = -1;
+              } else if (behind && g.battleT > 0) {
                 // 位置在自己身后、队伍里又有人在打敌兵：不等位置，交给下面沿路线往前去接敌（多是走在队列前面的人）。
                 // 不看位置够不够得着（走到障碍另一侧后位置常被挡住），也不像够不着位置时那样提速：他们已经在自己的位置前面，没有要追的
                 pushOn = true;
               } else {
-                const mode = marchFollow(w, g, l, ux, uy);
+                const mode = marchFollow(w, g, ux, uy);
                 if (mode !== FOLLOW_SLOT) w.apart[i] = 1;
-                if (mode === FOLLOW_APART) {
-                  // 够不着自己的位置，也看不见本排：不等，跑步沿寻路路线找路过去，过去之后再回到位置上
-                  spd = run;
+                if (mode === FOLLOW_APART && g.tail) {
+                  // 收尾时够不着位置也看不见本排：不再归队，离队去落点
+                  w.grp[i] = -1;
+                } else if (mode === FOLLOW_APART) {
+                  // 够不着自己的位置，也看不见本排：不等，沿寻路路线找路过去，过去之后再回到位置上。
+                  // 位置在前面就跑步追；位置已落到身后的，按本排此刻的速度走，不跑到队伍前面去站着等
+                  if (!behind) spd = run;
+                  else {
+                    const v = Math.max(SLOT.v, spd * RULES.march.apartTrail);
+                    spd = v < run ? v : run;
+                  }
                 } else {
-                  // 瞄准要跟的那一点前方一小段：到位后正好与领队同速，落后了就跑步追
-                  const ex = FOLLOW.x + SLOT.hx * g.v * 0.4 - ux, ey = FOLLOW.y + SLOT.hy * g.v * 0.4 - uy;
+                  // 瞄准要跟的那一点前方一小段：到位后正好与本排同速，落后了就跑步追
+                  const ex = FOLLOW.x + SLOT.hx * SLOT.v * 0.4 - ux, ey = FOLLOW.y + SLOT.hy * SLOT.v * 0.4 - uy;
                   const ed = Math.sqrt(ex * ex + ey * ey);
                   if (behind) {
                     // 位置在自己身后（绕路时走到了前面）：原地站着等它走过来，不往回跑
