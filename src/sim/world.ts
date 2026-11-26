@@ -246,6 +246,9 @@ export class World {
   /** 被判定够不着的目标及其失效倒计时 */
   readonly avoidUid = new Uint32Array(MAX_UNITS);
   readonly avoidT = new Float32Array(MAX_UNITS);
+  /** 挤不到跟前而放下的建筑（自己挑中的；接连两座都挤不进时记 BLD_SKIP_ALL，什么建筑都不挑），以及多久之内不再挑它 */
+  readonly bldSkip = new Int32Array(MAX_UNITS);
+  readonly bldSkipT = new Float32Array(MAX_UNITS);
   /** 挤不进战线时原地列队等待的倒计时，以及连续等待的次数 */
   readonly waitT = new Float32Array(MAX_UNITS);
   readonly waits = new Uint8Array(MAX_UNITS);
@@ -513,7 +516,7 @@ export class World {
     this.chargeT[i] = this.chargeCd[i] = this.braceT[i] = this.shieldT[i] = 0;
     this.chargeHits[i] = 0;
     this.torchOff[i] = 0;
-    this.avoidT[i] = this.waitT[i] = 0;
+    this.avoidT[i] = this.waitT[i] = this.bldSkipT[i] = 0;
     this.waits[i] = this.crowd[i] = 0;
     this.detourT[i] = this.detourLoose[i] = 0;
     this.wayUid[i] = this.wayMode[i] = this.wayNoT[i] = this.wallUid[i] = 0;

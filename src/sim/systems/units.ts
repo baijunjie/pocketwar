@@ -5,8 +5,8 @@
 import { A_MELEE, DT, RULES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL, UnitDef } from '../content';
 import { DIRX, DIRY } from '../nav';
 import { siteContains } from '../siteArea';
-import { ENG_CLOSE, ENG_REACH, FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
-import type { World } from '../world';
+import { BLD_SKIP_ALL, ENG_CLOSE, ENG_REACH, FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
+import type { Building, World } from '../world';
 import { damageUnit, strike } from './combat';
 import { orderAttackUnit, orderMove } from './orders';
 import { P_NONE, P_POSTED, stepPost } from './garrison';
@@ -86,6 +86,7 @@ export function updateUnits(w: World): void {
     if (w.braceT[i] > 0) w.braceT[i] -= DT;
     if (w.shieldT[i] > 0) w.shieldT[i] -= DT;
     if (w.avoidT[i] > 0) w.avoidT[i] -= DT;
+    if (w.bldSkipT[i] > 0) w.bldSkipT[i] -= DT;
     if (w.waitT[i] > 0) w.waitT[i] -= DT;
     if (w.detourLoose[i] > 0) w.detourLoose[i] -= DT;
     if (w.wayNoT[i] > 0) w.wayNoT[i] -= DT;
@@ -489,17 +490,8 @@ export function updateUnits(w: World): void {
                   // 行军路线被敌方建筑挡住：就地攻击它（攻城）
                   const K = d.lookK;
                   if (tgt === NONE && (K === 1 || ((i + tick) & 7) === 3)) {
-                    let c2 = cell;
-                    for (let k2 = 0; k2 < K; k2++) {
-                      const dr = f.dirs[c2];
-                      if (dr > 7) break;
-                      c2 += DIRX[dr] + DIRY[dr] * mw;
-                      if (blk[c2]) {
-                        const bid = bldAt[c2];
-                        if (bid >= 0 && canAttackBuilding(buildings[bid], tm, d.siege)) target[i] = -bid - 2;
-                        break;
-                      }
-                    }
+                    const bid = routeBlocker(f.dirs, cell, K, blk, bldAt, mw);
+                    if (bid >= 0 && canAttackBuilding(buildings[bid], tm, d.siege)) target[i] = -bid - 2;
                   }
                 }
               }
@@ -790,6 +782,14 @@ export function updateUnits(w: World): void {
         // 往两侧横挪时撞上的不算：那是被自己人挡在后面、横挪的一侧正好贴着房子，照被自己人挡住处理
         if (ord !== O_ATTACK) target[i] = NONE;
         w.ignoreT[i] = 1.5;
+      } else if (tgt < NONE && ord !== O_ATTACK && !onRoute(w, i, cell, -tgt - 2, bldDist(buildings[-tgt - 2], ux, uy))) {
+        // 自己挑中的建筑挤不到跟前（够得着的位置被自己人占满）：不在后面列队等，放下它接着执行原来的命令
+        // （攻击移动的往目的地走，待命的回岗位），过一阵再来看有没有位置。成片的人等在一座建筑后面时，别处的敌兵没人管。
+        // 挡在自己路线上的建筑（门、木栅）不放：不打通过不去，照旧列队等。
+        // 放下一座之后还能改挑旁边别的；跳过期间又挤不进第二座，就这段时间里什么建筑都不挑，否则会在挨着的几座之间来回跑
+        w.bldSkip[i] = w.bldSkipT[i] > 0 ? BLD_SKIP_ALL : -tgt - 2;
+        w.bldSkipT[i] = C.bldSkipFor + (i & 7) * (C.bldSkipSpread / 8);
+        target[i] = NONE;
       } else {
         // 被自己人挡在后面：先找一个还有空位的敌人，没有就原地列队等，不再来回乱跑
         w.avoidUid[i] = w.targetUid[i];
@@ -852,6 +852,45 @@ function guardDrops(w: World, i: number, tgt: number): boolean {
 /** 绕行时空位所属的敌兵要满足的条件：据点里的近战守军只留不会被 guardDrops 丢掉的；其余没有限制（undefined） */
 function guardKeep(w: World, i: number, d: UnitDef, ord: number): ((foe: number) => boolean) | undefined {
   return ord === O_IDLE && w.sheltered[i] === 1 && d.melee ? foe => !guardDrops(w, i, foe) : undefined;
+}
+
+/** (ux, uy) 到建筑贴边那一点的距离 */
+function bldDist(b: Building, ux: number, uy: number): number {
+  const px = ux < b.x0 ? b.x0 : ux > b.x1 ? b.x1 : ux, py = uy < b.y0 ? b.y0 : uy > b.y1 ? b.y1 : uy;
+  return Math.hypot(px - ux, py - uy);
+}
+
+/**
+ * 沿流场从 cell 往前走最多 steps 格，先碰到的走不通的格子属于哪座建筑；路上没有走不通的格子、或那一格不是建筑（地形）时是 -1
+ */
+function routeBlocker(dirs: Uint8Array, cell: number, steps: number, blk: Uint8Array, bldAt: Int32Array, mw: number): number {
+  let c = cell;
+  for (let k = 0; k < steps; k++) {
+    const dr = dirs[c];
+    if (dr > 7) return -1;
+    c += DIRX[dr] + DIRY[dr] * mw;
+    if (blk[c]) return bldAt[c];
+  }
+  return -1;
+}
+
+/** 判断建筑挡不挡路时，沿路线往前看的格数在「到它的直线距离」之上再多看几格：路线会绕开障碍，比直线长一点 */
+const ROUTE_SLACK = 4;
+
+/**
+ * 建筑 bid 是不是挡在 i 的行军路线上：沿 i 的流场往前，先碰到的走不通的格子属于它。
+ * 往前看到它那么远为止（dist 是 i 到它的距离，像素）。流场被回收了就重新取一张，并先当它挡路，否则挡路的门会被当成不挡路
+ */
+function onRoute(w: World, i: number, cell: number, bid: number, dist: number): boolean {
+  const f = w.field[i];
+  if (!f) return false;
+  const tm = w.team[i];
+  if (f.dead) {
+    // 刚重取的这张多半还没算出来（方向都是空的），这一轮先当它挡路、照旧列队等，下一轮计时到点再判断
+    w.field[i] = w.nav.getField(tm, f.cell, w.tickCount);
+    return true;
+  }
+  return routeBlocker(f.dirs, cell, Math.ceil(dist / TILE) + ROUTE_SLACK, w.nav.block[tm], w.nav.bld, w.map.w) === bid;
 }
 
 /** 顶住的自己人的方向（单位向量），每帧最多记这么多处 */

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BUILDINGS, P_TORCH, RULES, SITE_CAMP, SITE_CITY, STEP, T_MOUNTAIN, TILE, TRAITS, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { fightState, siteContains } from '../../../src/sim/siteArea';
 import { S_COMBAT } from '../../../src/sim/world';
-import { ENG_CLOSE, ENG_NONE, ENG_REACH, NONE, O_AMOVE, O_ATTACK, O_IDLE, O_MOVE, S_CHARGE, S_ROUT, S_SHIELD, S_WALL } from '../../../src/sim/state';
+import { BLD_SKIP_ALL, ENG_CLOSE, ENG_NONE, ENG_REACH, NONE, O_AMOVE, O_ATTACK, O_IDLE, O_MOVE, S_CHARGE, S_ROUT, S_SHIELD, S_WALL } from '../../../src/sim/state';
 import { createGame } from '../../../src/sim/setup';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE } from '../../../src/sim/systems/around';
 import { tryDetour } from '../../../src/sim/systems/detour';
@@ -2792,6 +2792,343 @@ describe('交手状态：没交手、肉搏、隔着贴身距离出手', () => {
       w.state[back] &= ~S_SHIELD;
       const bare = lose();
       expect(shielded / bare).toBeCloseTo(1 - block, 3);
+    });
+  });
+});
+
+describe('近战挤不到自己挑中的建筑跟前：放下它接着执行原来的命令，不在后面列队等', () => {
+  const FOR = RULES.combat.bldSkipFor, SPREAD = RULES.combat.bldSkipSpread;
+
+  /** 一次放下：哪个单位、哪一帧、放下那一帧的状态 */
+  interface Drop { s: number; t: number; v: number; target: number; waitT: number; bld: number }
+
+  /**
+   * 100 个血量无限的己方 dao 排成 10 列的密集方阵（站在建筑的索敌范围内），跑 secs 秒；
+   * 逐帧记录每个单位跳过倒计时从非正变正的那一帧（放下的瞬间）、期间有没有单位在列队等。
+   * track 每帧调用一次，供各用例额外记录。
+   */
+  const crowd = (w: World, us: number[], secs: number, track?: (t: number) => void) => {
+    const drops: Drop[] = [];
+    const prev = new Map<number, number>();
+    let waiting = 0;
+    step(w, secs * 30, t => {
+      for (const s of us) {
+        if ((prev.get(s) ?? 0) <= 0 && w.bldSkipT[s] > 0) {
+          drops.push({ s, t, v: w.bldSkipT[s], target: w.target[s], waitT: w.waitT[s], bld: w.bldSkip[s] });
+        }
+        prev.set(s, w.bldSkipT[s]);
+        if (w.waitT[s] > 0) waiting++;
+      }
+      track?.(t);
+    });
+    return { drops, waiting };
+  };
+  const block = (w: World, x0: number, y0: number, step: number, n = 100): number[] => {
+    const us: number[] = [];
+    for (let k = 0; k < n; k++) us.push(mine(w, mid(x0 + (k % 10) * step), mid(y0 + Math.floor(k / 10) * step)));
+    return us;
+  };
+
+  describe('攻击移动：建筑在路线旁边', () => {
+    // 敌方行营在 (70..71, 52..53)，方阵从 (45, 56) 起往东南的 (100, 62) 攻击移动；路线从行营南面过去，不穿过它
+    const scene = () => {
+      const w = flatWorld(120, 7);
+      const b = w.addBuilding(BUILDINGS.outpost, 70, 52, 2, -1);
+      const us = block(w, 45, 56, 0.7);
+      w.orderMove(us, mid(100), mid(62), true);
+      return { w, b, us, bid: -b.id - 2 };
+    };
+
+    it('有人挤不到跟前：放下它（target 变回 NONE），当帧没有列队等，记下放下的是哪一座', () => {
+      const { w, b, us } = scene();
+      const { drops } = crowd(w, us, 40);
+      expect(drops.length, '场景前提：有人被挤得放下了').toBeGreaterThan(0);
+      for (const dr of drops) {
+        expect(dr.target).toBe(NONE);
+        expect(dr.waitT).toBeLessThanOrEqual(0);
+        expect(dr.bld).toBe(b.id);
+      }
+    });
+
+    it('成片的人不再等在建筑后面：全程没有任何单位在列队等', () => {
+      const { w, us } = scene();
+      expect(crowd(w, us, 40).waiting).toBe(0);
+    });
+
+    it('放下后的跳过时长落在 [bldSkipFor, bldSkipFor + bldSkipSpread)，不同的人时长不全相同', () => {
+      const { w, us } = scene();
+      const { drops } = crowd(w, us, 40);
+      expect(drops.length).toBeGreaterThan(0);
+      for (const dr of drops) {
+        expect(dr.v).toBeGreaterThanOrEqual(FOR);
+        expect(dr.v).toBeLessThan(FOR + SPREAD);
+      }
+      expect(new Set(drops.map(dr => dr.v)).size).toBeGreaterThan(1);
+    });
+
+    it('跳过期间放下它的人不再挑这座建筑', () => {
+      const { w, us, b, bid } = scene();
+      let again = false;
+      crowd(w, us, 40, () => {
+        for (const s of us) if (w.bldSkipT[s] > 0 && w.bldSkip[s] === b.id && w.target[s] === bid) again = true;
+      });
+      expect(again).toBe(false);
+    });
+
+    it('放下后接着往目的地走：命令仍是攻击移动，最后离目的地比放下那一刻近得多', () => {
+      const { w, us } = scene();
+      const dest = (s: number): number => Math.hypot(w.x[s] - mid(100), w.y[s] - mid(62));
+      const at = new Map<number, number>();
+      const prev = new Set<number>();
+      const orders = new Set<number>();
+      crowd(w, us, 40, () => {
+        for (const s of us) {
+          if (w.bldSkipT[s] > 0 && !prev.has(s)) {
+            prev.add(s);
+            at.set(s, dest(s));
+            orders.add(w.order[s]);
+          }
+        }
+      });
+      expect(at.size, '场景前提：有人放下了').toBeGreaterThan(0);
+      expect([...orders]).toEqual([O_AMOVE]);
+      for (const [s, d0] of at) expect(dest(s), `slot ${s}`).toBeLessThan(d0 - 100);
+    });
+  });
+
+  describe('待命：建筑在岗位旁边', () => {
+    // 方阵在 (46, 58) 起待命，敌方行营在 (53..54, 56..57)，全在待命的索敌范围内
+    const scene = () => {
+      const w = flatWorld(120, 7);
+      const b = w.addBuilding(BUILDINGS.outpost, 53, 56, 2, -1);
+      const us = block(w, 46, 58, 0.5);
+      return { w, b, us, bid: -b.id - 2 };
+    };
+
+    it('有人挤不到跟前：放下它、不列队等；全程没有人在列队等', () => {
+      const { w, b, us } = scene();
+      const { drops, waiting } = crowd(w, us, 40);
+      expect(drops.length, '场景前提：有人被挤得放下了').toBeGreaterThan(0);
+      for (const dr of drops) {
+        expect(dr.target).toBe(NONE);
+        expect(dr.waitT).toBeLessThanOrEqual(0);
+        expect(dr.bld).toBe(b.id);
+        expect(dr.v).toBeGreaterThanOrEqual(FOR);
+        expect(dr.v).toBeLessThan(FOR + SPREAD);
+      }
+      expect(waiting).toBe(0);
+    });
+
+    it('放下后回岗位：命令仍是待命，跳过期间不再挑这座，最后站回岗位附近', () => {
+      const { w, us, b, bid } = scene();
+      const home = new Map(us.map(s => [s, [w.homeX[s], w.homeY[s]]]));
+      let again = false;
+      const dropped = new Set<number>();
+      crowd(w, us, 40, () => {
+        for (const s of us) {
+          if (w.bldSkipT[s] > 0) dropped.add(s);
+          if (w.bldSkipT[s] > 0 && w.bldSkip[s] === b.id && w.target[s] === bid) again = true;
+        }
+      });
+      expect(dropped.size).toBeGreaterThan(0);
+      expect(again).toBe(false);
+      for (const s of dropped) {
+        expect(w.order[s]).toBe(O_IDLE);
+        const [hx, hy] = home.get(s)!;
+        expect(Math.hypot(w.x[s] - hx, w.y[s] - hy), `slot ${s}`).toBeLessThan(80);
+      }
+    });
+  });
+
+  describe('不放下的情形：照旧原地列队等', () => {
+    it('玩家右键指定攻打的建筑（O_ATTACK）：挤不到跟前的人（「追不上」计时远超 blockedAfter）也不放下它，一直盯着打', () => {
+      const w = flatWorld(120, 7);
+      const b = w.addBuilding(BUILDINGS.outpost, 53, 56, 2, -1);
+      // 血量取得很大，建筑在测试期间不会倒
+      b.hp = b.maxHp = 1e9;
+      const us = block(w, 46, 58, 0.5);
+      w.orderAttackBuilding(us, b);
+      const { drops } = crowd(w, us, 20);
+      const crowded = us.filter(s => w.stuck[s] > RULES.combat.blockedAfter * 2);
+      expect(crowded.length, '场景前提：有人被挤在后面够不着').toBeGreaterThan(0);
+      expect(drops).toHaveLength(0);
+      for (const s of us) {
+        expect(w.bldSkipT[s]).toBe(0);
+        expect(w.order[s]).toBe(O_ATTACK);
+        expect(w.target[s]).toBe(-b.id - 2);
+      }
+    });
+
+    it('挡在路线上的建筑（整行木栅里的一座营门）：攻击移动的人挤不到它跟前时列队等，不放下', () => {
+      const w = flatWorld(120, 7);
+      for (let tx = 0; tx < 120; tx++) if (tx < 59 || tx > 60) w.addBuilding(BUILDINGS.palisade, tx, 70, 2, -1);
+      const gate = w.addBuilding(BUILDINGS.wgate_h, 59, 70, 2, -1);
+      const us: number[] = [];
+      for (let k = 0; k < 100; k++) us.push(mine(w, mid(54 + (k % 12) * 0.9), mid(50 + Math.floor(k / 12))));
+      w.orderMove(us, mid(60), mid(100), true);
+      let onGate = false;
+      const { drops, waiting } = crowd(w, us, 40, () => {
+        for (const s of us) if (w.target[s] === -gate.id - 2) onGate = true;
+      });
+      expect(onGate, '场景前提：有人去打挡路的营门').toBe(true);
+      expect(waiting, '场景前提：有人挤不到营门跟前、列队等').toBeGreaterThan(0);
+      expect(drops).toHaveLength(0);
+    });
+  });
+
+  it('远程单位不受影响：攻击移动路过敌方行营，没有人记下放下的建筑', () => {
+    const w = flatWorld(120, 7);
+    w.addBuilding(BUILDINGS.outpost, 70, 52, 2, -1);
+    const us: number[] = [];
+    for (let k = 0; k < 100; k++) us.push(mine(w, mid(45 + (k % 10) * 0.7), mid(56 + Math.floor(k / 10) * 0.8), 'nu'));
+    w.orderMove(us, mid(100), mid(62), true);
+    expect(crowd(w, us, 40).drops).toHaveLength(0);
+  });
+
+  describe('两座可打的建筑挨在一起（相距约 3 格，血量无限）：不在它们之间来回跑', () => {
+    /** 每人整段时间里放下建筑的次数上限，以及全体的平均上限：来回倒腾的话每人每几秒就放下一次，远超这个数 */
+    const MAX_DROPS = 20, MEAN_DROPS = 8;
+    const SECS = 60;
+    const forever = (b: { hp: number; maxHp: number }): void => {
+      b.hp = b.maxHp = 1e9;
+    };
+
+    /**
+     * 跑 SECS 秒，逐帧记录：每人放下建筑的次数（跳过倒计时被重新设置的次数）、
+     * 进入「什么建筑都不挑」状态（BLD_SKIP_ALL）的那一刻的倒计时、这个状态下有没有人手里盯着建筑
+     */
+    const watch = (w: World, us: number[]) => {
+      const drops = new Map<number, number>();
+      const prevT = new Map<number, number>();
+      const allSpans: number[] = [];
+      let targetedInAll = false;
+      step(w, SECS * 30, () => {
+        for (const s of us) {
+          const t = w.bldSkipT[s], was = prevT.get(s) ?? 0;
+          if (t > was + 0.5) {
+            drops.set(s, (drops.get(s) ?? 0) + 1);
+            if (w.bldSkip[s] === BLD_SKIP_ALL) allSpans.push(t);
+          }
+          if (t > 0 && w.bldSkip[s] === BLD_SKIP_ALL && w.target[s] < NONE) targetedInAll = true;
+          prevT.set(s, t);
+        }
+      });
+      const counts = us.map(s => drops.get(s) ?? 0);
+      return {
+        max: Math.max(...counts),
+        mean: counts.reduce((a, b) => a + b, 0) / us.length,
+        total: counts.reduce((a, b) => a + b, 0),
+        allSpans, targetedInAll,
+      };
+    };
+    const meanTo = (w: World, us: number[], x: number, y: number): number => us.reduce((a, s) => a + Math.hypot(w.x[s] - x, w.y[s] - y), 0) / us.length;
+
+    /** 待命：方阵在 (46, 58) 起，两座行营在 (53..54, 56..57) 与 (53..54, 59..60) */
+    const idleScene = () => {
+      const w = flatWorld(120, 7);
+      forever(w.addBuilding(BUILDINGS.outpost, 53, 56, 2, -1));
+      forever(w.addBuilding(BUILDINGS.outpost, 53, 59, 2, -1));
+      return { w, us: block(w, 46, 58, 0.5) };
+    };
+    /** 攻击移动：方阵从 (45, 56) 起往 (100, 62)，路线旁一座或两座行营（(70, 52) 起，第二座在 (70, 55)） */
+    const marchScene = (two: boolean) => {
+      const w = flatWorld(120, 7);
+      forever(w.addBuilding(BUILDINGS.outpost, 70, 52, 2, -1));
+      if (two) forever(w.addBuilding(BUILDINGS.outpost, 70, 55, 2, -1));
+      const us = block(w, 45, 56, 0.7);
+      w.orderMove(us, mid(100), mid(62), true);
+      return { w, us };
+    };
+
+    it('待命：每人放下建筑的次数有很小的上限，没有人在两座之间反复切换', () => {
+      const { w, us } = idleScene();
+      const r = watch(w, us);
+      expect(r.total, '场景前提：有人放下了建筑').toBeGreaterThan(0);
+      expect(r.max).toBeLessThanOrEqual(MAX_DROPS);
+      expect(r.mean).toBeLessThanOrEqual(MEAN_DROPS);
+    });
+
+    it('待命：接连放下第二座时进入「什么建筑都不挑」，时长落在 [bldSkipFor, bldSkipFor + bldSkipSpread)，这期间手里不盯建筑', () => {
+      const { w, us } = idleScene();
+      const r = watch(w, us);
+      expect(r.allSpans.length, '场景前提：有人接连两座都挤不进').toBeGreaterThan(0);
+      for (const v of r.allSpans) {
+        expect(v).toBeGreaterThanOrEqual(FOR);
+        expect(v).toBeLessThan(FOR + SPREAD);
+      }
+      expect(r.targetedInAll).toBe(false);
+    });
+
+    it('待命：折腾完后大家站回岗位附近（平均离岗位不远），没有人在列队等', () => {
+      const { w, us } = idleScene();
+      let waiting = 0;
+      step(w, SECS * 30, () => {
+        for (const s of us) if (w.waitT[s] > 0) waiting++;
+      });
+      expect(waiting).toBe(0);
+      const away = us.reduce((a, s) => a + Math.hypot(w.x[s] - w.homeX[s], w.y[s] - w.homeY[s]), 0) / us.length;
+      expect(away).toBeLessThan(100);
+    });
+
+    it('攻击移动：每人放下建筑的次数有很小的上限，方阵照常前进，进度与路线旁只有一座时相差不大', () => {
+      const two = marchScene(true);
+      const r = watch(two.w, two.us);
+      expect(r.total, '场景前提：有人放下了建筑').toBeGreaterThan(0);
+      expect(r.max).toBeLessThanOrEqual(MAX_DROPS);
+      expect(r.mean).toBeLessThanOrEqual(MEAN_DROPS);
+      expect(r.targetedInAll).toBe(false);
+      const one = marchScene(false);
+      step(one.w, SECS * 30);
+      const left2 = meanTo(two.w, two.us, mid(100), mid(62)), left1 = meanTo(one.w, one.us, mid(100), mid(62));
+      expect(left2).toBeLessThan(left1 * 2.8);
+    });
+  });
+
+  describe('跳过期间与到期', () => {
+    /** 一个待命的 dao，岗位在敌方行营 A 旁边（离 A 约 2 格，够得着索敌）；B 是更远的另一座行营 */
+    const scene = (withB: boolean) => {
+      const w = flatWorld(120, 7);
+      w.addBuilding(BUILDINGS.house, 20, 20, 1, -1);
+      const a = w.addBuilding(BUILDINGS.outpost, 60, 60, 2, -1);
+      const b = withB ? w.addBuilding(BUILDINGS.outpost, 60, 64, 2, -1) : null;
+      const me = mine(w, a.x0 - 64, a.cy);
+      return { w, me, a, b };
+    };
+
+    it('跳过期间不挑记下的那座，倒计时走完后又挑回来', () => {
+      const { w, me, a } = scene(false);
+      w.bldSkip[me] = a.id;
+      w.bldSkipT[me] = 3;
+      let early = false, back = -1;
+      step(w, 30 * 8, t => {
+        if (w.bldSkipT[me] > 0 && w.target[me] === -a.id - 2) early = true;
+        if (back < 0 && w.target[me] === -a.id - 2) back = t;
+      });
+      expect(early).toBe(false);
+      expect(w.bldSkipT[me]).toBeLessThanOrEqual(0);
+      // 倒计时 3 秒，走完之后一轮索敌（8 帧）内挑回来
+      expect(back).toBeGreaterThanOrEqual(3 * 30 - 1);
+      expect(back).toBeLessThanOrEqual(3 * 30 + 12);
+    });
+
+    it('跳过期间附近别的可打的敌方建筑照常能挑', () => {
+      const { w, me, a, b } = scene(true);
+      w.bldSkip[me] = a.id;
+      w.bldSkipT[me] = 30;
+      let first = NONE;
+      step(w, 30 * 2, () => {
+        if (first === NONE && w.target[me] !== NONE) first = w.target[me];
+      });
+      expect(first).toBe(-b!.id - 2);
+    });
+
+    it('对照：没有跳过记录时先挑近的 A', () => {
+      const { w, me, a } = scene(true);
+      let first = NONE;
+      step(w, 30 * 2, () => {
+        if (first === NONE && w.target[me] !== NONE) first = w.target[me];
+      });
+      expect(first).toBe(-a.id - 2);
     });
   });
 });

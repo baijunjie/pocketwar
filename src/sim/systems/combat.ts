@@ -5,7 +5,7 @@ import {
 } from '../content';
 import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, ENG_CLOSE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
 import type { Building, World } from '../world';
-import { canAttackBuilding, windRangeMul } from './targeting';
+import { bldSkipped, canAttackBuilding, windRangeMul } from './targeting';
 
 /** 防御建筑（角楼、哨塔、主堡等）开火时使用的「攻击者」数据 */
 const TOWER_ATTACKER = { vs: null, vsBld: 0, siege: false };
@@ -125,6 +125,8 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
     // 被哨塔射中：打得动它、离岗位又不远，就上去拆
     const b = w.buildings[-aslot - 2];
     if (!canAttackBuilding(b, w.team[j], td.siege)) return;
+    // 刚因为挤不到跟前而放下的那座不回头去拆（放下两座之后是哪座都不去），否则塔楼每射中一次就把人叫回来一次
+    if (bldSkipped(w, j, b.id)) return;
     if (w.order[j] === O_IDLE && (b.cx - w.homeX[j]) ** 2 + (b.cy - w.homeY[j]) ** 2 > RULES.combat.leash ** 2) return;
     w.target[j] = aslot;
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILDINGS, RULES, SIZES, SITE_CAMP, SITE_CITY, TILE, T_HILL, UNIT_BY_KEY } from '../../../src/sim/defs';
-import { S_ROUT, S_WALL } from '../../../src/sim/state';
-import { SCAN, canAttackBuilding, crowded, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from '../../../src/sim/systems/targeting';
+import { BLD_SKIP_ALL, S_ROUT, S_WALL } from '../../../src/sim/state';
+import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from '../../../src/sim/systems/targeting';
 import { NONE } from '../../../src/sim/world';
 import type { Site, World } from '../../../src/sim/world';
 import { flatWorld, run } from '../../helpers';
@@ -564,5 +564,92 @@ describe('crowded：目标算不算围满', () => {
     el.w.crowd[el.j] += 1;
     expect(crowded(el.w, UNIT_BY_KEY.dao, el.j, 50)).toBe(true);
     expect(SIZES[UNIT_BY_KEY.elephant.size].slots).toBeGreaterThan(SIZES[UNIT_BY_KEY.dao.size].slots);
+  });
+});
+
+describe('findBuilding：跳过刚因为挤不到跟前而放下的那座建筑', () => {
+  const d = UNIT_BY_KEY.dao;
+  /** 一座近的、一座远的敌方行营（编号都不是 0，免得和 bldSkip 的默认值 0 混在一起），一个站在近的那座旁边的己方近战 */
+  const scene = () => {
+    const w = flatWorld();
+    w.addBuilding(BUILDINGS.house, 20, 20, 1, -1);
+    const near = w.addBuilding(BUILDINGS.outpost, 60, 60, 2, -1);
+    const far = w.addBuilding(BUILDINGS.outpost, 60, 66, 2, -1);
+    const a = w.spawnUnit(idx('dao'), 1, near.x0 - 40, near.cy);
+    return { w, a, near, far, find: () => findBuilding(w, a, w.x[a], w.y[a], 1, 300, d) };
+  };
+
+  it('对照：没有放下记录时挑近的那座', () => {
+    const { near, far, find } = scene();
+    expect(near.id).toBeGreaterThan(0);
+    expect(find()).toBe(near.id);
+    expect(far.id).not.toBe(near.id);
+  });
+
+  it('跳过倒计时大于 0：不返回记下的那座，改挑次优的', () => {
+    const { w, a, near, far, find } = scene();
+    w.bldSkip[a] = near.id;
+    w.bldSkipT[a] = 5;
+    expect(find()).toBe(far.id);
+  });
+
+  it('跳过倒计时大于 0、又没有别的可打的建筑：返回 -1', () => {
+    const { w, a, near, far, find } = scene();
+    w.damageBuilding(far, 1e9, 0, 1, 1);
+    expect(far.alive).toBe(false);
+    w.bldSkip[a] = near.id;
+    w.bldSkipT[a] = 5;
+    expect(find()).toBe(-1);
+  });
+
+  it('倒计时到 0 及以下：照常返回它', () => {
+    const { w, a, near, find } = scene();
+    w.bldSkip[a] = near.id;
+    w.bldSkipT[a] = 0;
+    expect(find()).toBe(near.id);
+    w.bldSkipT[a] = -0.5;
+    expect(find()).toBe(near.id);
+  });
+
+  it('只跳过记下的那座：记的是远的那座时，近的照挑', () => {
+    const { w, a, near, far, find } = scene();
+    w.bldSkip[a] = far.id;
+    w.bldSkipT[a] = 5;
+    expect(find()).toBe(near.id);
+  });
+
+  it('跳过记录是各单位自己的：别的单位照挑被某个单位放下的那座', () => {
+    const { w, a, near } = scene();
+    const b = w.spawnUnit(idx('dao'), 1, near.x0 - 40, near.cy + 10);
+    w.bldSkip[a] = near.id;
+    w.bldSkipT[a] = 5;
+    expect(findBuilding(w, b, w.x[b], w.y[b], 1, 300, d)).toBe(near.id);
+  });
+
+  describe('接连两座都挤不进（bldSkip 记 BLD_SKIP_ALL）：这段时间里什么建筑都不挑', () => {
+    it('倒计时大于 0：附近有多座可打的建筑也返回 -1', () => {
+      const { w, a, find } = scene();
+      w.addBuilding(BUILDINGS.outpost, 66, 60, 2, -1);
+      w.bldSkip[a] = BLD_SKIP_ALL;
+      w.bldSkipT[a] = 5;
+      expect(find()).toBe(-1);
+    });
+
+    it('倒计时到 0 及以下：即使记的是 BLD_SKIP_ALL 也照常返回最近的', () => {
+      const { w, a, near, find } = scene();
+      w.bldSkip[a] = BLD_SKIP_ALL;
+      w.bldSkipT[a] = 0;
+      expect(find()).toBe(near.id);
+      w.bldSkipT[a] = -0.5;
+      expect(find()).toBe(near.id);
+    });
+
+    it('是各单位自己的记录：别的单位照挑', () => {
+      const { w, a, near } = scene();
+      const b = w.spawnUnit(idx('dao'), 1, near.x0 - 40, near.cy + 10);
+      w.bldSkip[a] = BLD_SKIP_ALL;
+      w.bldSkipT[a] = 5;
+      expect(findBuilding(w, b, w.x[b], w.y[b], 1, 300, d)).toBe(near.id);
+    });
   });
 });

@@ -64,3 +64,58 @@ describe('新指令清掉追击的状态（含远程主动挑的墙顶敌兵）'
     expect(w.target[me]).toBe(-far.id - 2);
   });
 });
+
+describe('新指令作废「挤不到跟前而放下的建筑」记录', () => {
+  /** 一个刚放下一座建筑、跳过倒计时还在走的近战；另有一个敌兵和一座敌方行营可供下指令 */
+  const scene = () => {
+    const w = flatWorld();
+    const me = w.spawnUnit(idx('dao'), 1, mid(60), mid(60));
+    w.hp[me] = w.maxHp[me] = 1e9;
+    const far = w.addBuilding(BUILDINGS.outpost, 70, 70, 2, -1);
+    const foe = w.spawnUnit(idx('legion'), 2, mid(80), mid(40));
+    w.hp[foe] = w.maxHp[foe] = 1e9;
+    w.orderStop([foe], true);
+    w.bldSkip[me] = far.id;
+    w.bldSkipT[me] = 6;
+    return { w, me, far, foe };
+  };
+
+  it('场景前提：下指令之前倒计时是正的', () => {
+    const { w, me } = scene();
+    expect(w.bldSkipT[me]).toBeGreaterThan(0);
+  });
+
+  it('移动命令', () => {
+    const { w, me } = scene();
+    w.orderMove([me], mid(50), mid(50), false);
+    expect(w.bldSkipT[me]).toBe(0);
+  });
+
+  it('攻击移动命令', () => {
+    const { w, me } = scene();
+    w.orderMove([me], mid(50), mid(50), true);
+    expect(w.bldSkipT[me]).toBe(0);
+  });
+
+  it('停止与坚守', () => {
+    const a = scene();
+    a.w.orderStop([a.me], false);
+    expect(a.w.bldSkipT[a.me]).toBe(0);
+    const b = scene();
+    b.w.orderStop([b.me], true);
+    expect(b.w.bldSkipT[b.me]).toBe(0);
+  });
+
+  it('攻击某个敌兵', () => {
+    const { w, me, foe } = scene();
+    w.orderAttackUnit([me], foe);
+    expect(w.bldSkipT[me]).toBe(0);
+  });
+
+  it('攻击某座建筑（包括刚放下的那一座）：记录作废，指定的建筑照打', () => {
+    const { w, me, far } = scene();
+    w.orderAttackBuilding([me], far);
+    expect(w.bldSkipT[me]).toBe(0);
+    expect(w.target[me]).toBe(-far.id - 2);
+  });
+});

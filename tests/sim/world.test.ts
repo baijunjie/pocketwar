@@ -32,11 +32,23 @@ describe('spawnUnit：新生成的单位没有上一任留下的追击状态', (
     expect(w.apart[b]).toBe(0);
   });
 
-  it('全新的槽位：wayUid 为 0', () => {
+  it('复用被移除单位的槽位：放下建筑的跳过倒计时清零', () => {
+    const w = flatWorld();
+    const a = w.spawnUnit(idx('dao'), 1, 10 * TILE, 10 * TILE);
+    w.bldSkip[a] = 3;
+    w.bldSkipT[a] = 7;
+    w.removeUnit(a);
+    const b = w.spawnUnit(idx('dao'), 1, 12 * TILE, 12 * TILE);
+    expect(b).toBe(a);
+    expect(w.bldSkipT[b]).toBe(0);
+  });
+
+  it('全新的槽位：wayUid 为 0，放下建筑的跳过倒计时为 0', () => {
     const w = flatWorld();
     const a = w.spawnUnit(idx('dao'), 1, 10 * TILE, 10 * TILE);
     expect(w.wayUid[a]).toBe(0);
     expect(w.wallUid[a]).toBe(0);
+    expect(w.bldSkipT[a]).toBe(0);
   });
 });
 

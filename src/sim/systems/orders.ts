@@ -25,7 +25,7 @@ function reset(w: World, s: number): void {
   w.waitT[s] = 0;
   w.waits[s] = 0;
   w.detourT[s] = 0;
-  w.avoidT[s] = 0;
+  w.avoidT[s] = w.bldSkipT[s] = 0;
   w.wayUid[s] = w.wayNoT[s] = w.wallUid[s] = 0;
 }
 

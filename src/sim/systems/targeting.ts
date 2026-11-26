@@ -3,7 +3,7 @@
  * 评分 = 距离 × 克制偏好 + 各种惩罚：目标已被围满、刚被判定够不着、已经溃逃。
  */
 import { BK_WALL, BR_MILITARY, RULES, SIZES, TILE, T_HILL, UnitDef } from '../content';
-import { GRID, NONE, S_ROUT, S_WALL } from '../state';
+import { BLD_SKIP_ALL, GRID, NONE, S_ROUT, S_WALL } from '../state';
 import { fightState, siteContains } from '../siteArea';
 import type { Building, World } from '../world';
 
@@ -183,9 +183,18 @@ export function canAttackBuilding(b: Building, tm: number, siege: boolean): bool
 }
 
 /**
+ * i 是不是正跳过建筑 bid：刚因为挤不到跟前而放下它（World.bldSkip），倒计时还没走完；
+ * 接连放下两座之后记的是 BLD_SKIP_ALL，这段时间里哪座都算跳过。自动挑建筑与被建筑射中的还击都按它判断
+ */
+export function bldSkipped(w: World, i: number, bid: number): boolean {
+  return w.bldSkipT[i] > 0 && (w.bldSkip[i] === BLD_SKIP_ALL || w.bldSkip[i] === bid);
+}
+
+/**
  * 附近最该打的敌方建筑（自动攻击用）：先挑会放箭的，再挑近的。
  * 敌方的建筑，以及中立的军事建筑（会放箭，又必须拆光才能占领）。
- * 不挑的：城墙与木栅（只在挡路时才打，否则会沿着墙一格一格拆下去）、中立的城防、自己打不动的城防工事、普通建筑（不可被攻击）。
+ * 不挑的：城墙与木栅（只在挡路时才打，否则会沿着墙一格一格拆下去）、中立的城防、自己打不动的城防工事、普通建筑（不可被攻击），
+ * 以及 i 刚因为挤不到跟前而放下的那一座（World.bldSkip；记的是 BLD_SKIP_ALL 时这段时间里一座都不挑）。
  * @param leash 大于 0 时只挑离岗位不超过这个距离的
  */
 export function findBuilding(w: World, i: number, ux: number, uy: number, tm: number, range: number, d: UnitDef, leash = 0): number {
@@ -199,12 +208,14 @@ export function findBuilding(w: World, i: number, ux: number, uy: number, tm: nu
   const foe = 3 - tm, min2 = d.main.minRange * d.main.minRange, leash2 = leash * leash;
   const hx = w.homeX[i], hy = w.homeY[i];
   const armed = RULES.combat.armedFirst;
+  // 这段时间里什么建筑都不挑的，不必扫
+  if (bldSkipped(w, i, BLD_SKIP_ALL)) return -1;
   let best = range * range, id = -1, last = -1;
   for (let y = y0; y <= y1; y++) {
     const row = y * mw;
     for (let x = x0; x <= x1; x++) {
       const k = bld[row + x];
-      if (k < 0 || k === last) continue;
+      if (k < 0 || k === last || bldSkipped(w, i, k)) continue;
       last = k;
       const b = bs[k];
       if ((b.owner !== foe && !(b.owner === 0 && b.def.role === BR_MILITARY)) || b.def.kind === BK_WALL || !canAttackBuilding(b, tm, d.siege)) continue;

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, BUILDINGS, LEVELS, P_ARROW, P_BALL, P_TORCH, RULES, TILE, T_HILL, TowerDef, UNITS, UNIT_BY_KEY } from '../../../src/sim/defs';
-import { mitigate, spawnProj, strike, updateProjectiles, updateTowers } from '../../../src/sim/systems/combat';
+import { damageUnit, mitigate, spawnProj, strike, updateProjectiles, updateTowers } from '../../../src/sim/systems/combat';
 import { BASE, variant } from '../../../tools/measure/units';
+import { BLD_SKIP_ALL, NONE } from '../../../src/sim/state';
 import type { World } from '../../../src/sim/world';
 import { flatWorld, run } from '../../helpers';
 
@@ -362,5 +363,134 @@ describe('防御建筑按武器表放一轮', () => {
     const none = volley({}, 0);
     expect(none.w.pn).toBe(0);
     expect(none.b.cd).toBeGreaterThan(0);
+  });
+});
+
+describe('被防御建筑射中：上去拆它（damageUnit 的还击）', () => {
+  const mid = (t: number): number => (t + 0.5) * TILE;
+  /** 己方待命的 dao 站在 (60, 60) 格；敌方行营 A 在 (64, 60)、B 在 (64, 66)，都在岗位的 leash 之内 */
+  const scene = () => {
+    const w = flatWorld();
+    w.addBuilding(BUILDINGS.house, 20, 20, 1, -1);
+    const a = w.addBuilding(BUILDINGS.outpost, 64, 60, 2, -1);
+    const b = w.addBuilding(BUILDINGS.outpost, 64, 66, 2, -1);
+    const j = w.spawnUnit(UNIT_BY_KEY.dao.idx, 1, mid(60), mid(60));
+    w.hp[j] = w.maxHp[j] = 1e9;
+    const hit = (bld: { id: number }): void => damageUnit(w, j, 1, A_PIERCE, 0, null, 2, -bld.id - 2);
+    return { w, j, a, b, hit };
+  };
+
+  it('对照：没有跳过记录时，待命的人被射中就把那座建筑设为目标', () => {
+    const { w, j, a, hit } = scene();
+    expect(w.target[j]).toBe(NONE);
+    hit(a);
+    expect(w.target[j]).toBe(-a.id - 2);
+  });
+
+  it('攻击移动的人被射中同样去拆', () => {
+    const { w, j, a, hit } = scene();
+    w.orderMove([j], mid(100), mid(60), true);
+    hit(a);
+    expect(w.target[j]).toBe(-a.id - 2);
+  });
+
+  it('命令是移动、坚守，或手里已有目标：不改目标', () => {
+    const m = scene();
+    m.w.orderMove([m.j], mid(100), mid(60), false);
+    m.hit(m.a);
+    expect(m.w.target[m.j]).toBe(NONE);
+    const h = scene();
+    h.w.orderStop([h.j], true);
+    h.hit(h.a);
+    expect(h.w.target[h.j]).toBe(NONE);
+    const t = scene();
+    t.w.target[t.j] = -t.b.id - 2;
+    t.hit(t.a);
+    expect(t.w.target[t.j]).toBe(-t.b.id - 2);
+  });
+
+  it('待命时建筑离岗位超过 leash：不去', () => {
+    const w = flatWorld();
+    const far = w.addBuilding(BUILDINGS.outpost, 60 + Math.ceil(RULES.combat.leash / TILE) + 4, 60, 2, -1);
+    const j = w.spawnUnit(UNIT_BY_KEY.dao.idx, 1, mid(60), mid(60));
+    w.hp[j] = w.maxHp[j] = 1e9;
+    damageUnit(w, j, 1, A_PIERCE, 0, null, 2, -far.id - 2);
+    expect(w.target[j]).toBe(NONE);
+  });
+
+  describe('刚因为挤不到跟前而放下的建筑', () => {
+    it('跳过期间被放下的那座射中：不还击，目标保持 NONE', () => {
+      const { w, j, a, hit } = scene();
+      w.bldSkip[j] = a.id;
+      w.bldSkipT[j] = 5;
+      hit(a);
+      expect(w.target[j]).toBe(NONE);
+    });
+
+    it('攻击移动的人也一样不还击', () => {
+      const { w, j, a, hit } = scene();
+      w.orderMove([j], mid(100), mid(60), true);
+      w.bldSkip[j] = a.id;
+      w.bldSkipT[j] = 5;
+      hit(a);
+      expect(w.target[j]).toBe(NONE);
+    });
+
+    it('跳过期间被另一座建筑射中：照常还击', () => {
+      const { w, j, a, b, hit } = scene();
+      w.bldSkip[j] = a.id;
+      w.bldSkipT[j] = 5;
+      hit(b);
+      expect(w.target[j]).toBe(-b.id - 2);
+    });
+
+    it('记的是 BLD_SKIP_ALL 且倒计时大于 0：被任何建筑射中都不还击', () => {
+      const { w, j, a, b, hit } = scene();
+      w.bldSkip[j] = BLD_SKIP_ALL;
+      w.bldSkipT[j] = 5;
+      hit(a);
+      expect(w.target[j]).toBe(NONE);
+      hit(b);
+      expect(w.target[j]).toBe(NONE);
+    });
+
+    it('倒计时到 0 及以下：照常还击，哪怕记着这座的编号或 BLD_SKIP_ALL', () => {
+      const keepsId = scene();
+      keepsId.w.bldSkip[keepsId.j] = keepsId.a.id;
+      keepsId.w.bldSkipT[keepsId.j] = 0;
+      keepsId.hit(keepsId.a);
+      expect(keepsId.w.target[keepsId.j]).toBe(-keepsId.a.id - 2);
+      const keepsAll = scene();
+      keepsAll.w.bldSkip[keepsAll.j] = BLD_SKIP_ALL;
+      keepsAll.w.bldSkipT[keepsAll.j] = -0.5;
+      keepsAll.hit(keepsAll.a);
+      expect(keepsAll.w.target[keepsAll.j]).toBe(-keepsAll.a.id - 2);
+    });
+
+    it('别的单位不受这个单位的记录影响', () => {
+      const { w, a } = scene();
+      const k = w.spawnUnit(UNIT_BY_KEY.dao.idx, 1, mid(60), mid(61));
+      w.hp[k] = w.maxHp[k] = 1e9;
+      damageUnit(w, k, 1, A_PIERCE, 0, null, 2, -a.id - 2);
+      expect(w.target[k]).toBe(-a.id - 2);
+    });
+
+    it('被敌兵打中的还击与跳过记录无关：照常以那个敌兵为目标', () => {
+      const { w, j, a } = scene();
+      const foe = w.spawnUnit(UNIT_BY_KEY.dao.idx, 2, mid(61), mid(60));
+      w.hp[foe] = w.maxHp[foe] = 1e9;
+      w.bldSkip[j] = a.id;
+      w.bldSkipT[j] = 5;
+      damageUnit(w, j, 1, A_MELEE, 0, null, 2, foe);
+      expect(w.target[j]).toBe(foe);
+      expect(w.targetUid[j]).toBe(w.uid[foe]);
+      const w2 = scene();
+      const foe2 = w2.w.spawnUnit(UNIT_BY_KEY.dao.idx, 2, mid(61), mid(60));
+      w2.w.hp[foe2] = w2.w.maxHp[foe2] = 1e9;
+      w2.w.bldSkip[w2.j] = BLD_SKIP_ALL;
+      w2.w.bldSkipT[w2.j] = 5;
+      damageUnit(w2.w, w2.j, 1, A_MELEE, 0, null, 2, foe2);
+      expect(w2.w.target[w2.j]).toBe(foe2);
+    });
   });
 });

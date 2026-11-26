@@ -3,6 +3,8 @@ export const MAX_UNITS = 8192;
 export const MAX_PROJ = 4096;
 export const MAX_CORPSE = 2048;
 export const NONE = -1;
+/** World.bldSkip 的取值：这段时间里什么建筑都不自动挑（平时记的是那一座建筑的编号） */
+export const BLD_SKIP_ALL = -1;
 export const O_IDLE = 0, O_MOVE = 1, O_AMOVE = 2, O_ATTACK = 3, O_HOLD = 4;
 /**
  * 交手状态（World.engaged）：没在交手；正在出手（近战是贴身肉搏，远程是在射程内射击）；
