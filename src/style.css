@@ -112,6 +112,10 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 /* 拖拽中跟着鼠标的那张卡片；松开处不能下令时变灰 */
 .ucard.ghost { position: fixed; left: 0; top: 0; z-index: 40; margin: 0; pointer-events: none; transform-origin: 0 0; opacity: 0.92; transition: none; border-color: var(--gold); }
 .ucard.ghost.nodrop { opacity: 0.45; filter: grayscale(0.8); }
+/* 移动版拖卡片时指着落点的剑：元素原点就是落点，剑尖（图里的 1.5, 1.5）对在原点上 */
+.dragptr { position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 41; pointer-events: none; will-change: transform; }
+.dragptr svg { position: absolute; left: -3px; top: -3px; width: 56px; height: 56px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7)); }
+.dragptr.nodrop { opacity: 0.45; filter: grayscale(0.8); }
 .ucard .hp u { display: block; height: 100%; background: #6fd46a; }
 .cmds { position: static; flex: none; display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 10px 8px; border-bottom: none; border-radius: 6px 0 0 0; }
 .cmds [hidden] { display: none !important; }
@@ -320,8 +324,8 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .help-content { touch-action: pan-y; }
 /* 详情浮在上半屏底部、紧贴分屏线 */
 .mobile .bottom { display: contents; }
-.mobile .detail { position: absolute; left: 46px; right: 46px; bottom: 50%; width: auto; max-height: 25%; overflow-y: auto; touch-action: pan-y; padding: 6px 8px; border-bottom: none; border-radius: 6px 6px 0 0; }
-/* 左右各让出把手的宽度（把手 26px 加向内伸出的命中范围），详情不盖住把手 */
+.mobile .detail { position: absolute; left: 42px; right: 42px; bottom: 50%; width: auto; max-height: 25%; overflow-y: auto; touch-action: pan-y; padding: 6px 8px; border-bottom: none; border-radius: 6px 6px 0 0; }
+/* 左右各让出把手的宽度（把手 22px 加向内伸出的 20px 命中范围），详情不盖住把手 */
 .mobile .udetail, .mobile .sdetail { min-width: 0; font-size: 11px; }
 .mobile .sdetail { flex-direction: column; align-items: stretch; gap: 4px; }
 .mobile .sdetail .who { width: auto; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start; gap: 2px 8px; text-align: left; }
@@ -352,9 +356,12 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .ucard.ghost.gcard { width: 66px; }
 .mobile .ucard.acard, .mobile .ucard.ghost.acard { width: 60px; }
 .mobile .acard .ab { height: 52px; }
-/* 小地图：下半屏剩下的空间里尽量放大（圆形，按容器短边取正方形） */
-.mobile .mini { left: 0; right: 0; top: calc(50% + var(--strip)); bottom: 0; padding: 6px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 0; background: none; backdrop-filter: none; container-type: size; }
-.mobile .mini canvas { width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); touch-action: none; }
+/* 下半屏卡片带以下：摇杆在左、小地图在右并排。摇杆按宽度取一份（--joy），小地图在剩下的宽度与高度里放到最大 */
+.mobile .mini { --joy: min(clamp(84px, 30cqw, 132px), 100cqh); --map: min(100cqh, 100cqw - var(--joy) - 12px); left: 0; right: 0; top: calc(50% + var(--strip)); bottom: 0; padding: 6px; display: flex; align-items: center; justify-content: space-evenly; border: none; border-radius: 0; background: none; backdrop-filter: none; container-type: size; }
+.mobile .mini canvas { flex: none; width: var(--map); height: var(--map); touch-action: none; }
+.mobile .joy { position: relative; flex: none; width: var(--joy); height: var(--joy); border-radius: 50%; border: 1px solid var(--line); background: radial-gradient(circle, rgba(216, 176, 96, 0.14), rgba(30, 24, 16, 0.92) 72%); box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6); touch-action: none; }
+.mobile .joy.on { border-color: var(--gold); }
+.mobile .joy i { position: absolute; left: 28%; top: 28%; width: 44%; height: 44%; border-radius: 50%; border: 1px solid #1a1208; background: radial-gradient(circle at 36% 30%, #ecd092, #a67c2e); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55); pointer-events: none; will-change: transform; }
 /* 抽屉与把手 */
 .mobile .rightcol { display: contents; }
 .scrim { display: none; }
@@ -372,9 +379,9 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .chips { gap: 6px; }
 .mobile .chip { display: flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 4px 10px; font-size: 14px; }
 .mobile .handle { position: absolute; top: calc(25% - 36px); z-index: 10; width: 22px; height: 72px; background: var(--panel); border: 1px solid var(--line); }
-.mobile .handle.left { left: 4px; border-radius: 0 10px 10px 0; border-left: none; }
-.mobile .handle.right { right: 4px; border-radius: 10px 0 0 10px; border-right: none; }
-/* 命中范围向内多伸出去一截，凑够手指能点的宽度；靠屏幕边的一侧不伸（离边留的几像素避开系统的边缘返回手势） */
+.mobile .handle.left { left: 0; border-radius: 0 10px 10px 0; border-left: none; }
+.mobile .handle.right { right: 0; border-radius: 10px 0 0 10px; border-right: none; }
+/* 命中范围向内多伸出去一截，凑够手指能点的宽度；把手贴着屏幕边，靠边的一侧不用伸 */
 .mobile .handle.left::after { content: ''; position: absolute; top: -8px; bottom: -8px; left: 0; right: -20px; }
 .mobile .handle.right::after { content: ''; position: absolute; top: -8px; bottom: -8px; right: 0; left: -20px; }
 .mobile .handle i { position: absolute; top: 50%; left: 50%; width: 4px; height: 28px; margin: -14px 0 0 -2px; border-radius: 2px; background: var(--gold); opacity: 0.7; }

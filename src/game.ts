@@ -13,12 +13,14 @@ import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection } from './camInput';
 import { loadPref, savePref } from './prefs';
-import { Pinch, TouchGestures, UiMode, asUiMode, isMobileUi } from './touchInput';
+import { Pinch, TouchGestures, UiMode, asUiMode, inInscribedCircle, isMobileUi } from './touchInput';
 import { PointerLock } from './pointerLock';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
 /** 镜头跟随的平滑程度：每秒把剩下的距离收拢多少（越大跟得越紧） */
 const FOLLOW_RATE = 4;
+/** 移动版摇杆推到头时的卷屏速度，是方向键卷屏速度的几倍：竖屏画面窄，照方向键的速度一秒要卷过一屏半，这里压到一屏出头 */
+const STICK_GAIN = 0.8;
 /** 滚轮一格按行 / 按页计量时（Firefox 的鼠标滚轮）换算成多少像素 */
 const WHEEL_LINE = 33;
 const WHEEL_PAGE = 800;
@@ -340,6 +342,8 @@ export class GameApp {
     };
     this.on(mm, 'contextmenu', e => e.preventDefault());
     this.on(mm, 'pointerdown', e => {
+      // 移动版：画布方形的四角（地图圆外）紧挨着摇杆，手指落在那里不算点小地图
+      if (this.mobile && !inInscribedCircle(e.clientX, e.clientY, mm.getBoundingClientRect())) return;
       const p = mmPos(e);
       if (e.button === 2) {
         if (this.mode) this.setMode('');
@@ -1202,6 +1206,11 @@ export class GameApp {
         dx += edgeSpeed(vw - 1 - m.x) - edgeSpeed(m.x);
         dy += edgeSpeed(vh - 1 - m.y) - edgeSpeed(m.y);
       }
+    }
+    // 移动版的摇杆：往哪边推就往哪边卷，推得越远越快
+    if (this.mobile) {
+      dx += this.hud.stick.x * STICK_GAIN;
+      dy += this.hud.stick.y * STICK_GAIN;
     }
     if (dx || dy) {
       this.stopFollow();

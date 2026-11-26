@@ -13,6 +13,7 @@ import { WheelMode } from '../camInput';
 import { TAP_SLOP, UiMode, swipeDir } from '../touchInput';
 import { loadPref, savePref } from '../prefs';
 import { CardBar, CardBarCallbacks } from './cardBar';
+import { Joystick } from './joystick';
 import { auraPct, num, rangeText, unitTip } from './unitText';
 
 /** 城池、营寨名字后面的星数 = 据点等级；其他据点不能升级，不显示。compact：据点列表里写成「★3」省地方 */
@@ -108,6 +109,8 @@ const css = (c: [number, number, number]): string => `rgb(${c[0]},${c[1]},${c[2]
 export class Hud {
   readonly root: HTMLDivElement;
   readonly minimap: HTMLCanvasElement;
+  /** 移动版的镜头摇杆（小地图左边）：game 每帧读它的读数卷屏 */
+  readonly stick = new Joystick();
   private readonly counts: HTMLDivElement;
   private readonly clock: HTMLSpanElement;
   /** 风向标：箭头指向风吹去的方向（随镜头旋转），无风时隐藏 */
@@ -285,7 +288,10 @@ export class Hud {
     // ---- 小地图 ----
     const mm = el('div', 'panel mini');
     this.minimap = el('canvas');
-    mm.appendChild(this.minimap);
+    // 移动版：摇杆与小地图并排，摇杆在左
+    this.stick.el.classList.add('mobile-only');
+    this.disposers.push(() => this.stick.destroy());
+    mm.append(this.stick.el, this.minimap);
     root.appendChild(mm);
 
     // ---- 底部中央：上面是详情（选中单个单位 / 据点时），下面是兵种栏 ----
@@ -397,8 +403,8 @@ export class Hud {
             <tr><th scope="row">点地面 / 敌人 / 据点</th><td>已选部队移动 / 攻击 / 派去占领（没选部队时点据点是选中它）</td></tr>
             <tr><th scope="row">长按地面</th><td>攻击移动</td></tr>
             <tr><th scope="row">双指捏合 / 拧转</th><td>缩放 / 旋转镜头</td></tr>
-            <tr><th scope="row">拖动小地图</th><td>移动镜头</td></tr>
-            <tr><th scope="row">卡片竖着拖到地图上</th><td>这批人攻击移动过去，松在敌军身上则攻击它</td></tr>
+            <tr><th scope="row">推摇杆 / 拖动或点小地图</th><td>移动镜头</td></tr>
+            <tr><th scope="row">卡片拖到地图上</th><td>剑尖指着的地方是落点：这批人攻击移动过去，松在敌军身上则攻击它</td></tr>
             <tr><th scope="row">两侧边缘的把手</th><td>拉出据点列表 / 指令面板</td></tr>
           </table>
           <table class="desktop-only" aria-label="基本操作">
@@ -609,6 +615,7 @@ export class Hud {
     this.mobile = on;
     this.host.classList.toggle('mobile', on);
     this.cards.mobile = on;
+    this.stick.reset();
     this.openDrawer(null);
     this.setMenu(false);
     this.feedMax = on ? 3 : 5;

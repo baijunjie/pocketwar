@@ -1,6 +1,7 @@
 /**
  * 触屏输入的纯判定，不碰 DOM：移动版界面何时启用、画面上单指 / 双指手势的分类（`TouchGestures`）、
- * 卡片带上起手的方向判定、抽屉的滑动方向。由 `game.ts`、`hud.ts`、`ui/cardBar.ts` 接到事件上。
+ * 卡片带上起手的方向判定、拖卡片时落点抬到手指上方多少、摇杆的读数、小地图圆内的判定、抽屉的滑动方向。
+ * 由 `game.ts`、`hud.ts`、`ui/cardBar.ts`、`ui/joystick.ts` 接到事件上。
  */
 
 /** 「界面」设置：自动按设备判断，桌面 / 移动是手动指定（在电脑上调试移动版用） */
@@ -21,6 +22,14 @@ export const TAP_SLOP = 10;
 export const HOLD_MS = 500;
 /** 卡片带上起手：位移超过这么多像素才判方向 */
 export const CARD_SLOP = 8;
+/** 卡片带上起手：横向位移超过竖向的这么多倍才算滚动卡片带（约 34° 以内的横滑），其余都算拖卡片 */
+export const CARD_SCROLL_BIAS = 1.5;
+/** 拖卡片时落点最多抬到手指上方这么多像素（手指会挡住正下方） */
+export const DROP_LIFT = 72;
+/** 摇杆的死区：推出不到半径的这个比例不算推（手指按上去总会偏一点） */
+export const STICK_DEAD = 0.12;
+/** 摇杆读数对推出距离的幂：大于 1 时中段偏慢，小幅度推好微调 */
+export const STICK_CURVE = 1.5;
 /** 抽屉里 / 把手上横向滑出这么多像素算一次滑动 */
 export const SWIPE_MIN = 28;
 
@@ -53,12 +62,44 @@ export function pinchOf(a0: Pt, b0: Pt, a1: Pt, b1: Pt): Pinch {
 }
 
 /**
- * 卡片带上按住卡片后的起手方向：位移还没到 slop 是 wait；到了以后竖直方向占主导是 drag（拖卡片下令），
- * 否则是 scroll（横向滚动卡片带）。一次按住只判一次，判定后不再改
+ * 卡片带上按住卡片后的起手方向：位移还没到 slop 是 wait；到了以后横向明显占主导（超过竖向的 bias 倍）是 scroll（横向滚动卡片带），
+ * 否则是 drag（拖卡片下令）。偏向 drag：拇指往上拖多半是斜着起手的，判成滚动卡片就不跟手；
+ * 判成 scroll 之后手指竖向离开了卡片带，由调用方改判为 drag
  */
-export function cardIntent(dx: number, dy: number, slop = CARD_SLOP): 'wait' | 'drag' | 'scroll' {
+export function cardIntent(dx: number, dy: number, slop = CARD_SLOP, bias = CARD_SCROLL_BIAS): 'wait' | 'drag' | 'scroll' {
   if (Math.hypot(dx, dy) < slop) return 'wait';
-  return Math.abs(dy) > Math.abs(dx) ? 'drag' : 'scroll';
+  return Math.abs(dx) > Math.abs(dy) * bias ? 'scroll' : 'drag';
+}
+
+/**
+ * 拖卡片时落点抬到手指上方多少像素：手指在 y，屏幕从 top 到 bottom，卡片带占其中的 [stripTop, stripBottom]。
+ * 手指还在卡片带里不抬；离开卡片带后按离开距离的一半逐渐抬到 lift，紧挨卡片带的地方因此也指得到；
+ * 接近屏幕顶 / 底时再按到边的距离的一半降回 0：手指够不到屏幕外，不降的话画面最上沿与小地图底部指不到
+ */
+export function dropLift(y: number, top: number, stripTop: number, stripBottom: number, bottom: number, lift = DROP_LIFT): number {
+  if (y < stripTop) return Math.max(0, Math.min(lift, (stripTop - y) / 2, (y - top) / 2));
+  if (y > stripBottom) return Math.max(0, Math.min(lift, (y - stripBottom) / 2, (bottom - y) / 2));
+  return 0;
+}
+
+/**
+ * 摇杆读数：手指相对摇杆中心偏了 (dx, dy)，摇杆半径 radius。返回方向同偏移、长度 0～1 的向量：
+ * 死区内是 0，推到半径处（及以外）是 1，中间按 curve 次幂上升
+ */
+export function stickVector(dx: number, dy: number, radius: number, dead = STICK_DEAD, curve = STICK_CURVE): Pt {
+  const d = Math.hypot(dx, dy);
+  const m = radius > 0 ? d / radius : 0;
+  if (m <= dead) return { x: 0, y: 0 };
+  const k = Math.min(1, (m - dead) / (1 - dead)) ** curve / d;
+  return { x: dx * k, y: dy * k };
+}
+
+/**
+ * 点 (x, y) 在不在矩形 r 的内切圆里。小地图的画布是方的、地图画成圆的（圆外的角上还画着风向标，不能把画布裁圆）：
+ * 移动版里方形的四角紧挨着摇杆，手指落在圆外不该算点中小地图
+ */
+export function inInscribedCircle(x: number, y: number, r: { left: number; top: number; width: number; height: number }): boolean {
+  return Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)) <= Math.min(r.width, r.height) / 2;
 }
 
 /** 一次滑动的方向：横向或纵向占主导且位移够 min，否则 null */

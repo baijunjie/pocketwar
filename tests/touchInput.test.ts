@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  CARD_SLOP, HOLD_MS, SWIPE_MIN, TAP_SLOP, TouchGestures,
-  asUiMode, cardIntent, isMobileUi, pinchOf, swipeDir,
+  CARD_SCROLL_BIAS, CARD_SLOP, DROP_LIFT, HOLD_MS, STICK_CURVE, STICK_DEAD, SWIPE_MIN, TAP_SLOP, TouchGestures,
+  asUiMode, cardIntent, dropLift, inInscribedCircle, isMobileUi, pinchOf, stickVector, swipeDir,
 } from '../src/touchInput';
 import type { Pinch, TouchHandlers } from '../src/touchInput';
 
@@ -11,6 +11,13 @@ describe('常量', () => {
     expect(HOLD_MS).toBe(500);
     expect(CARD_SLOP).toBe(8);
     expect(SWIPE_MIN).toBe(28);
+  });
+
+  it('卡片起手偏向拖：横向要超竖向 1.5 倍才算滚动；落点最多抬 72px；摇杆死区 12%、读数曲线 1.5 次幂', () => {
+    expect(CARD_SCROLL_BIAS).toBe(1.5);
+    expect(DROP_LIFT).toBe(72);
+    expect(STICK_DEAD).toBe(0.12);
+    expect(STICK_CURVE).toBe(1.5);
   });
 });
 
@@ -119,16 +126,286 @@ describe('cardIntent 卡片起手方向', () => {
     expect(cardIntent(5, -40)).toBe('drag');
   });
 
+  it('斜着起手偏向拖卡片：横向略多的斜拖、45 度都是拖', () => {
+    expect(cardIntent(10, -8)).toBe('drag');
+    expect(cardIntent(-10, -8)).toBe('drag');
+    expect(cardIntent(20, -20)).toBe('drag');
+    expect(cardIntent(-20, 20)).toBe('drag');
+    expect(cardIntent(20, 15)).toBe('drag');
+  });
+
   it('超过阈值后水平占主导是滚动卡片带', () => {
     expect(cardIntent(30, 0)).toBe('scroll');
     expect(cardIntent(-30, 0)).toBe('scroll');
     expect(cardIntent(-40, 5)).toBe('scroll');
+    expect(cardIntent(40, -10)).toBe('scroll');
+    expect(cardIntent(30, 10)).toBe('scroll');
+  });
+
+  it('横向要超过竖向的 bias 倍才滚动，刚好 bias 倍还是拖', () => {
+    expect(cardIntent(15, 10)).toBe('drag');
+    expect(cardIntent(16, 10)).toBe('scroll');
+    expect(cardIntent(-16, -10)).toBe('scroll');
+    expect(cardIntent(10, 7, 8, 1)).toBe('scroll');
+    expect(cardIntent(10, 11, 8, 1)).toBe('drag');
+    expect(cardIntent(30, 20, 8, 3)).toBe('drag');
+    expect(cardIntent(61, 20, 8, 3)).toBe('scroll');
+  });
+
+  it('刚到起手阈值就判方向', () => {
+    expect(cardIntent(CARD_SLOP, 0)).toBe('scroll');
+    expect(cardIntent(0, CARD_SLOP)).toBe('drag');
   });
 
   it('可以指定阈值', () => {
     expect(cardIntent(0, 20, 50)).toBe('wait');
     expect(cardIntent(0, 60, 50)).toBe('drag');
     expect(cardIntent(60, 0, 50)).toBe('scroll');
+  });
+});
+
+describe('dropLift 拖卡片时落点抬起的高度', () => {
+  // 屏幕 [0, 800]，卡片带 [500, 600]
+  const scr0 = 0, strTop = 500, strBot = 600, scr1 = 800;
+  const lift = (y: number, l?: number): number => dropLift(y, scr0, strTop, strBot, scr1, l);
+
+  it('手指还在卡片带里不抬', () => {
+    for (const y of [500, 520, 550, 599, 600]) expect(lift(y), `y=${y}`).toBe(0);
+  });
+
+  it('往上离开卡片带后按离开距离的一半抬起', () => {
+    expect(lift(480)).toBeCloseTo(10);
+    expect(lift(440)).toBeCloseTo(30);
+    expect(lift(500 - 2)).toBeCloseTo(1);
+  });
+
+  it('往上封顶 lift：离开 2 倍 lift 及更远（且离屏幕顶也够远）恒为 lift', () => {
+    expect(lift(500 - 2 * DROP_LIFT)).toBeCloseTo(DROP_LIFT);
+    expect(lift(300)).toBe(DROP_LIFT);
+    expect(lift(DROP_LIFT * 2)).toBe(DROP_LIFT);
+  });
+
+  it('可以指定 lift', () => {
+    expect(lift(300, 30)).toBe(30);
+    expect(lift(490, 30)).toBeCloseTo(5);
+    expect(lift(300, 0)).toBe(0);
+  });
+
+  it('手指刚出卡片带上沿时落点就在卡片带上沿', () => {
+    expect(strTop - lift(strTop)).toBe(strTop);
+    expect(strTop - 0.01 - lift(strTop - 0.01)).toBeGreaterThan(strTop - 0.02);
+  });
+
+  it('接近屏幕顶时按到屏幕顶距离的一半降回 0，手指到屏幕顶时落点也在屏幕顶', () => {
+    expect(lift(100)).toBeCloseTo(50);
+    expect(lift(20)).toBeCloseTo(10);
+    expect(lift(2)).toBeCloseTo(1);
+    expect(lift(scr0)).toBe(0);
+    expect(scr0 - lift(scr0)).toBe(scr0);
+  });
+
+  it('屏幕顶不在 0 时按屏幕顶算', () => {
+    expect(dropLift(120, 100, strTop, strBot, scr1)).toBeCloseTo(10);
+    expect(dropLift(100, 100, strTop, strBot, scr1)).toBe(0);
+    expect(dropLift(300, 100, strTop, strBot, scr1)).toBe(DROP_LIFT);
+    expect(dropLift(90, 100, strTop, strBot, scr1)).toBe(0);
+  });
+
+  it('超出屏幕顶不为负', () => {
+    expect(lift(-1)).toBe(0);
+    expect(lift(-500)).toBe(0);
+  });
+
+  it('往下离开卡片带后按离开距离的一半抬起，封顶 lift', () => {
+    expect(lift(620)).toBeCloseTo(10);
+    expect(lift(640)).toBeCloseTo(20);
+    expect(dropLift(700, scr0, strTop, strBot, 5000)).toBeCloseTo(50);
+    expect(dropLift(745, scr0, strTop, strBot, 5000)).toBe(DROP_LIFT);
+    expect(dropLift(2000, scr0, strTop, strBot, 5000)).toBe(DROP_LIFT);
+  });
+
+  it('接近屏幕底时按到屏幕底距离的一半降回 0，手指到屏幕底时落点也在屏幕底', () => {
+    expect(lift(780)).toBeCloseTo(10);
+    expect(lift(760)).toBeCloseTo(20);
+    expect(lift(scr1)).toBe(0);
+    expect(scr1 - lift(scr1)).toBe(scr1);
+  });
+
+  it('超出屏幕底不为负', () => {
+    expect(lift(scr1 + 1)).toBe(0);
+    expect(lift(scr1 + 500)).toBe(0);
+  });
+
+  it('落点随手指 y 单调不减且连续（从屏幕顶到屏幕底整个范围，以及两头之外）', () => {
+    const step = 0.5;
+    for (const l of [undefined, 30, 200]) {
+      for (const [lo, hi] of [[scr0 - 200, scr1 + 200], [scr0, scr1]]) {
+        let prev = lo - lift(lo, l);
+        for (let y = lo + step; y <= hi; y += step) {
+          const cur = y - lift(y, l);
+          expect(cur, `y=${y} lift=${l}`).toBeGreaterThanOrEqual(prev);
+          // 抬起量每走 1px 最多变 0.5px，落点每步至多走 1.5 倍步长
+          expect(cur - prev, `y=${y} lift=${l}`).toBeLessThanOrEqual(step * 1.5 + 1e-9);
+          expect(lift(y, l), `y=${y} lift=${l}`).toBeGreaterThanOrEqual(0);
+          expect(lift(y, l), `y=${y} lift=${l}`).toBeLessThanOrEqual(l ?? DROP_LIFT);
+          prev = cur;
+        }
+      }
+    }
+  });
+
+  it('屏幕范围内的落点永远在屏幕内', () => {
+    for (let y = scr0; y <= scr1; y += 1) {
+      const p = y - lift(y);
+      expect(p, `y=${y}`).toBeGreaterThanOrEqual(scr0);
+      expect(p, `y=${y}`).toBeLessThanOrEqual(scr1);
+    }
+  });
+});
+
+describe('stickVector 摇杆读数', () => {
+  const R = 100;
+  const len = (v: { x: number; y: number }): number => Math.hypot(v.x, v.y);
+
+  it('没偏移是 (0, 0)', () => {
+    expect(stickVector(0, 0, R)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('死区内是 (0, 0)', () => {
+    expect(stickVector(R * STICK_DEAD - 1, 0, R)).toEqual({ x: 0, y: 0 });
+    expect(stickVector(0, -(R * STICK_DEAD - 1), R)).toEqual({ x: 0, y: 0 });
+    expect(stickVector(8, 8, R)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('刚出死区读数从 0 起连续上升', () => {
+    const v = stickVector(R * STICK_DEAD + 1, 0, R);
+    expect(v.x).toBeGreaterThan(0);
+    expect(v.x).toBeLessThan(0.01);
+  });
+
+  it('推到半径处及以外长度为 1，方向不变', () => {
+    expect(len(stickVector(R, 0, R))).toBeCloseTo(1);
+    expect(len(stickVector(0, -R, R))).toBeCloseTo(1);
+    const out = stickVector(300, 400, R);
+    expect(out.x).toBeCloseTo(0.6);
+    expect(out.y).toBeCloseTo(0.8);
+    const far = stickVector(-1000, 0, R);
+    expect(far.x).toBeCloseTo(-1);
+    expect(far.y).toBeCloseTo(0);
+  });
+
+  it('中间长度是 ((m − dead) / (1 − dead)) ^ curve', () => {
+    const m = 0.56;
+    expect(len(stickVector(m * R, 0, R))).toBeCloseTo(((m - STICK_DEAD) / (1 - STICK_DEAD)) ** STICK_CURVE);
+    const m2 = 0.8;
+    expect(len(stickVector(0, m2 * R, R))).toBeCloseTo(((m2 - STICK_DEAD) / (1 - STICK_DEAD)) ** STICK_CURVE);
+  });
+
+  it('方向与偏移相同，各象限符号对', () => {
+    const a = stickVector(30, 40, R);
+    expect(a.x).toBeGreaterThan(0);
+    expect(a.y).toBeGreaterThan(0);
+    expect(a.y / a.x).toBeCloseTo(40 / 30);
+    const b = stickVector(-30, 40, R);
+    expect(b.x).toBeLessThan(0);
+    expect(b.y).toBeGreaterThan(0);
+    expect(b.x).toBeCloseTo(-a.x);
+    const c = stickVector(30, -40, R);
+    expect(c.x).toBeGreaterThan(0);
+    expect(c.y).toBeLessThan(0);
+    expect(c.y).toBeCloseTo(-a.y);
+    const d = stickVector(-30, -40, R);
+    expect(d.x).toBeCloseTo(-a.x);
+    expect(d.y).toBeCloseTo(-a.y);
+  });
+
+  it('随推出距离单调上升，小幅度时比线性慢', () => {
+    let prev = 0;
+    for (let d = 0; d <= 150; d += 1) {
+      const l = len(stickVector(d, 0, R));
+      expect(l, `d=${d}`).toBeGreaterThanOrEqual(prev - 1e-12);
+      expect(l, `d=${d}`).toBeLessThanOrEqual(1 + 1e-12);
+      prev = l;
+    }
+    expect(len(stickVector(30, 0, R))).toBeLessThan(0.3);
+    expect(len(stickVector(50, 0, R))).toBeLessThan(0.5);
+  });
+
+  it('半径不同按比例算', () => {
+    const a = stickVector(28, 0, 50), b = stickVector(56, 0, 100);
+    expect(a.x).toBeCloseTo(b.x);
+    expect(len(stickVector(50, 0, 50))).toBeCloseTo(1);
+  });
+
+  it('可以指定死区与曲线', () => {
+    // curve = 1：死区以外线性
+    expect(len(stickVector(60, 0, R, 0.2, 1))).toBeCloseTo(0.5);
+    expect(len(stickVector(15, 0, R, 0.2, 1))).toBe(0);
+    // 无死区、平方
+    expect(len(stickVector(50, 0, R, 0, 2))).toBeCloseTo(0.25);
+  });
+
+  it('半径不大于 0 或偏移为 0 时是 (0, 0)，不出 NaN', () => {
+    for (const r of [0, -10]) {
+      const v = stickVector(30, 40, r);
+      expect(v).toEqual({ x: 0, y: 0 });
+    }
+    for (const v of [stickVector(0, 0, 0), stickVector(0, 0, R), stickVector(0, 0, -1), stickVector(0, 0, R, 0)]) {
+      expect(Number.isNaN(v.x) || Number.isNaN(v.y)).toBe(false);
+      expect(v).toEqual({ x: 0, y: 0 });
+    }
+  });
+});
+
+describe('inInscribedCircle 矩形内切圆', () => {
+  const sq = { left: 100, top: 200, width: 80, height: 80 };
+
+  it('圆心（矩形中心）与圆内的点在里面', () => {
+    expect(inInscribedCircle(140, 240, sq)).toBe(true);
+    expect(inInscribedCircle(110, 240, sq)).toBe(true);
+    expect(inInscribedCircle(160, 260, sq)).toBe(true);
+  });
+
+  it('圆周上算在里面，刚过圆周在外面', () => {
+    expect(inInscribedCircle(180, 240, sq)).toBe(true);
+    expect(inInscribedCircle(100, 240, sq)).toBe(true);
+    expect(inInscribedCircle(140, 200, sq)).toBe(true);
+    expect(inInscribedCircle(140, 280, sq)).toBe(true);
+    expect(inInscribedCircle(180.01, 240, sq)).toBe(false);
+    expect(inInscribedCircle(99.99, 240, sq)).toBe(false);
+    expect(inInscribedCircle(140, 280.01, sq)).toBe(false);
+  });
+
+  it('方形的四角在圆外', () => {
+    for (const [x, y] of [[100, 200], [180, 200], [100, 280], [180, 280], [105, 205]]) {
+      expect(inInscribedCircle(x, y, sq), `${x},${y}`).toBe(false);
+    }
+  });
+
+  it('矩形外的点在圆外', () => {
+    expect(inInscribedCircle(0, 0, sq)).toBe(false);
+    expect(inInscribedCircle(140, 500, sq)).toBe(false);
+    expect(inInscribedCircle(-1000, 240, sq)).toBe(false);
+  });
+
+  it('非正方形按短边的一半作半径，圆心在矩形中心', () => {
+    const wide = { left: 0, top: 0, width: 200, height: 100 };
+    expect(inInscribedCircle(100, 50, wide)).toBe(true);
+    expect(inInscribedCircle(149, 50, wide)).toBe(true);
+    expect(inInscribedCircle(151, 50, wide)).toBe(false);
+    expect(inInscribedCircle(100, 0, wide)).toBe(true);
+    expect(inInscribedCircle(100, 101, wide)).toBe(false);
+    expect(inInscribedCircle(10, 50, wide)).toBe(false);
+    const tall = { left: 0, top: 0, width: 100, height: 300 };
+    expect(inInscribedCircle(50, 150, tall)).toBe(true);
+    expect(inInscribedCircle(50, 199, tall)).toBe(true);
+    expect(inInscribedCircle(50, 201, tall)).toBe(false);
+    expect(inInscribedCircle(50, 20, tall)).toBe(false);
+  });
+
+  it('没有大小的矩形里只有圆心算（半径 0）', () => {
+    expect(inInscribedCircle(5, 5, { left: 5, top: 5, width: 0, height: 0 })).toBe(true);
+    expect(inInscribedCircle(6, 5, { left: 5, top: 5, width: 0, height: 0 })).toBe(false);
   });
 });
 
