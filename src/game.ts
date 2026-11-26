@@ -11,6 +11,7 @@ import { Renderer } from './render/renderer';
 import { CardKind } from './ui/cardBar';
 import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
+import { BackGuard, blocksEdgeSwipe } from './backGuard';
 import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection } from './camInput';
 import { loadPref, savePref } from './prefs';
 import { Pinch, TouchGestures, UiMode, asUiMode, inInscribedCircle, isMobileUi } from './touchInput';
@@ -180,6 +181,14 @@ export class GameApp {
 
   private bind(): void {
     const cv = this.canvas;
+    // 对局中拦住「返回」：误触系统的返回手势不该丢掉这一局
+    const guard = new BackGuard(() => this.hud.message(`已拦下返回：要离开对局请点${this.mobile ? '菜单里的' : '右上角的'}「退出」`, 'info'));
+    guard.start();
+    this.cleanup.push(() => guard.stop());
+    // iOS Safari 从屏幕边缘起手的滑动是「返回上一页」，会抢走拉抽屉、框选、推摇杆的那一下：在这些界面上边缘起手时拦下默认行为
+    this.on(this.root, 'touchstart', e => {
+      if (e.cancelable && blocksEdgeSwipe(e, window.innerWidth)) e.preventDefault();
+    }, { passive: false });
     this.on(cv, 'contextmenu', e => e.preventDefault());
     // 浏览器要有用户操作才允许出声
     this.on(window, 'pointerdown', () => this.sound.unlock());

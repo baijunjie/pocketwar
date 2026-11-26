@@ -11,6 +11,7 @@
 | `src/camInput.ts` | 镜头输入的纯判定，不碰 DOM：贴边卷屏速度、鼠标从哪条边离开网页的续卷方向、滚轮事件是鼠标还是触控板（`WheelClassifier`、`WheelMode`），由 `game.ts` 接到事件上 |
 | `src/touchInput.ts` | 移动版触屏输入的纯判定，不碰 DOM：界面模式（`UiMode`、`asUiMode`、`isMobileUi`）、上半屏手势分类（`TouchGestures`：点、长按、单指框选、双指缩放旋转平移；`pinchOf`）、卡片带起手方向（`cardIntent`，偏向拖卡片）、拖卡片时落点抬到手指上方多少（`dropLift`）、镜头摇杆读数（`stickVector`，死区与曲线）、点在不在矩形内切圆里（`inInscribedCircle`，移动版小地图只认圆内）、抽屉滑动方向（`swipeDir`），由 `game.ts`、`ui/cardBar.ts`、`ui/joystick.ts` 接到事件上 |
 | `src/pointerLock.ts` | 锁定鼠标模式（`PointerLock`：Pointer Lock + 自绘光标）：在 window 捕获阶段拦下真实事件，改发给虚拟光标下元素的合成事件，自带 pointer capture、悬停、连击计数、提示框，全屏时用 Keyboard Lock 拦 Esc；文件开头是不碰 DOM 的纯函数；由 `game.ts` 创建，须早于 `Hud`（监听注册顺序决定它能拦住真实事件） |
+| `src/backGuard.ts` | 防误触「返回」而离开页面（单机对局不存档）：`BackGuard`（`start` / `stop`）对局期间在浏览历史里垫一条记录，返回只弹掉它，玩家下一次操作时再垫回；`inEdgeZone`、`blocksEdgeSwipe` 判定哪些从屏幕边缘起手的 touchstart 要拦下默认行为（iOS Safari 的边缘返回手势，只对自己用 pointer 事件处理手指的界面生效）；由 `game.ts` 接到事件上 |
 | `src/prefs.ts` | 玩家偏好的本地存储（`loadPref`、`savePref`，键统一 `fengyan.` 前缀），`game.ts` 与 `hud.ts` 共用 |
 | `src/sim/` | 纯逻辑的模拟层（世界状态、地图、寻路、开局部署） |
 | `src/sim/world.ts` | 世界状态（单位、建筑、据点、投射物、环境、补给）与系统管线 `World.tick()` |
