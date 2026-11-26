@@ -14,6 +14,7 @@ import { TAP_SLOP, UiMode, swipeDir } from '../touchInput';
 import { loadPref, savePref } from '../prefs';
 import { CardBar, CardBarCallbacks } from './cardBar';
 import { Joystick } from './joystick';
+import { ControlRow } from './controlRow';
 import { auraPct, num, rangeText, unitTip } from './unitText';
 
 /** 城池、营寨名字后面的星数 = 据点等级；其他据点不能升级，不显示。compact：据点列表里写成「★3」省地方 */
@@ -59,6 +60,8 @@ export type UpgradeAction = 'sel' | 'all' | 'cities' | 'camps';
 
 export interface HudCallbacks extends CardBarCallbacks {
   command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow' | 'deselect'): void;
+  /** 移动版的编队按钮（见 ControlRowCallbacks.groupSlot） */
+  groupSlot(g: number, assign: boolean): void;
   /** 点了某个升级按钮 */
   upgrade(act: UpgradeAction): void;
   /** 选中一个据点（-1 = 取消） */
@@ -109,6 +112,8 @@ const css = (c: [number, number, number]): string => `rgb(${c[0]},${c[1]},${c[2]
 export class Hud {
   readonly root: HTMLDivElement;
   readonly minimap: HTMLCanvasElement;
+  /** 移动版的控制排：编队按钮与「取消选择」（观战时没有） */
+  private ctlRow: ControlRow | null = null;
   /** 移动版的镜头摇杆（小地图左边）：game 每帧读它的读数卷屏 */
   readonly stick = new Joystick();
   private readonly counts: HTMLDivElement;
@@ -288,10 +293,21 @@ export class Hud {
     // ---- 小地图 ----
     const mm = el('div', 'panel mini');
     this.minimap = el('canvas');
-    // 移动版：摇杆与小地图并排，摇杆在左
+    // 移动版：最上面一排控制按钮（编队 1～5、取消选择），下面摇杆与小地图并排
+    if (human) {
+      // 移动版里点空地是下令移动，取消选择靠按钮：常用，所以在指令面板之外再放一个伸手就到的
+      const row = new ControlRow({ groupSlot: (g, assign) => cb.groupSlot(g, assign), deselect: () => cb.command('deselect') });
+      this.ctlRow = row;
+      row.el.classList.add('mobile-only');
+      this.disposers.push(() => row.destroy());
+      mm.classList.add('hasctl');
+      mm.appendChild(row.el);
+    }
+    const mmRow = el('div', 'minirow');
     this.stick.el.classList.add('mobile-only');
     this.disposers.push(() => this.stick.destroy());
-    mm.append(this.stick.el, this.minimap);
+    mmRow.append(this.stick.el, this.minimap);
+    mm.appendChild(mmRow);
     root.appendChild(mm);
 
     // ---- 底部中央：上面是详情（选中单个单位 / 据点时），下面是兵种栏 ----
@@ -405,6 +421,7 @@ export class Hud {
             <tr><th scope="row">双指捏合 / 拧转</th><td>缩放 / 旋转镜头</td></tr>
             <tr><th scope="row">推摇杆 / 拖动或点小地图</th><td>移动镜头</td></tr>
             <tr><th scope="row">卡片拖到地图上</th><td>剑尖指着的地方是落点：这批人攻击移动过去，松在敌军身上则攻击它</td></tr>
+            <tr><th scope="row">编队按钮 1～5</th><td>点：选中这一队（没人时把所选部队编进去），连点两下镜头跳过去；长按：把所选部队编为这一队</td></tr>
             <tr><th scope="row">两侧边缘的把手</th><td>拉出据点列表 / 指令面板</td></tr>
           </table>
           <table class="desktop-only" aria-label="基本操作">
@@ -600,6 +617,12 @@ export class Hud {
     target.addEventListener('pointercancel', () => {
       from = null;
     });
+  }
+
+  /** 编队（只含还有活人的，按队号排）：交给编队卡片与移动版的编队按钮；下一次 updateSelection 时画出来 */
+  setGroups(groups: { g: number; slots: number[] }[]): void {
+    this.cards.setGroups(groups);
+    this.ctlRow?.setGroups(groups);
   }
 
   /** 移动版：拉出（left / right）或收起（null）抽屉，同一时间只开一个 */
@@ -990,13 +1013,15 @@ export class Hud {
       this.selKey = '?';
     }
     // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
+    const canDeselect = sel.length > 0 || site >= 0;
     for (const [cmd, b] of this.cmdBtns) {
       const off = cmd === 'unrally' ? !this.rallySet(site) : cmd === 'follow' ? !sel.length && !this.following
-        : cmd === 'deselect' ? !sel.length && site < 0
+        : cmd === 'deselect' ? !canDeselect
         : cmd !== 'all' && cmd !== 'rally' && !sel.length;
       if (b.disabled !== off) b.disabled = off;
       if (cmd === 'follow') b.classList.toggle('on', this.following);
     }
+    this.ctlRow?.update(sel, canDeselect);
     this.cards.update(sel, screen);
   }
 

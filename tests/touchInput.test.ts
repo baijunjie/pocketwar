@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  CARD_SCROLL_BIAS, CARD_SLOP, DROP_LIFT, HOLD_MS, STICK_CURVE, STICK_DEAD, SWIPE_MIN, TAP_SLOP, TouchGestures,
-  asUiMode, cardIntent, dropLift, inInscribedCircle, isMobileUi, pinchOf, stickVector, swipeDir,
+  CARD_SCROLL_BIAS, CARD_SLOP, DROP_ARM, DROP_REACH, DROP_TURN_BAND, HOLD_MS, STICK_CURVE, STICK_DEAD, SWIPE_MIN, TAP_SLOP, TouchGestures,
+  asUiMode, cardIntent, dropOffset, inInscribedCircle, isMobileUi, pinchOf, stickVector, swipeDir,
 } from '../src/touchInput';
 import type { Pinch, TouchHandlers } from '../src/touchInput';
 
@@ -13,9 +13,11 @@ describe('常量', () => {
     expect(SWIPE_MIN).toBe(28);
   });
 
-  it('卡片起手偏向拖：横向要超竖向 1.5 倍才算滚动；落点最多抬 72px；摇杆死区 12%、读数曲线 1.5 次幂', () => {
+  it('卡片起手偏向拖：横向要超竖向 1.5 倍才算滚动；落点（剑尖）离手指 100px、手指离屏幕底 150px 以内开始放倒、手指离按下处 28px 以上才下令；摇杆死区 12%、读数曲线 1.5 次幂', () => {
     expect(CARD_SCROLL_BIAS).toBe(1.5);
-    expect(DROP_LIFT).toBe(72);
+    expect(DROP_REACH).toBe(100);
+    expect(DROP_TURN_BAND).toBe(150);
+    expect(DROP_ARM).toBe(28);
     expect(STICK_DEAD).toBe(0.12);
     expect(STICK_CURVE).toBe(1.5);
   });
@@ -164,101 +166,94 @@ describe('cardIntent 卡片起手方向', () => {
   });
 });
 
-describe('dropLift 拖卡片时落点抬起的高度', () => {
-  // 屏幕 [0, 800]，卡片带 [500, 600]
-  const scr0 = 0, strTop = 500, strBot = 600, scr1 = 800;
-  const lift = (y: number, l?: number): number => dropLift(y, scr0, strTop, strBot, scr1, l);
+describe('dropOffset 拖卡片时落点（剑尖）相对手指的偏移', () => {
+  // 屏幕底 800：离屏幕底 150px 以内（y > 650）开始放倒
+  const bottom = 800;
+  const off = (y: number, reach?: number, band?: number) => dropOffset(y, bottom, reach, band);
+  const len = (v: { x: number; y: number }): number => Math.hypot(v.x, v.y);
 
-  it('手指还在卡片带里不抬', () => {
-    for (const y of [500, 520, 550, 599, 600]) expect(lift(y), `y=${y}`).toBe(0);
-  });
-
-  it('往上离开卡片带后按离开距离的一半抬起', () => {
-    expect(lift(480)).toBeCloseTo(10);
-    expect(lift(440)).toBeCloseTo(30);
-    expect(lift(500 - 2)).toBeCloseTo(1);
-  });
-
-  it('往上封顶 lift：离开 2 倍 lift 及更远（且离屏幕顶也够远）恒为 lift', () => {
-    expect(lift(500 - 2 * DROP_LIFT)).toBeCloseTo(DROP_LIFT);
-    expect(lift(300)).toBe(DROP_LIFT);
-    expect(lift(DROP_LIFT * 2)).toBe(DROP_LIFT);
-  });
-
-  it('可以指定 lift', () => {
-    expect(lift(300, 30)).toBe(30);
-    expect(lift(490, 30)).toBeCloseTo(5);
-    expect(lift(300, 0)).toBe(0);
-  });
-
-  it('手指刚出卡片带上沿时落点就在卡片带上沿', () => {
-    expect(strTop - lift(strTop)).toBe(strTop);
-    expect(strTop - 0.01 - lift(strTop - 0.01)).toBeGreaterThan(strTop - 0.02);
-  });
-
-  it('接近屏幕顶时按到屏幕顶距离的一半降回 0，手指到屏幕顶时落点也在屏幕顶', () => {
-    expect(lift(100)).toBeCloseTo(50);
-    expect(lift(20)).toBeCloseTo(10);
-    expect(lift(2)).toBeCloseTo(1);
-    expect(lift(scr0)).toBe(0);
-    expect(scr0 - lift(scr0)).toBe(scr0);
-  });
-
-  it('屏幕顶不在 0 时按屏幕顶算', () => {
-    expect(dropLift(120, 100, strTop, strBot, scr1)).toBeCloseTo(10);
-    expect(dropLift(100, 100, strTop, strBot, scr1)).toBe(0);
-    expect(dropLift(300, 100, strTop, strBot, scr1)).toBe(DROP_LIFT);
-    expect(dropLift(90, 100, strTop, strBot, scr1)).toBe(0);
-  });
-
-  it('超出屏幕顶不为负', () => {
-    expect(lift(-1)).toBe(0);
-    expect(lift(-500)).toBe(0);
-  });
-
-  it('往下离开卡片带后按离开距离的一半抬起，封顶 lift', () => {
-    expect(lift(620)).toBeCloseTo(10);
-    expect(lift(640)).toBeCloseTo(20);
-    expect(dropLift(700, scr0, strTop, strBot, 5000)).toBeCloseTo(50);
-    expect(dropLift(745, scr0, strTop, strBot, 5000)).toBe(DROP_LIFT);
-    expect(dropLift(2000, scr0, strTop, strBot, 5000)).toBe(DROP_LIFT);
-  });
-
-  it('接近屏幕底时按到屏幕底距离的一半降回 0，手指到屏幕底时落点也在屏幕底', () => {
-    expect(lift(780)).toBeCloseTo(10);
-    expect(lift(760)).toBeCloseTo(20);
-    expect(lift(scr1)).toBe(0);
-    expect(scr1 - lift(scr1)).toBe(scr1);
-  });
-
-  it('超出屏幕底不为负', () => {
-    expect(lift(scr1 + 1)).toBe(0);
-    expect(lift(scr1 + 500)).toBe(0);
-  });
-
-  it('落点随手指 y 单调不减且连续（从屏幕顶到屏幕底整个范围，以及两头之外）', () => {
-    const step = 0.5;
-    for (const l of [undefined, 30, 200]) {
-      for (const [lo, hi] of [[scr0 - 200, scr1 + 200], [scr0, scr1]]) {
-        let prev = lo - lift(lo, l);
-        for (let y = lo + step; y <= hi; y += step) {
-          const cur = y - lift(y, l);
-          expect(cur, `y=${y} lift=${l}`).toBeGreaterThanOrEqual(prev);
-          // 抬起量每走 1px 最多变 0.5px，落点每步至多走 1.5 倍步长
-          expect(cur - prev, `y=${y} lift=${l}`).toBeLessThanOrEqual(step * 1.5 + 1e-9);
-          expect(lift(y, l), `y=${y} lift=${l}`).toBeGreaterThanOrEqual(0);
-          expect(lift(y, l), `y=${y} lift=${l}`).toBeLessThanOrEqual(l ?? DROP_LIFT);
-          prev = cur;
-        }
-      }
+  it('手指离屏幕底不少于 band：竖直朝上，偏移 (0, −reach)', () => {
+    for (const y of [650, 600, 500, 300, 0, -100]) {
+      const v = off(y);
+      expect(v.x, `y=${y}`).toBeCloseTo(0);
+      expect(v.y, `y=${y}`).toBeCloseTo(-DROP_REACH);
     }
   });
 
-  it('屏幕范围内的落点永远在屏幕内', () => {
-    for (let y = scr0; y <= scr1; y += 1) {
-      const p = y - lift(y);
-      expect(p, `y=${y}`).toBeGreaterThanOrEqual(scr0);
-      expect(p, `y=${y}`).toBeLessThanOrEqual(scr1);
+  it('到屏幕底（及以下）时水平朝右，偏移 (reach, 0)', () => {
+    for (const y of [800, 801, 900, 2000]) {
+      const v = off(y);
+      expect(v.x, `y=${y}`).toBeCloseTo(DROP_REACH);
+      expect(v.y, `y=${y}`).toBeCloseTo(0);
+    }
+  });
+
+  it('进到一半深度时是 45 度', () => {
+    const v = off(bottom - DROP_TURN_BAND / 2);
+    expect(v.x).toBeCloseTo(DROP_REACH * Math.SQRT1_2);
+    expect(v.y).toBeCloseTo(-DROP_REACH * Math.SQRT1_2);
+  });
+
+  it('转角与进入的深度成正比：进到 1/3 深度是 30 度，2/3 是 60 度', () => {
+    const a = off(bottom - DROP_TURN_BAND * 2 / 3);
+    expect(Math.atan2(a.x, -a.y) * 180 / Math.PI).toBeCloseTo(30);
+    const b = off(bottom - DROP_TURN_BAND / 3);
+    expect(Math.atan2(b.x, -b.y) * 180 / Math.PI).toBeCloseTo(60);
+  });
+
+  it('偏移的长度始终等于 reach，只朝上、朝右（x 不为负、y 不为正）', () => {
+    for (let y = -200; y <= 1100; y += 1) {
+      const v = off(y);
+      expect(len(v), `y=${y}`).toBeCloseTo(DROP_REACH);
+      expect(v.x, `y=${y}`).toBeGreaterThanOrEqual(-1e-9);
+      expect(v.y, `y=${y}`).toBeLessThanOrEqual(1e-9);
+    }
+  });
+
+  it('落点的 y 随手指 y 单调不减且连续；手指在屏幕底时落点的 y 也在屏幕底', () => {
+    const step = 0.5;
+    for (const [reach, band] of [[undefined, undefined], [60, 100], [150, 400]] as const) {
+      const r = reach ?? DROP_REACH, bd = band ?? DROP_TURN_BAND;
+      let prev = -300 + off(-300, reach, band).y;
+      for (let y = -300 + step; y <= 1100; y += step) {
+        const cur = y + off(y, reach, band).y;
+        expect(cur, `y=${y} reach=${reach}`).toBeGreaterThanOrEqual(prev - 1e-9);
+        // 落点每步走的距离不超过步长的 (1 + reach·π/2/band) 倍
+        expect(cur - prev, `y=${y} reach=${reach}`).toBeLessThanOrEqual(step * (1 + (r * Math.PI / 2) / bd) + 1e-9);
+        prev = cur;
+      }
+      expect(bottom + off(bottom, reach, band).y).toBeCloseTo(bottom);
+    }
+  });
+
+  it('偏移的 x 随手指下移单调不减（越往下越朝右倒）', () => {
+    let prev = -1;
+    for (let y = 0; y <= 1000; y += 1) {
+      const x = off(y).x;
+      expect(x, `y=${y}`).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = x;
+    }
+  });
+
+  it('可以指定 reach 与 band', () => {
+    expect(off(0, 50).y).toBeCloseTo(-50);
+    expect(len(off(750, 50))).toBeCloseTo(50);
+    const v = dropOffset(450, 500, 80, 100);
+    // 离屏幕底 50 = band 的一半：45 度
+    expect(v.x).toBeCloseTo(80 * Math.SQRT1_2);
+    expect(v.y).toBeCloseTo(-80 * Math.SQRT1_2);
+    expect(dropOffset(399, 500, 80, 100).x).toBeCloseTo(0);
+    expect(dropOffset(500, 500, 80, 100).x).toBeCloseTo(80);
+  });
+
+  it('band 不大于 0 时始终朝上，不出 NaN', () => {
+    for (const band of [0, -10]) {
+      for (const y of [0, 700, 800, 900]) {
+        const v = off(y, 100, band);
+        expect(Number.isNaN(v.x) || Number.isNaN(v.y), `band=${band} y=${y}`).toBe(false);
+        expect(v.x).toBeCloseTo(0);
+        expect(v.y).toBeCloseTo(-100);
+      }
     }
   });
 });

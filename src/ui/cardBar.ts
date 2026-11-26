@@ -2,11 +2,11 @@
  * 底部的卡片：兵种栏最左的全选卡片（屏幕内的全部己方部队）、兵种卡片（屏幕内以及已选中的每个己方兵种一张）与其上方一排编队卡片（每个还有活人的编队一张）。
  * 卡片直接浮在画面底部、不包外框，卡片之间的空隙就是画面：从画面上拉的框扫到卡片时，game 用 `cardsIn` 把这些兵种 / 编队并进框选。
  * 点击选择；按住拖动时卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）。
- * 移动版用手指拖时另画一把剑，剑尖是落点、抬在手指上方，卡片跟在剑的右下方。
+ * 移动版用手指拖时卡片立在手指上方（下沿压在手指下），另画一把剑从卡片顶上伸出去，剑尖所指才是落点。
  */
 import { LEVELS, UNITS } from '../sim/defs';
 import { World } from '../sim/world';
-import { cardIntent, dropLift, inInscribedCircle } from '../touchInput';
+import { DROP_ARM, DROP_REACH, cardIntent, dropOffset, inInscribedCircle } from '../touchInput';
 import SWORD from './sword.svg?raw';
 import { unitTip } from './unitText';
 
@@ -18,7 +18,7 @@ export interface CardBarCallbacks {
   /** 点编队卡片：选中这一队；jump = 双击，镜头再跳到这队 */
   selectGroup(g: number, jump: boolean): void;
   /**
-   * 把卡片拖到地面（view）或小地图（mini）上松开，(x, y) 是落点的视口坐标（桌面版是鼠标位置，移动版抬在手指上方）：这批人去松开处——松在敌军身上是攻击它（同右键），否则攻击移动。
+   * 把卡片拖到地面（view）或小地图（mini）上松开，(x, y) 是落点的视口坐标（桌面版是鼠标位置，移动版是手指外面的剑尖）：这批人去松开处——松在敌军身上是攻击它（同右键），否则攻击移动。
    * kind：type = 兵种卡片（id 是兵种），group = 编队卡片（id 是队号），all = 全选卡片（id 不用）
    */
   dropCard(kind: CardKind, id: number, x: number, y: number, target: 'view' | 'mini'): void;
@@ -28,8 +28,10 @@ export type CardKind = 'type' | 'group' | 'all';
 
 /** 拖拽中跟着走的卡片缩到多大 */
 const GHOST_SCALE = 0.8;
-/** 移动版：翻到落点左边的卡片，右边空出这么多像素才翻回去 */
-const FLIP_BACK = 40;
+/** 移动版拖拽中的卡片缩到多大：要在手指上方看清内容，比桌面版大一点 */
+const TOUCH_GHOST_SCALE = 0.9;
+/** 移动版：剑尖从拖拽中的卡片顶上伸出多少像素 */
+const SWORD_OUT = 34;
 
 export interface Rect {
   ax: number;
@@ -60,7 +62,7 @@ export class CardBar {
   /** 画面上的框选正扫着卡片：不重建，免得高亮丢掉 */
   private boxing = false;
   private readonly cleanup: (() => void)[] = [];
-  /** 移动版：卡片带横向滚动，按住后按方向区分是滚动还是拖卡片下令；拖拽中落点抬到手指上方，用一把剑指着 */
+  /** 移动版：卡片带横向滚动，按住后按方向区分是滚动还是拖卡片下令；拖拽中从手指伸出一把剑，剑尖是落点 */
   mobile = false;
 
   /**
@@ -249,17 +251,16 @@ export class CardBar {
    * 编队卡片选这一队（双击跳镜头）；
    * 按住拖动：卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）；松在别处、按右键、按 Esc、窗口失去焦点都取消。
    * 移动版（手指拖）：按住后横向位移明显占主导是滚动卡片带（area 自己是滚动容器），否则是拖卡片；滚动中手指竖向离开了卡片带也改成拖卡片。
-   * 落点不在手指正下方（会被手指挡住），抬在手指上方、用剑尖指着；按在卡片之间的空隙上只能滚动。
+   * 落点不在手指正下方（会被手指挡住）：从手指伸出一把剑，剑尖是落点；按在卡片之间的空隙上只能滚动。
    */
   private bind(area: HTMLElement): void {
     let down: { card: HTMLElement | null; x: number; y: number; add: boolean; id: number; scroll0: number;
       intent: 'wait' | 'drag' | 'scroll' } | null = null;
     let ghost: HTMLElement | null = null;
-    /** 移动版：影子卡片翻到了落点左下方（右边放不下） */
-    let flipped = false;
     // 移动版拖卡片时指着落点的剑（桌面版落点就是鼠标指针，本来就是剑）
     const sword = el('div', 'dragptr');
     sword.innerHTML = SWORD;
+    sword.style.setProperty('--reach', `${DROP_REACH}px`);
     let last = { t: 0, key: '' };
     const target = (x: number, y: number): 'view' | 'mini' | null => {
       const e = document.elementFromPoint(x, y);
@@ -267,23 +268,32 @@ export class CardBar {
       if (e === this.minimap && this.mobile && !inInscribedCircle(x, y, this.minimap.getBoundingClientRect())) return null;
       return e === this.minimap ? 'mini' : e instanceof HTMLCanvasElement && e.classList.contains('view') ? 'view' : null;
     };
-    /** 指针在 (x, y) 时的落点：桌面版就是鼠标位置；移动版抬到手指上方（见 dropLift） */
+    /** 指针在 (x, y) 时的落点：桌面版就是鼠标位置；移动版是剑尖，在手指外面（见 dropOffset） */
     const dropAt = (x: number, y: number): { x: number; y: number } => {
       if (!this.mobile) return { x, y };
-      const strip = area.getBoundingClientRect(), screen = this.overlay.getBoundingClientRect();
-      return { x, y: y - dropLift(y, screen.top, strip.top, strip.bottom, screen.bottom) };
+      const o = dropOffset(y, this.overlay.getBoundingClientRect().bottom);
+      return { x: x + o.x, y: y + o.y };
     };
+    /** 松手算不算下令：移动版里手指要离开按下处一段才算（见 DROP_ARM），拖回按下处松手即取消 */
+    const armed = (from: { x: number; y: number }, x: number, y: number): boolean =>
+      !this.mobile || Math.hypot(x - from.x, y - from.y) >= DROP_ARM;
     const place = (x: number, y: number): void => {
-      if (!ghost) return;
-      const p = dropAt(x, y), ok = !!target(p.x, p.y);
-      // 卡片跟在落点右下方；移动版的剑比鼠标指针大，多让出一点，右边放不下（会伸出屏幕）就翻到左下方
-      // 翻过去后要往回让出 FLIP_BACK 才翻回来：手指停在分界线附近时卡片不来回跳
-      const gap = this.mobile ? 22 : 14, w = ghost.offsetWidth * GHOST_SCALE;
-      const room = this.overlay.getBoundingClientRect().right - (p.x + gap + w);
-      flipped = this.mobile && room < (flipped ? FLIP_BACK : 0);
-      ghost.style.transform = `translate(${flipped ? p.x - gap - w : p.x + gap}px, ${p.y + gap}px) scale(${GHOST_SCALE})`;
+      if (!ghost || !down) return;
+      const p = dropAt(x, y), ok = armed(down, x, y) && !!target(p.x, p.y);
+      if (this.mobile) {
+        // 卡片立在手指上方、左右居中（不伸出屏幕）：上沿在手指上方、离剑的长度差 SWORD_OUT，所以剑朝上时剑尖从卡片顶上伸出这么多；
+        // 卡片比这段高，下沿压在手指下，露在手指上方的是卡片的内容
+        const scr = this.overlay.getBoundingClientRect(), w = ghost.offsetWidth * TOUCH_GHOST_SCALE;
+        const gx = Math.max(scr.left, Math.min(scr.right - w, x - w / 2));
+        ghost.style.transform = `translate(${gx}px, ${y - DROP_REACH + SWORD_OUT}px) scale(${TOUCH_GHOST_SCALE})`;
+      } else {
+        // 卡片跟在鼠标右下方
+        ghost.style.transform = `translate(${p.x + 14}px, ${p.y + 14}px) scale(${GHOST_SCALE})`;
+      }
       ghost.classList.toggle('nodrop', !ok);
-      sword.style.transform = `translate(${p.x}px, ${p.y}px)`;
+      // 剑图里剑尖朝左上、剑身沿 45° 斜下去：转到剑柄正对手指
+      const turn = (Math.atan2(y - p.y, x - p.x) * 180) / Math.PI - 45;
+      sword.style.transform = `translate(${p.x}px, ${p.y}px) rotate(${turn}deg)`;
       sword.classList.toggle('nodrop', !ok);
     };
     const stop = (): void => {
@@ -292,7 +302,6 @@ export class CardBar {
       down = null;
       ghost?.remove();
       ghost = null;
-      flipped = false;
       sword.remove();
       this.held = false;
       this.rosterKey = this.groupKey = '?';
@@ -396,7 +405,7 @@ export class CardBar {
       const d = down;
       if (!d || e.button !== 0) return;
       const dragged = !!ghost, scrolled = d.intent === 'scroll';
-      const p = dropAt(e.clientX, e.clientY);
+      const p = dropAt(e.clientX, e.clientY), go = armed(d, e.clientX, e.clientY);
       stop();
       if (area.hasPointerCapture(e.pointerId)) area.releasePointerCapture(e.pointerId);
       // 空隙上按下、或横向滚动了卡片带：不是点卡片
@@ -404,7 +413,7 @@ export class CardBar {
       const kind = kindOf(d.card);
       if (dragged) {
         const t = target(p.x, p.y);
-        if (t) this.cb.dropCard(kind, d.id, p.x, p.y, t);
+        if (t && go) this.cb.dropCard(kind, d.id, p.x, p.y, t);
         return;
       }
       const now = performance.now(), key = `${kind}${d.id}`;

@@ -1,6 +1,6 @@
 /**
  * 触屏输入的纯判定，不碰 DOM：移动版界面何时启用、画面上单指 / 双指手势的分类（`TouchGestures`）、
- * 卡片带上起手的方向判定、拖卡片时落点抬到手指上方多少、摇杆的读数、小地图圆内的判定、抽屉的滑动方向。
+ * 卡片带上起手的方向判定、拖卡片时落点相对手指的偏移、摇杆的读数、小地图圆内的判定、抽屉的滑动方向。
  * 由 `game.ts`、`hud.ts`、`ui/cardBar.ts`、`ui/joystick.ts` 接到事件上。
  */
 
@@ -24,8 +24,12 @@ export const HOLD_MS = 500;
 export const CARD_SLOP = 8;
 /** 卡片带上起手：横向位移超过竖向的这么多倍才算滚动卡片带（约 34° 以内的横滑），其余都算拖卡片 */
 export const CARD_SCROLL_BIAS = 1.5;
-/** 拖卡片时落点最多抬到手指上方这么多像素（手指会挡住正下方） */
-export const DROP_LIFT = 72;
+/** 拖卡片时落点（剑尖）离手指这么多像素：手指上方立着卡片，剑尖要从卡片顶上再伸出去一截 */
+export const DROP_REACH = 100;
+/** 拖卡片时手指离屏幕底这么多像素以内，剑开始向右放倒 */
+export const DROP_TURN_BAND = 150;
+/** 拖卡片时手指离按下处这么多像素以上，松手才下令：剑一出来剑尖就在画面里，起手就松开（没按准的一下点按）不该变成命令 */
+export const DROP_ARM = 28;
 /** 摇杆的死区：推出不到半径的这个比例不算推（手指按上去总会偏一点） */
 export const STICK_DEAD = 0.12;
 /** 摇杆读数对推出距离的幂：大于 1 时中段偏慢，小幅度推好微调 */
@@ -72,14 +76,15 @@ export function cardIntent(dx: number, dy: number, slop = CARD_SLOP, bias = CARD
 }
 
 /**
- * 拖卡片时落点抬到手指上方多少像素：手指在 y，屏幕从 top 到 bottom，卡片带占其中的 [stripTop, stripBottom]。
- * 手指还在卡片带里不抬；离开卡片带后按离开距离的一半逐渐抬到 lift，紧挨卡片带的地方因此也指得到；
- * 接近屏幕顶 / 底时再按到边的距离的一半降回 0：手指够不到屏幕外，不降的话画面最上沿与小地图底部指不到
+ * 拖卡片时落点（剑尖）相对手指的偏移：剑从手指伸出去 reach 像素，剑尖始终在手指外面看得见的地方，不贴回手指下。
+ * 平时竖直朝上；手指进到屏幕底以上 band 像素以内时，剑随手指下移逐渐向右放倒，到屏幕底时水平朝右：
+ * 手指够不到屏幕外，剑一直朝上的话贴着屏幕底的小地图下半截指不到。朝右倒是因为小地图在屏幕右侧、左边有摇杆那一块可以落指，
+ * 整张小地图都指得到
  */
-export function dropLift(y: number, top: number, stripTop: number, stripBottom: number, bottom: number, lift = DROP_LIFT): number {
-  if (y < stripTop) return Math.max(0, Math.min(lift, (stripTop - y) / 2, (y - top) / 2));
-  if (y > stripBottom) return Math.max(0, Math.min(lift, (y - stripBottom) / 2, (bottom - y) / 2));
-  return 0;
+export function dropOffset(y: number, bottom: number, reach = DROP_REACH, band = DROP_TURN_BAND): Pt {
+  const turn = band > 0 ? Math.max(0, Math.min(1, (band - (bottom - y)) / band)) : 0;
+  const a = (turn * Math.PI) / 2;
+  return { x: reach * Math.sin(a), y: -reach * Math.cos(a) };
 }
 
 /**

@@ -107,6 +107,7 @@ export class GameApp {
       pickTypes: (types, mode) => this.pickTypes(types, mode),
       pickAll: mode => this.pickAll(mode),
       selectGroup: (g, jump) => this.selectGroup(g, jump),
+      groupSlot: (g, assign) => this.groupSlot(g, assign),
       dropCard: (kind, id, x, y, target) => this.dropCard(kind, id, x, y, target),
       setSpeed: s => this.setSpeed(s),
       focus: (x, y) => this.focus(x, y),
@@ -421,10 +422,7 @@ export class GameApp {
         const g = Number(e.code.slice(5));
         if (e.ctrlKey || e.metaKey || e.altKey) {
           e.preventDefault();
-          this.groups[g] = { slots: this.selList.slice(), uids: this.selUid.slice() };
-          this.hud.message(`已编为第 ${g} 队（${this.selList.length} 人）`, 'info');
-          this.pushGroups();
-          this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
+          this.assignGroup(g);
         } else if (e.shiftKey) {
           // 追加编队：把当前选中的并入该队，并选中合并后的整队
           const w = this.world;
@@ -442,9 +440,7 @@ export class GameApp {
           this.hud.message(`第 ${g} 队追加 ${added} 人，共 ${slots.length} 人`, 'info');
         } else {
           if (!this.groups[g]) return;
-          const now = performance.now();
-          this.selectGroup(g, this.lastGroup.g === g && now - this.lastGroup.t < 400);
-          this.lastGroup = { t: now, g };
+          this.recallGroup(g);
         }
       }
     });
@@ -801,7 +797,7 @@ export class GameApp {
 
   /** 把还有活人的编队交给编队卡片 */
   private pushGroups(): void {
-    this.hud.cards.setGroups(this.groups.flatMap((_, g) => {
+    this.hud.setGroups(this.groups.flatMap((_, g) => {
       const slots = this.groupAlive(g);
       return slots.length ? [{ g, slots }] : [];
     }));
@@ -826,7 +822,37 @@ export class GameApp {
     return grp ? grp.slots.filter((s, i) => w.controllable(s) && w.uid[s] === grp.uids[i]) : [];
   }
 
-  /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键、双击编队卡片） */
+  /** 把当前选中的部队编为第 g 队（原来的这一队作废） */
+  private assignGroup(g: number): void {
+    this.groups[g] = { slots: this.selList.slice(), uids: this.selUid.slice() };
+    this.hud.message(`已编为第 ${g} 队（${this.selList.length} 人）`, 'info');
+    this.pushGroups();
+    this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
+  }
+
+  /** 按编队号选中第 g 队；0.4 秒内连按同一个号，镜头再跳过去 */
+  private recallGroup(g: number): void {
+    const now = performance.now();
+    this.selectGroup(g, this.lastGroup.g === g && now - this.lastGroup.t < 400);
+    this.lastGroup = { t: now, g };
+  }
+
+  /**
+   * 移动版的编队按钮（没有键盘的 Ctrl+数字）：长按（assign）是把所选部队编为这一队；
+   * 点一下是选中这一队，这一队还没有人（没编过或已全部阵亡）时改为把所选部队编进去
+   */
+  private groupSlot(g: number, assign: boolean): void {
+    if (!this.world.humanTeam) return;
+    if (!assign && this.groupAlive(g).length) return this.recallGroup(g);
+    if (!this.selList.length) {
+      this.hud.message(assign ? '先选中部队，再长按编队按钮把它们编为这一队' : `第 ${g} 队还没有人：先选中部队，再点它编队`, 'info');
+      return;
+    }
+    this.assignGroup(g);
+    if (assign) navigator.vibrate?.(15);
+  }
+
+  /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键、连点编队按钮、双击编队卡片） */
   private selectGroup(g: number, jump: boolean): void {
     const w = this.world, alive = this.groupAlive(g);
     this.setSelection(alive);

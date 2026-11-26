@@ -6,8 +6,9 @@ import { FakeCanvas, FakeEl, firePointer, installFakeDom, rectOf } from './fakeD
 
 /*
  * 屏幕布局（竖屏）：画面 y < 500；卡片带 [500, 600]；小地图 (600, 800]；overlay 的底是 800。
- * 移动版落点 = 手指 y − 抬起量：手指在 y=300 离卡片带 200px，抬起量封顶 72，落点在 228；
- * 手指在 y=480 离卡片带 20px，抬起量 10，落点 470；手指在 y=700 抬起量 min(72, 50, 50) = 50，落点 650。
+ * 移动版落点（剑尖）= 手指位置 + 偏移：手指离屏幕底 150px 以外（y ≤ 650）偏移是 (0, −100)，即落点在手指正上方 100px；
+ * 手指到屏幕底时偏移是 (100, 0)，落点在手指右边 100px；中间逐渐放倒。
+ * 影子卡片立在手指上方：缩放 0.9，宽 60 × 0.9 = 54，左上角 x = 手指 x − 27（夹在 overlay 内），y = 手指 y − 100 + 34 = 手指 y − 66。
  */
 describe('CardBar 拖卡片', () => {
   let calls: string[];
@@ -33,6 +34,18 @@ describe('CardBar 拖卡片', () => {
   const up = (x: number, y: number): Event => firePointer(area, 'pointerup', { clientX: x, clientY: y, buttons: 0 });
   const ghost = (): FakeEl | undefined => overlay.children.find(c => c.classList.contains('ghost'));
   const sword = (): FakeEl | undefined => overlay.children.find(c => c.classList.contains('dragptr'));
+  /** 剑的 transform：`translate(x px, y px) rotate(deg deg)` */
+  const swordAt = (): { x: number; y: number; deg: number } => {
+    const m = /^translate\((-?[\d.e-]+)px, (-?[\d.e-]+)px\) rotate\((-?[\d.e-]+)deg\)$/.exec(sword()!.style.transform);
+    expect(m, sword()!.style.transform).not.toBeNull();
+    return { x: Number(m![1]), y: Number(m![2]), deg: Number(m![3]) };
+  };
+  /** 影子卡片的 transform：`translate(x px, y px) scale(k)` */
+  const ghostAt = (): { x: number; y: number; k: number } => {
+    const m = /^translate\((-?[\d.e-]+)px, (-?[\d.e-]+)px\) scale\((-?[\d.]+)\)$/.exec(ghost()!.style.transform);
+    expect(m, ghost()!.style.transform).not.toBeNull();
+    return { x: Number(m![1]), y: Number(m![2]), k: Number(m![3]) };
+  };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -47,8 +60,8 @@ describe('CardBar 拖卡片', () => {
     view.className = 'view';
     mini = new FakeCanvas();
     mini.className = 'minimap';
-    // 小地图画布是方的：左上 (60, 620)、边长 180，内切圆圆心 (150, 710)、半径 90
-    mini.rect = rectOf(60, 620, 180, 180);
+    // 小地图画布是方的：左上 (120, 620)、边长 180，内切圆圆心 (210, 710)、半径 90
+    mini.rect = rectOf(120, 620, 180, 180);
     dom.hit.fn = (_x, y) => (y < 500 ? view : y > 600 && y <= 800 ? mini : area);
     const cb: CardBarCallbacks = {
       pickTypes: (types, mode) => calls.push(`types ${types.join(',')} ${mode}`),
@@ -267,7 +280,7 @@ describe('CardBar 拖卡片', () => {
     });
 
     describe('拖卡片：影子、剑与落点', () => {
-      it('overlay 里出现卡片的影子和一把剑；影子去掉了选中态与「选 N」角标', () => {
+      it('overlay 里出现卡片的影子和一把剑；影子去掉了选中态与「选 N」角标；剑上设了 --reach 为 100px', () => {
         card.classList.add('on', 'hover');
         down(card, 100, 550);
         move(100, 300);
@@ -278,141 +291,116 @@ describe('CardBar 拖卡片', () => {
         expect(g.querySelector('.sel')).toBeNull();
         expect(g.dataset.t).toBe('3');
         expect(sword()!.className).toContain('dragptr');
+        expect(sword()!.style.getPropertyValue('--reach')).toBe('100px');
         // 原卡片还在
         expect(card.parent).not.toBeNull();
       });
 
-      it('落点是 (手指 x, 手指 y − 抬起量)：剑在落点，影子在落点右下方 22px', () => {
+      it('手指离屏幕底 150px 以外：落点（剑尖）在手指正上方 100px，剑朝上（rotate 45deg）', () => {
         down(card, 100, 550);
         move(120, 300);
-        expect(sword()!.style.transform).toBe('translate(120px, 228px)');
-        expect(ghost()!.style.transform).toBe('translate(142px, 250px) scale(0.8)');
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(120);
+        expect(s.y).toBeCloseTo(200);
+        expect(s.deg).toBeCloseTo(45);
       });
 
-      it('手指刚离开卡片带时抬得少：y=480 落点在 470', () => {
+      it('不再与卡片带有关：手指还在卡片带里时落点就已经在手指上方 100px', () => {
         down(card, 100, 550);
-        move(100, 480);
-        expect(sword()!.style.transform).toBe('translate(100px, 470px)');
-        expect(ghost()!.style.transform).toBe('translate(122px, 492px) scale(0.8)');
+        move(100, 520);
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(100);
+        expect(s.y).toBeCloseTo(420);
+        move(100, 600);
+        expect(swordAt().y).toBeCloseTo(500);
       });
 
-      it('往下进小地图一侧也抬起：y=700 落点在 650', () => {
+      it('影子卡片立在手指上方：缩放 0.9、左右以手指居中、上沿在手指 y − 100 + 34', () => {
         down(card, 100, 550);
-        move(100, 700);
-        expect(sword()!.style.transform).toBe('translate(100px, 650px)');
+        move(120, 300);
+        const g = ghostAt();
+        expect(g.k).toBe(0.9);
+        expect(g.x).toBeCloseTo(120 - 27);
+        expect(g.y).toBeCloseTo(300 - 100 + 34);
       });
 
-      it('手指到屏幕底时落点也在屏幕底', () => {
-        down(card, 100, 550);
-        move(100, 800);
-        expect(sword()!.style.transform).toBe('translate(100px, 800px)');
+      it('影子不跟着落点走：手指在屏幕底时剑放倒朝右，影子仍按手指位置放', () => {
+        down(card, 110, 550);
+        move(110, 800);
+        const g = ghostAt();
+        expect(g.x).toBeCloseTo(110 - 27);
+        expect(g.y).toBeCloseTo(800 - 66);
+      });
+
+      it('影子左右夹在 overlay 内，不伸出屏幕', () => {
+        overlay.rect = rectOf(20, 0, 380, 800);
+        down(card, 60, 550);
+        move(25, 300);
+        expect(ghostAt().x).toBeCloseTo(20);
+        move(395, 300);
+        // 右边界 400 − 54 = 346
+        expect(ghostAt().x).toBeCloseTo(346);
+        move(200, 300);
+        expect(ghostAt().x).toBeCloseTo(173);
       });
 
       it('跟着手指移动更新', () => {
         down(card, 100, 550);
         move(100, 300);
         move(200, 100);
-        expect(sword()!.style.transform).toBe('translate(200px, 50px)');
-        expect(ghost()!.style.transform).toBe('translate(222px, 72px) scale(0.8)');
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(200);
+        expect(s.y).toBeCloseTo(0);
+        expect(ghostAt().x).toBeCloseTo(173);
+        expect(ghostAt().y).toBeCloseTo(34);
       });
 
-      it('接近屏幕顶时抬起量降下来，手指到屏幕顶时落点也在屏幕顶', () => {
-        down(card, 100, 550);
-        move(100, 20);
-        expect(sword()!.style.transform).toBe('translate(100px, 10px)');
-        move(100, 0);
-        expect(sword()!.style.transform).toBe('translate(100px, 0px)');
-        move(100, -30);
-        expect(sword()!.style.transform).toBe('translate(100px, -30px)');
+      it('手指进到屏幕底以上 150px 以内，剑逐渐向右放倒：一半深度时 45 度（rotate 90deg）', () => {
+        down(card, 110, 550);
+        move(110, 725);
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(110 + 100 * Math.SQRT1_2);
+        expect(s.y).toBeCloseTo(725 - 100 * Math.SQRT1_2);
+        expect(s.deg).toBeCloseTo(90);
+        // 剑柄始终正对手指：从落点指回手指的方向 = rotate + 45
+        expect(Math.atan2(725 - s.y, 110 - s.x) * 180 / Math.PI - 45).toBeCloseTo(s.deg);
       });
 
-      it('屏幕顶不在 0 时按 overlay 的顶算', () => {
-        overlay.rect = rectOf(0, 100, 400, 700);
-        down(card, 100, 550);
-        move(100, 120);
-        expect(sword()!.style.transform).toBe('translate(100px, 110px)');
-        move(100, 100);
-        expect(sword()!.style.transform).toBe('translate(100px, 100px)');
+      it('手指到屏幕底时剑水平朝右（rotate 135deg），落点的 y 也在屏幕底', () => {
+        down(card, 110, 550);
+        move(110, 800);
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(210);
+        expect(s.y).toBeCloseTo(800);
+        expect(s.deg).toBeCloseTo(135);
       });
 
-      it('影子右边放得下就在落点右下方 22px，到右边界刚好放下还是右下方', () => {
-        // 影子宽 60 × 0.8 = 48：x + 22 + 48 = 400 刚好放下
-        down(card, 100, 550);
-        move(330, 300);
-        expect(ghost()!.style.transform).toBe('translate(352px, 250px) scale(0.8)');
-      });
-
-      it('右边放不下（会伸出 overlay 右边）就翻到落点左下方，y 不变，剑不动', () => {
-        down(card, 100, 550);
-        move(340, 300);
-        expect(ghost()!.style.transform).toBe('translate(270px, 250px) scale(0.8)');
-        expect(sword()!.style.transform).toBe('translate(340px, 228px)');
-        move(331, 300);
-        expect(ghost()!.style.transform).toBe('translate(261px, 250px) scale(0.8)');
-        // 回到左边又翻回右下方
-        move(200, 300);
-        expect(ghost()!.style.transform).toBe('translate(222px, 250px) scale(0.8)');
-      });
-
-      it('翻到左下方后要等右边空出至少 40px 才翻回右下方（回差）：影子宽 48，x=290 才翻回', () => {
-        down(card, 340, 550);
-        move(340, 300);
-        expect(ghost()!.style.transform).toBe('translate(270px, 250px) scale(0.8)');
-        // 右边只空出 30px：仍在左下方
-        move(300, 300);
-        expect(ghost()!.style.transform).toBe('translate(230px, 250px) scale(0.8)');
-        move(315, 300);
-        expect(ghost()!.style.transform).toBe('translate(245px, 250px) scale(0.8)');
-        // 刚好空出 40px：翻回右下方
-        move(290, 300);
-        expect(ghost()!.style.transform).toBe('translate(312px, 250px) scale(0.8)');
-        // 翻回以后又回到「放得下就是右下方」：x=300 右边空 30px，不翻
-        move(300, 300);
-        expect(ghost()!.style.transform).toBe('translate(322px, 250px) scale(0.8)');
-        // 再往右放不下才翻
-        move(331, 300);
-        expect(ghost()!.style.transform).toBe('translate(261px, 250px) scale(0.8)');
-      });
-
-      it('每次新的拖拽从没翻开始：上次松手时在左下方，这次在回差区间里仍是右下方', () => {
-        down(card, 340, 550);
-        move(340, 300);
-        up(340, 300);
-        down(card, 300, 550);
-        move(300, 300);
-        expect(ghost()!.style.transform).toBe('translate(322px, 250px) scale(0.8)');
-      });
-
-      it('取消后再拖同样从没翻开始', () => {
-        down(card, 340, 550);
-        move(340, 300);
-        firePointer(area, 'pointercancel', { pointerId: 1 });
-        down(card, 300, 550);
-        move(300, 300);
-        expect(ghost()!.style.transform).toBe('translate(322px, 250px) scale(0.8)');
-      });
-
-      it('翻到左下方后 nodrop 照常按落点判断', () => {
-        down(card, 380, 550);
-        move(380, 570);
-        expect(ghost()!.classList.contains('nodrop')).toBe(true);
-        move(380, 300);
-        expect(ghost()!.classList.contains('nodrop')).toBe(false);
+      it('落点离手指始终是 100px，剑只朝上或朝右', () => {
+        down(card, 110, 550);
+        for (let y = 300; y <= 800; y += 25) {
+          move(110, y);
+          const s = swordAt();
+          expect(Math.hypot(s.x - 110, s.y - y), `y=${y}`).toBeCloseTo(100);
+          expect(s.x, `y=${y}`).toBeGreaterThanOrEqual(110 - 1e-9);
+          expect(s.y, `y=${y}`).toBeLessThanOrEqual(y + 1e-9);
+        }
       });
 
       it('落点在画面上时影子和剑都没有 nodrop；在小地图上也没有', () => {
-        down(card, 100, 550);
-        move(100, 300);
+        down(card, 110, 550);
+        move(110, 300);
         expect(ghost()!.classList.contains('nodrop')).toBe(false);
         expect(sword()!.classList.contains('nodrop')).toBe(false);
-        move(100, 700);
+        // 手指贴着屏幕底：落点在手指右边，落在小地图圆内
+        move(110, 790);
         expect(ghost()!.classList.contains('nodrop')).toBe(false);
         expect(sword()!.classList.contains('nodrop')).toBe(false);
       });
 
       it('落点处不是画面也不是小地图（落在卡片带上）时影子和剑都有 nodrop，回到画面上就去掉', () => {
         down(card, 100, 550);
-        move(100, 570);
+        // 手指 y=650：落点 y=550，在卡片带上
+        move(100, 650);
         expect(ghost()!.classList.contains('nodrop')).toBe(true);
         expect(sword()!.classList.contains('nodrop')).toBe(true);
         move(100, 300);
@@ -421,7 +409,6 @@ describe('CardBar 拖卡片', () => {
       });
 
       it('判断落点用的是落点坐标，不是手指坐标', () => {
-        // 命中检测点到的是落点 (100, 228)，不是手指 (100, 300)
         const seen: [number, number][] = [];
         dom.hit.fn = (x, y) => {
           seen.push([x, y]);
@@ -429,57 +416,45 @@ describe('CardBar 拖卡片', () => {
         };
         down(card, 100, 550);
         move(100, 300);
-        expect(seen[seen.length - 1]).toEqual([100, 228]);
+        const [x, y] = seen[seen.length - 1];
+        expect(x).toBeCloseTo(100);
+        expect(y).toBeCloseTo(200);
       });
 
-      it('落点在小地图画布方形的四角（内切圆外）不算小地图：影子和剑 nodrop，松手不下令', () => {
-        // 手指 y=700 时落点 y=650（离圆心 60px 高）；x=225 离圆心 hypot(75, 60) ≈ 96 > 90
-        for (const x of [75, 225]) {
-          down(card, x, 550);
-          move(x, 700);
-          expect(ghost()!.classList.contains('nodrop'), `x=${x}`).toBe(true);
-          expect(sword()!.classList.contains('nodrop'), `x=${x}`).toBe(true);
-          up(x, 700);
-          expect(drops, `x=${x}`).toEqual([]);
+      it('手指贴着屏幕底也指得到小地图圆的下半截：落点是 mini，没有 nodrop', () => {
+        // 手指 y=790 时落点约 (x + 99, 780)，在小地图圆内
+        down(card, 110, 550);
+        move(110, 790);
+        expect(ghost()!.classList.contains('nodrop')).toBe(false);
+        up(110, 790);
+        expect(drops).toHaveLength(1);
+        expect(drops[0].target).toBe('mini');
+        expect(drops[0].y).toBeGreaterThan(770);
+      });
+
+      it('落点在小地图画布方形的角上（内切圆外）不算小地图：影子和剑 nodrop，松手不下令', () => {
+        // 同一个落点（约 (209, 780)）：小地图画布在它右边（落点在画布左下角）、在它左边（落点在右下角）都在圆外
+        for (const r of [rectOf(210, 620, 180, 180), rectOf(30, 620, 180, 180)]) {
+          mini.rect = r;
+          down(card, 110, 550);
+          move(110, 790);
+          expect(ghost()!.classList.contains('nodrop'), `${r.left}`).toBe(true);
+          expect(sword()!.classList.contains('nodrop'), `${r.left}`).toBe(true);
+          up(110, 790);
+          expect(drops, `${r.left}`).toEqual([]);
           expect(overlay.children).toHaveLength(0);
         }
-        // 下面两角：手指 y=780 时抬起量 10，落点 y=770
-        for (const x of [65, 235]) {
-          down(card, x, 550);
-          move(x, 780);
-          expect(ghost()!.classList.contains('nodrop'), `x=${x}`).toBe(true);
-          up(x, 780);
-          expect(drops, `x=${x}`).toEqual([]);
-        }
-        // 上面两角：手指 y=640 时抬起量 20，落点 y=620
-        for (const x of [65, 235]) {
-          down(card, x, 550);
-          move(x, 640);
-          expect(ghost()!.classList.contains('nodrop'), `x=${x}`).toBe(true);
-          up(x, 640);
-          expect(drops, `x=${x}`).toEqual([]);
-        }
-      });
-
-      it('落点在小地图内切圆里仍是小地图（含靠近圆边的位置）', () => {
-        down(card, 210, 550);
-        move(210, 700);
-        expect(ghost()!.classList.contains('nodrop')).toBe(false);
-        expect(sword()!.classList.contains('nodrop')).toBe(false);
-        up(210, 700);
-        expect(drops).toEqual([{ kind: 'type', id: 3, x: 210, y: 650, target: 'mini' }]);
       });
 
       it('小地图不是正方形时按短边的一半作半径、圆心在矩形中心', () => {
         mini.rect = rectOf(0, 600, 400, 200);
-        down(card, 200, 550);
-        move(200, 700);
+        // 手指 (110, 700)：落点约 (160, 613)，离圆心 (200, 700) 约 95 < 100：圆内
+        down(card, 110, 550);
+        move(110, 700);
         expect(ghost()!.classList.contains('nodrop')).toBe(false);
-        // 落点 (350, 650)：离圆心 (200, 700) 约 158 > 100
-        move(350, 700);
+        // 手指 (40, 700)：落点约 (90, 613)，离圆心约 140：圆外（按宽的一半 200 算就成了圆内）
+        move(40, 700);
         expect(ghost()!.classList.contains('nodrop')).toBe(true);
-        move(280, 700);
-        expect(ghost()!.classList.contains('nodrop')).toBe(false);
       });
 
       it('落在别的画布上（不是画面也不是小地图）是 nodrop', () => {
@@ -506,27 +481,97 @@ describe('CardBar 拖卡片', () => {
       });
     });
 
+    describe('离开按下处才下令（DROP_ARM = 28）', () => {
+      it('手指离按下处不到 28px：即使落点在画面上，影子和剑也有 nodrop', () => {
+        down(card, 100, 550);
+        move(100, 530);
+        expect(ghost()).toBeDefined();
+        expect(ghost()!.classList.contains('nodrop')).toBe(true);
+        expect(sword()!.classList.contains('nodrop')).toBe(true);
+      });
+
+      it('到 28px 就算（含刚好 28），nodrop 去掉', () => {
+        down(card, 100, 550);
+        move(100, 530);
+        move(100, 522);
+        expect(ghost()!.classList.contains('nodrop')).toBe(false);
+        expect(sword()!.classList.contains('nodrop')).toBe(false);
+      });
+
+      it('按直线距离算：斜着离开 20 横 20 竖（约 28.3）就够', () => {
+        down(card, 100, 550);
+        move(120, 530);
+        expect(ghost()!.classList.contains('nodrop')).toBe(false);
+      });
+
+      it('不足 28px 松手：不下令（当作取消），影子和剑移除', () => {
+        down(card, 100, 550);
+        move(100, 530);
+        up(100, 530);
+        expect(drops).toEqual([]);
+        expect(calls).toEqual([]);
+        expect(overlay.children).toHaveLength(0);
+      });
+
+      it('够 28px 松手：照常下令，传落点坐标', () => {
+        down(card, 100, 550);
+        move(100, 522);
+        up(100, 522);
+        expect(drops).toHaveLength(1);
+        expect(drops[0]).toMatchObject({ kind: 'type', id: 3, target: 'view' });
+        expect(drops[0].x).toBeCloseTo(100);
+        expect(drops[0].y).toBeCloseTo(422);
+      });
+
+      it('拖出去再拖回按下处附近松手：取消，影子和剑又带 nodrop', () => {
+        down(card, 100, 550);
+        move(100, 300);
+        expect(ghost()!.classList.contains('nodrop')).toBe(false);
+        move(105, 540);
+        expect(ghost()!.classList.contains('nodrop')).toBe(true);
+        up(105, 540);
+        expect(drops).toEqual([]);
+      });
+
+      it('以按下处（不是滚动前的位置）为基准：滚动改拖后离按下处够远就能下令', () => {
+        down(card, 200, 550);
+        move(150, 550);
+        move(150, 450);
+        expect(ghost()!.classList.contains('nodrop')).toBe(false);
+      });
+    });
+
     describe('松手', () => {
       it('落点在画面上：回调 dropCard，传落点坐标而不是手指坐标', () => {
         down(card, 100, 550);
         move(120, 300);
         up(120, 300);
-        expect(drops).toEqual([{ kind: 'type', id: 3, x: 120, y: 228, target: 'view' }]);
+        expect(drops).toHaveLength(1);
+        expect(drops[0]).toMatchObject({ kind: 'type', id: 3, target: 'view' });
+        expect(drops[0].x).toBeCloseTo(120);
+        expect(drops[0].y).toBeCloseTo(200);
         expect(calls).toEqual([]);
       });
 
       it('落点在小地图上：target 是 mini', () => {
-        down(card, 100, 550);
-        move(150, 700);
-        up(150, 700);
-        expect(drops).toEqual([{ kind: 'type', id: 3, x: 150, y: 650, target: 'mini' }]);
+        down(card, 110, 550);
+        move(110, 790);
+        up(110, 790);
+        expect(drops).toHaveLength(1);
+        expect(drops[0]).toMatchObject({ kind: 'type', id: 3, target: 'mini' });
+        // 手指 y=790 离屏幕底 10px：转了 (150 − 10) / 150 的 90 度
+        const a = (140 / 150) * Math.PI / 2;
+        expect(drops[0].x).toBeCloseTo(110 + 100 * Math.sin(a));
+        expect(drops[0].y).toBeCloseTo(790 - 100 * Math.cos(a));
       });
 
       it('松手点与最后一次移动点不同时按松手点算落点', () => {
         down(card, 100, 550);
         move(100, 300);
         up(180, 200);
-        expect(drops).toEqual([{ kind: 'type', id: 3, x: 180, y: 128, target: 'view' }]);
+        expect(drops).toHaveLength(1);
+        expect(drops[0].x).toBeCloseTo(180);
+        expect(drops[0].y).toBeCloseTo(100);
       });
 
       it('编队卡片与全选卡片的 kind / id', () => {
@@ -541,8 +586,9 @@ describe('CardBar 拖卡片', () => {
 
       it('落点不在画面 / 小地图上就取消，不回调', () => {
         down(card, 100, 550);
-        move(100, 570);
-        up(100, 570);
+        // 手指 y=650：落点 y=550，在卡片带上
+        move(100, 650);
+        up(100, 650);
         expect(drops).toEqual([]);
         expect(calls).toEqual([]);
       });
@@ -601,10 +647,13 @@ describe('CardBar 拖卡片', () => {
         move(140, 450);
         up(140, 450);
         expect(area.scrollLeft).toBe(100);
-        expect(drops).toEqual([{ kind: 'type', id: 3, x: 140, y: 425, target: 'view' }]);
+        expect(drops).toHaveLength(1);
+        expect(drops[0]).toMatchObject({ kind: 'type', id: 3, target: 'view' });
+        expect(drops[0].x).toBeCloseTo(140);
+        expect(drops[0].y).toBeCloseTo(350);
       });
 
-      it('同一次拖动里影子回到卡片带内再松手：取消', () => {
+      it('同一次拖动里手指回到按下处附近再松手：取消', () => {
         down(card, 100, 550);
         move(100, 300);
         move(100, 560);

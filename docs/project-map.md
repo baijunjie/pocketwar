@@ -9,7 +9,7 @@
 | `src/main.ts` | 入口：菜单与对局的切换，加载模型素材后启动对局 |
 | `src/game.ts` | 一局游戏：主循环、镜头、选择与指令输入（含鼠标、触控板的镜头操作），把模拟、渲染、界面、音效串起来；还管桌面版与移动版竖屏界面的切换（主要指针是触屏且竖屏时自动进移动版，设置里「界面」可覆盖）与移动版上半屏的触屏输入，移动版不做边缘卷屏 |
 | `src/camInput.ts` | 镜头输入的纯判定，不碰 DOM：贴边卷屏速度、鼠标从哪条边离开网页的续卷方向、滚轮事件是鼠标还是触控板（`WheelClassifier`、`WheelMode`），由 `game.ts` 接到事件上 |
-| `src/touchInput.ts` | 移动版触屏输入的纯判定，不碰 DOM：界面模式（`UiMode`、`asUiMode`、`isMobileUi`）、上半屏手势分类（`TouchGestures`：点、长按、单指框选、双指缩放旋转平移；`pinchOf`）、卡片带起手方向（`cardIntent`，偏向拖卡片）、拖卡片时落点抬到手指上方多少（`dropLift`）、镜头摇杆读数（`stickVector`，死区与曲线）、点在不在矩形内切圆里（`inInscribedCircle`，移动版小地图只认圆内）、抽屉滑动方向（`swipeDir`），由 `game.ts`、`ui/cardBar.ts`、`ui/joystick.ts` 接到事件上 |
+| `src/touchInput.ts` | 移动版触屏输入的纯判定，不碰 DOM：界面模式（`UiMode`、`asUiMode`、`isMobileUi`）、上半屏手势分类（`TouchGestures`：点、长按、单指框选、双指缩放旋转平移；`pinchOf`）、卡片带起手方向（`cardIntent`，偏向拖卡片）、拖卡片时落点（剑尖）相对手指的偏移（`dropOffset`：恒定距离，平时朝上，靠近屏幕底时向右放倒）、镜头摇杆读数（`stickVector`，死区与曲线）、点在不在矩形内切圆里（`inInscribedCircle`，移动版小地图只认圆内）、抽屉滑动方向（`swipeDir`），由 `game.ts`、`ui/cardBar.ts`、`ui/joystick.ts` 接到事件上 |
 | `src/pointerLock.ts` | 锁定鼠标模式（`PointerLock`：Pointer Lock + 自绘光标）：在 window 捕获阶段拦下真实事件，改发给虚拟光标下元素的合成事件，自带 pointer capture、悬停、连击计数、提示框，全屏时用 Keyboard Lock 拦 Esc；文件开头是不碰 DOM 的纯函数；由 `game.ts` 创建，须早于 `Hud`（监听注册顺序决定它能拦住真实事件） |
 | `src/backGuard.ts` | 防误触「返回」而离开页面（单机对局不存档）：`BackGuard`（`start` / `stop`）对局期间在浏览历史里垫一条记录，返回只弹掉它，玩家下一次操作时再垫回；`inEdgeZone`、`blocksEdgeSwipe` 判定哪些从屏幕边缘起手的 touchstart 要拦下默认行为（iOS Safari 的边缘返回手势，只对自己用 pointer 事件处理手指的界面生效）；由 `game.ts` 接到事件上 |
 | `src/prefs.ts` | 玩家偏好的本地存储（`loadPref`、`savePref`，键统一 `fengyan.` 前缀），`game.ts` 与 `hud.ts` 共用 |
@@ -38,9 +38,11 @@
 | `src/render/quads.ts`、`src/render/portrait.ts`、`src/render/minimap.ts` | 贴地标记、粒子、血条与文字；兵种头像；小地图（`minimap.ts` 的 `resize()` 让画布随显示尺寸重设，移动版放大后用） |
 | `src/render/assets.ts`、`src/render/materials.ts`、`src/render/prims.ts` | glTF 加载与几何处理；材质补丁（迷雾、骨骼贴图动画）；代码生成的基本体 |
 | `src/render/models/` | 模型：`catalog.ts` 登记兵种用哪个模型（换素材改这里），`spec.ts` 说明格式与总入口，`builders.ts`、`human.ts` 代码建模 |
-| `src/ui/` | 主菜单（`menu.ts`）与游戏内界面：`hud.ts`（`Hud`，含右上角设置面板，创建并持有底部卡片 `hud.cards` 与移动版镜头摇杆 `hud.stick`；移动版另有菜单按钮、左右抽屉与边缘把手、遮罩、「取消选择」按钮，由 `setMobile` 切换）、`cardBar.ts`、`joystick.ts`、`unitText.ts`、`sword.svg` |
-| `src/ui/cardBar.ts` | 底部卡片（`CardBar`）：最左的全选卡片（屏幕内全部己方部队，回调 `pickAll`）、兵种卡片与其上一排编队卡片的渲染（卡片种类 `CardKind`：`type` / `group` / `all`）、点击选择、拖拽下令（拖到地面或小地图上松开，松在敌军身上是攻击该单位，否则攻打建筑或让这批人攻击移动）、画面框选扫卡片时的命中（`cardsIn` 返回兵种、编队与是否含全选卡片，`markCards`）；移动版的卡片带横向滚动与拖卡片（落点抬在手指上方，用一把剑 `.dragptr` 指着，影子卡片跟在落点旁；落在小地图圆外不算小地图）；回调接口 `CardBarCallbacks` 由 `game.ts` 实现（`HudCallbacks` 继承它） |
+| `src/ui/` | 主菜单（`menu.ts`）与游戏内界面：`hud.ts`（`Hud`，含右上角设置面板，创建并持有底部卡片 `hud.cards`、移动版镜头摇杆 `hud.stick` 与控制排；`setGroups` 把编队同时交给编队卡片与控制排；移动版另有菜单按钮、左右抽屉与边缘把手、遮罩，由 `setMobile` 切换）、`cardBar.ts`、`joystick.ts`、`controlRow.ts`、`pressable.ts`、`unitText.ts`、`sword.svg` |
+| `src/ui/cardBar.ts` | 底部卡片（`CardBar`）：最左的全选卡片（屏幕内全部己方部队，回调 `pickAll`）、兵种卡片与其上一排编队卡片的渲染（卡片种类 `CardKind`：`type` / `group` / `all`）、点击选择、拖拽下令（拖到地面或小地图上松开，松在敌军身上是攻击该单位，否则攻打建筑或让这批人攻击移动）、画面框选扫卡片时的命中（`cardsIn` 返回兵种、编队与是否含全选卡片，`markCards`）；移动版的卡片带横向滚动与拖卡片（卡片立在手指上方，剑 `.dragptr` 从卡片顶上伸出去，剑尖是落点；手指离开按下处一段距离松手才下令；落在小地图圆外不算小地图）；回调接口 `CardBarCallbacks` 由 `game.ts` 实现（`HudCallbacks` 继承它） |
 | `src/ui/joystick.ts` | 移动版镜头摇杆（`Joystick`：DOM 与指针处理，放在小地图左边），只暴露读数 `x` / `y`、`reset()`、`destroy()`；由 `Hud` 创建并持有，`game.ts` 每帧读它的读数卷屏 |
+| `src/ui/controlRow.ts` | 移动版下半屏的一排控制按钮（`ControlRow`：编队 1～5 与「取消选择」，`setGroups` / `update` / `destroy`）；由 `Hud` 创建并挂在小地图容器里（摇杆与小地图上方），回调由 `game.ts` 的 `groupSlot` 等实现 |
+| `src/ui/pressable.ts` | `bindPress`：让元素自己用 pointer 事件分辨点一下与长按（不靠手指触发的 click），给贴屏幕边的触屏按钮用 |
 | `src/ui/unitText.ts` | 兵种的文字说明（悬停提示 `unitTip`、光环加成与面板数值的写法），`hud.ts`、`cardBar.ts`、`menu.ts` 共用，单独成文件以免 hud 与 cardBar 互相引用 |
 | `src/ui/sword.svg` | 游戏内的剑形鼠标指针，样式表（`src/style.css`）与锁定鼠标的自绘光标（`src/pointerLock.ts`）共用 |
 | `src/audio/sound.ts` | 音效：Web Audio 现场合成，战斗声取自模拟层的特效事件 |

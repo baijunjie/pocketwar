@@ -112,9 +112,11 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 /* 拖拽中跟着鼠标的那张卡片；松开处不能下令时变灰 */
 .ucard.ghost { position: fixed; left: 0; top: 0; z-index: 40; margin: 0; pointer-events: none; transform-origin: 0 0; opacity: 0.92; transition: none; border-color: var(--gold); }
 .ucard.ghost.nodrop { opacity: 0.45; filter: grayscale(0.8); }
-/* 移动版拖卡片时指着落点的剑：元素原点就是落点，剑尖（图里的 1.5, 1.5）对在原点上 */
-.dragptr { position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 41; pointer-events: none; will-change: transform; }
-.dragptr svg { position: absolute; left: -3px; top: -3px; width: 56px; height: 56px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7)); }
+/* 移动版拖卡片时指着落点的剑：元素原点就是落点，剑尖（32 格的图里在 1.5, 1.5）对在原点上，整个元素绕剑尖转。
+   剑尖到剑柄末端长 39.5 格，放大到正好等于落点离手指的距离（--reach，由脚本给）：剑柄在手指下，剑身伸到手指外。
+   叠在拖拽中的卡片后面：卡片立在手指上方，剑尖从卡片后面伸出去，不挡卡片的内容 */
+.dragptr { --unit: calc(var(--reach) / 39.5); position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 39; pointer-events: none; transform-origin: 0 0; will-change: transform; }
+.dragptr svg { position: absolute; left: calc(var(--unit) * -1.5); top: calc(var(--unit) * -1.5); width: calc(var(--unit) * 32); height: calc(var(--unit) * 32); filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7)); }
 .dragptr.nodrop { opacity: 0.45; filter: grayscale(0.8); }
 .ucard .hp u { display: block; height: 100%; background: #6fd46a; }
 .cmds { position: static; flex: none; display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 10px 8px; border-bottom: none; border-radius: 6px 0 0 0; }
@@ -352,13 +354,35 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .ucard .nm { font-size: 12px; }
 .mobile .gcard { width: 66px; }
 .mobile .gcard img { width: 40px; height: 40px; }
-.mobile .ucard.ghost { width: 76px; }
+/* 拖拽中的卡片不透明：剑叠在它后面，透出来会盖住卡片的内容 */
+.mobile .ucard.ghost { width: 76px; opacity: 1; background: #1c1610; }
+.mobile .ucard.ghost.elite { background: #2e2412; }
+.mobile .ucard.ghost.nodrop { opacity: 0.55; }
 .mobile .ucard.ghost.gcard { width: 66px; }
 .mobile .ucard.acard, .mobile .ucard.ghost.acard { width: 60px; }
 .mobile .acard .ab { height: 52px; }
-/* 下半屏卡片带以下：摇杆在左、小地图在右并排。摇杆按宽度取一份（--joy），小地图在剩下的宽度与高度里放到最大 */
-.mobile .mini { --joy: min(clamp(84px, 30cqw, 132px), 100cqh); --map: min(100cqh, 100cqw - var(--joy) - 12px); left: 0; right: 0; top: calc(50% + var(--strip)); bottom: 0; padding: 6px; display: flex; align-items: center; justify-content: space-evenly; border: none; border-radius: 0; background: none; backdrop-filter: none; container-type: size; }
+/* 下半屏卡片带以下：最上面一排控制按钮（编队 1～5、取消选择，连间距占 --row；观战时没有这一排），下面摇杆在左、小地图在右并排。
+   摇杆按宽度取一份（--joy），小地图在剩下的宽度与高度里放到最大 */
+.mobile .mini { --row: 0px; --joy: min(clamp(84px, 30cqw, 132px), 100cqh - var(--row)); --map: min(100cqh - var(--row), 100cqw - var(--joy) - 12px); left: 0; right: 0; top: calc(50% + var(--strip)); bottom: 0; padding: 6px; display: flex; flex-direction: column; justify-content: center; gap: 8px; border: none; border-radius: 0; background: none; backdrop-filter: none; container-type: size; }
+.mobile .mini.hasctl { --row: 48px; }
+.mobile .minirow { flex: none; display: flex; align-items: center; justify-content: space-evenly; }
 .mobile .mini canvas { flex: none; width: var(--map); height: var(--map); touch-action: none; }
+/* 控制按钮自己处理手指（点一下 / 长按），按住时是 .down；触屏上 :hover 点完会一直挂着，这里不用它 */
+.mobile .ctlrow.mobile-only { display: flex !important; flex: none; gap: 6px; height: 40px; }
+.mobile .ctlrow button { flex: 1 1 0; min-width: 0; padding: 0 2px; line-height: 1.2; white-space: nowrap; touch-action: none; }
+.mobile .ctlrow button:hover { background: rgba(255, 255, 255, 0.06); }
+.mobile .ctlrow button.down { background: rgba(216, 176, 96, 0.3); }
+.mobile .ctlrow button.on, .mobile .ctlrow button.on:hover { background: var(--gold); }
+.mobile .ctlrow button.on.down { filter: brightness(0.8); }
+.mobile .ctlrow button:disabled { opacity: 0.38; }
+.mobile .ctlrow .desel { flex-grow: 1.8; }
+/* 编队按钮：队号，有人的队描金边、后面写人数 */
+.mobile .ctlrow .slot { display: flex; align-items: center; justify-content: center; gap: 3px; color: var(--dim); }
+.mobile .ctlrow .slot b { font-size: 16px; }
+.mobile .ctlrow .slot i { font-style: normal; font-size: 11px; }
+.mobile .ctlrow .slot i:empty { display: none; }
+.mobile .ctlrow .slot.has { color: var(--text); border-color: var(--gold); }
+.mobile .ctlrow .slot.on { color: #1c150b; }
 .mobile .joy { position: relative; flex: none; width: var(--joy); height: var(--joy); border-radius: 50%; border: 1px solid var(--line); background: radial-gradient(circle, rgba(216, 176, 96, 0.14), rgba(30, 24, 16, 0.92) 72%); box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6); touch-action: none; }
 .mobile .joy.on { border-color: var(--gold); }
 .mobile .joy i { position: absolute; left: 28%; top: 28%; width: 44%; height: 44%; border-radius: 50%; border: 1px solid #1a1208; background: radial-gradient(circle at 36% 30%, #ecd092, #a67c2e); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55); pointer-events: none; will-change: transform; }

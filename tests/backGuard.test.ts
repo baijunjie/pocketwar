@@ -412,7 +412,7 @@ describe('blocksEdgeSwipe 要不要拦下 touchstart 的默认行为', () => {
   /** 假元素：closest 只在自己属于 hits 里的某个界面选择器时命中（用 EDGE_SWIPE_SURFACES 里的各段判断） */
   const el = (cls: string[]): { closest(sel: string): unknown } => ({
     closest(sel: string) {
-      return sel.split(',').map(s => s.trim()).some(part => cls.some(c => part === `.${c}` || part === `canvas.${c}`)) ? this : null;
+      return sel.split(',').map(s => s.trim()).some(part => cls.some(c => part === `.${c}` || part === `canvas.${c}` || part === c)) ? this : null;
     },
   });
   const surface = el(['view']);
@@ -437,6 +437,23 @@ describe('blocksEdgeSwipe 要不要拦下 touchstart 的默认行为', () => {
     expect(blocksEdgeSwipe(ev(touch(EDGE_SWIPE_ZONE, surface)), W)).toBe(false);
     expect(blocksEdgeSwipe(ev(touch(200, surface)), W)).toBe(false);
     expect(blocksEdgeSwipe(ev(touch(W - EDGE_SWIPE_ZONE, surface)), W)).toBe(false);
+  });
+
+  it('在边缘、落在这些界面里的按钮上同样要拦：这些按钮自己用 pointer 事件处理手指，不靠 click', () => {
+    // 比如小地图容器 .mini 里的编队按钮、「取消选择」，卡片带里的按钮
+    expect(blocksEdgeSwipe(ev(touch(5, el(['mini', 'button']))), W)).toBe(true);
+    expect(blocksEdgeSwipe(ev(touch(W - 5, el(['mini', 'button']))), W)).toBe(true);
+    expect(blocksEdgeSwipe(ev(touch(5, el(['cardwrap', 'button']))), W)).toBe(true);
+    expect(blocksEdgeSwipe(ev(touch(5, el(['mini']))), W)).toBe(true);
+  });
+
+  it('界面里的按钮不在边缘不拦', () => {
+    expect(blocksEdgeSwipe(ev(touch(200, el(['mini', 'button']))), W)).toBe(false);
+    expect(blocksEdgeSwipe(ev(touch(EDGE_SWIPE_ZONE, el(['mini', 'button']))), W)).toBe(false);
+  });
+
+  it('界面之外的按钮（不在 EDGE_SWIPE_SURFACES 里）即使在边缘也不拦', () => {
+    expect(blocksEdgeSwipe(ev(touch(5, el(['button']))), W)).toBe(false);
   });
 
   it('在边缘但落在别的界面上（靠 click 的按钮）不拦', () => {

@@ -11,13 +11,22 @@ export function rectOf(left: number, top: number, width: number, height: number)
 
 export class FakeEl extends EventTarget {
   readonly classList: { add(...c: string[]): void; remove(...c: string[]): void; toggle(c: string, force?: boolean): boolean; contains(c: string): boolean };
-  readonly style: Record<string, string> = {};
+  /** 普通属性（transform 等）直接读写；CSS 变量走 setProperty / getPropertyValue（不进可枚举属性） */
+  readonly style: Record<string, string> & { setProperty(k: string, v: string): void; getPropertyValue(k: string): string } = (() => {
+    const vars = new Map<string, string>();
+    const st: Record<string, unknown> = {};
+    Object.defineProperty(st, 'setProperty', { value: (k: string, v: string) => vars.set(k, v) });
+    Object.defineProperty(st, 'getPropertyValue', { value: (k: string) => vars.get(k) ?? '' });
+    return st as never;
+  })();
   readonly dataset: Record<string, string> = {};
   readonly attrs: Record<string, string> = {};
   readonly children: FakeEl[] = [];
   parent: FakeEl | null = null;
   hidden = false;
-  innerHTML = '';
+  /** 按钮之类的 disabled（假 DOM 不做原生的禁用语义，只是个可读写的标志） */
+  disabled = false;
+  private html = '';
   textContent = '';
   scrollLeft = 0;
   offsetWidth = 0;
@@ -41,6 +50,20 @@ export class FakeEl extends EventTarget {
       contains: c => cls.has(c),
     };
   }
+
+  /** 只认「一串不带属性、不嵌套的标签」（如 `<b>1</b><i></i>`），解析成子节点；别的内容只当字符串记着 */
+  get innerHTML(): string { return this.html; }
+  set innerHTML(v: string) {
+    this.html = v;
+    for (const c of this.children.splice(0)) c.parent = null;
+    if (!/^(<(\w+)>[^<]*<\/\2>)+$/.test(v)) return;
+    for (const m of v.matchAll(/<(\w+)>([^<]*)<\/\1>/g)) {
+      const c = new FakeEl(m[1]);
+      c.textContent = m[2];
+      this.appendChild(c);
+    }
+  }
+  get lastElementChild(): FakeEl | null { return this.children[this.children.length - 1] ?? null; }
 
   get className(): string { return [...this.cls].join(' '); }
   set className(v: string) {
@@ -88,7 +111,7 @@ export class FakeEl extends EventTarget {
     c.className = this.className;
     Object.assign(c.dataset, this.dataset);
     Object.assign(c.style, this.style);
-    c.innerHTML = this.innerHTML;
+    c.html = this.html;
     c.offsetWidth = this.offsetWidth;
     if (deep) for (const k of this.children) c.appendChild(k.cloneNode(true));
     return c;
