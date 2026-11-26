@@ -16,16 +16,16 @@
 - [product/economy.md](product/economy.md)：粮草产耗与断粮，木 / 石 / 金的产量与用处，电脑怎么花资源。
 - [product/sites.md](product/sites.md)：据点——城池、营寨、资源点、临时据点四类的构成，据点范围（围墙矩形 / 占领圈），资源点与哨塔，1–3 级升级（炮楼、连弩），临时据点，占领（先拆光军事建筑），休整修复，援军（营寨由占领方选兵种）与分据点集结点。
 - [product/siege.md](product/siege.md)：攻城与城防——建筑的三种角色（军事建筑 / 城防 / 普通建筑，普通建筑不可攻击），防御建筑放箭，火把与器械打建筑，中立建筑怎么打，驻守城墙，全部建筑数值表。
-- [product/controls.md](product/controls.md)：操作与界面——选择、指令、编队、镜头与跟随、各面板、小地图、场景标记、音效、观战与结算。
+- [product/controls.md](product/controls.md)：操作与界面——选择、指令、编队、镜头与跟随（贴边卷屏、出界续卷、触控板手势）、锁定鼠标、界面布局、各面板与设置面板、小地图、场景标记、音效、观战与结算。
 
 ## 编码规范
 
-- [coding-standards.md](coding-standards.md)：写代码、审查改动时对照——模拟层与渲染界面的分层、content / systems 分工、几处要同改的规则、内容层与点数（只填级数、价目表过期要重量）、材质与插值、可点元素、测试断言。
+- [coding-standards.md](coding-standards.md)：写代码、审查改动时对照——模拟层与渲染界面的分层、content / systems 分工、几处要同改的规则、内容层与点数（只填级数、价目表过期要重量）、材质与插值、贴边面板与锁定鼠标下的界面写法、测试断言。
 
 ## 开发记忆（开工前按主题读）
 
 - [memory/render-ui.md](memory/render-ui.md)：改渲染前读——three.js 版本锁定与升级时要核对的着色器补丁、渲染提速先从哪下手。
-- [memory/verification.md](memory/verification.md)：测性能、复现或量化模拟层行为、验画面或音效前读——怎么量帧率、背靠背比较、比模拟耗时要用打包后的代码测、无头复现脚本怎么跑与看队形出图、动态效果与音效怎么验。
+- [memory/verification.md](memory/verification.md)：测性能、复现或量化模拟层行为、验画面或音效前读——怎么量帧率、背靠背比较、比模拟耗时要用打包后的代码测、无头复现脚本怎么跑与看队形出图、动态效果与音效怎么验、用自动化浏览器验锁定鼠标与滚轮输入。
 
 ## 专题
 

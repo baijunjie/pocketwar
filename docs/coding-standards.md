@@ -55,7 +55,9 @@
 
 ## 界面
 
-- 新增可点的界面元素用 `button`，或把它的类名加进 `src/game.ts` 的 `INTERACTIVE`：鼠标停在不匹配这个选择器的元素上照样会边缘卷屏。
+- 贴屏幕边的面板，贴边一侧的边框加内边距不小于 `src/camInput.ts` 的 `EDGE_ZONE`：最外沿是卷屏区，不管底下是什么都卷屏，可点的东西伸进去，停在上面就会卷走镜头。
+- 游戏内界面要在锁定鼠标模式下照常可用（`src/pointerLock.ts` 只派发合成事件）：悬停样式写成 `:hover, .hover`（合成事件触发不了 `:hover`）；
+  监听用 pointer 系列与 click / dblclick / contextmenu / wheel，不用 mousedown / mouseup / mousemove（锁定时不合成）；不用要靠浏览器默认交互操作的原生控件（select、滑条、文本框）。
 
 ## 测试
 

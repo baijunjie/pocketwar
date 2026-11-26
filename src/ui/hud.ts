@@ -10,6 +10,8 @@ import { fightState } from '../sim/siteArea';
 import { campBatch, factionUnits, militaryLeft, pickedUnit, reinfPaused } from '../sim/systems/sites';
 import { S_BRACE, S_CHARGE, S_COMBAT, S_SHIELD, S_TORCH, S_WALL, Site, World } from '../sim/world';
 import { unitPortrait } from '../render/portrait';
+import { WheelMode } from '../camInput';
+import { loadPref, savePref } from '../prefs';
 
 /** 城池、营寨名字后面的星数 = 据点等级；其他据点不能升级，不显示。compact：据点列表里写成「★3」省地方 */
 function starsHtml(s: Site, compact = false): string {
@@ -70,7 +72,20 @@ export interface HudCallbacks {
   exit(): void;
   toggleSound(): boolean;
   soundOn(): boolean;
+  /** 滚轮 / 双指滑动的解释方式（设置面板里改） */
+  wheelMode(): WheelMode;
+  setWheelMode(m: WheelMode): void;
+  /** 锁定鼠标（光标出不了画面，甩到边就卷屏） */
+  lockMouse(): boolean;
+  setLockMouse(on: boolean): void;
 }
+
+/** 设置面板里「滚轮 / 双指」的选项 */
+const WHEEL_MODES: { mode: WheelMode; label: string; tip: string }[] = [
+  { mode: 'auto', label: '自动', tip: '自动判断是鼠标滚轮还是触控板（判断不准时改选另外两项）' },
+  { mode: 'trackpad', label: '触控板', tip: '双指滑动平移镜头，捏合缩放，Option（Alt）+ 双指滑动旋转' },
+  { mode: 'mouse', label: '鼠标', tip: '滚轮缩放镜头' },
+];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -132,7 +147,11 @@ export class Hud {
   private readonly windBox: HTMLSpanElement;
   private readonly windArrow: HTMLElement;
   private windDeg = NaN;
+  /** 据点面板：标题栏点一下（或按 L）收起 / 展开，列表在 sitesList 里定时重建 */
   private readonly sitesBox: HTMLDivElement;
+  private readonly sitesList: HTMLDivElement;
+  /** 设置面板（右上角「设置」按钮弹出） */
+  private readonly settings: HTMLDivElement;
   /** 选中单个单位 / 据点时的详情（兵种栏上方） */
   private readonly selBox: HTMLDivElement;
   /** 兵种栏：屏幕内每个己方兵种一张卡片 */
@@ -151,6 +170,7 @@ export class Hud {
   private readonly over: HTMLDivElement;
   private readonly speedBtns: HTMLButtonElement[] = [];
   private soundBtn!: HTMLButtonElement;
+  private settingsBtn!: HTMLButtonElement;
   private readonly portraits = new Map<number, string>();
   private selKey = '?';
   private readonly dbg: HTMLSpanElement;
@@ -163,6 +183,8 @@ export class Hud {
   private readonly upHead: HTMLElement;
   private upKey = '';
   private sitesHtml = '';
+  /** 挂在 window 上的监听，销毁时摘掉 */
+  private readonly disposers: (() => void)[] = [];
 
   constructor(parent: HTMLElement, private readonly world: World, private readonly teamRgb: [number, number, number][],
     private readonly cb: HudCallbacks) {
@@ -203,15 +225,42 @@ export class Hud {
     this.setSound(cb.soundOn());
     const hb = el('button', '', '帮助');
     hb.onclick = () => this.toggleHelp();
+    const sb = (this.settingsBtn = el('button', '', '设置'));
     const xb = el('button', '', '退出');
     xb.onclick = () => cb.exit();
-    ctl.append(fs, this.soundBtn, hb, xb);
+    ctl.append(fs, this.soundBtn, sb, hb, xb);
     root.appendChild(ctl);
+
+    // ---- 设置面板 ----
+    this.settings = el('div', 'panel settings');
+    this.settings.hidden = true;
+    this.buildSettings();
+    sb.onclick = () => {
+      if (this.settingsOpen) this.closeSettings();
+      else {
+        this.settings.hidden = false;
+        sb.classList.add('on');
+      }
+    };
+    // 点面板与「设置」按钮以外的地方收起
+    const closeSettings = (e: PointerEvent): void => {
+      if (this.settings.hidden || this.settings.contains(e.target as Node) || sb.contains(e.target as Node)) return;
+      this.closeSettings();
+    };
+    window.addEventListener('pointerdown', closeSettings, true);
+    this.disposers.push(() => window.removeEventListener('pointerdown', closeSettings, true));
+    root.appendChild(this.settings);
 
     // ---- 据点与援军 ----
     this.sitesBox = el('div', 'panel sites');
+    const head = el('button', 'fold', '<b>据点与援军</b><i>L</i>');
+    head.title = '收起 / 展开据点列表（L）';
+    head.onclick = () => this.toggleSites();
+    this.sitesList = el('div', 'list');
+    this.sitesBox.append(head, this.sitesList);
+    if (loadPref('sitesFolded') === '1') this.sitesBox.classList.add('folded');
     // 列表会被定时重建，用事件委托响应点击
-    this.sitesBox.onpointerdown = e => {
+    this.sitesList.onpointerdown = e => {
       const row = (e.target as HTMLElement).closest<HTMLElement>('[data-id]');
       if (!row) return;
       const s = world.sites[Number(row.dataset.id)];
@@ -326,7 +375,10 @@ export class Hud {
               <tr><td>左键点据点</td><td>选中据点：升级城池、营寨，或给资源点建哨塔；己方营寨还可以选出哪个兵种</td></tr>
               <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
               <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
-              <tr><td>鼠标移到屏幕边缘、W A S D / 方向键、小地图</td><td>移动镜头（越靠边越快）；滚轮缩放</td></tr>
+              <tr><td>鼠标顶到屏幕最外沿、W A S D / 方向键、小地图</td><td>移动镜头（压在界面上也卷；鼠标冲出网页会接着往那边卷，回来即停）</td></tr>
+              <tr><td>滚轮、捏合、PageUp / PageDown</td><td>缩放（Mac 上 PageUp / PageDown 是 fn + ↑ / ↓）</td></tr>
+              <tr><td>触控板双指滑动</td><td>平移镜头；Option（Alt）+ 双指滑动旋转。识别不准时在右上角「设置」里指定是鼠标还是触控板</td></tr>
+              <tr><td>L</td><td>收起 / 展开右上的据点列表</td></tr>
               <tr><td>C</td><td>镜头跟随所选部队（平滑跟着部队走）；再按一次、或手动移动镜头即取消</td></tr>
               <tr><td>中键拖动、Q / E</td><td>旋转镜头（上下拖动调俯角）；Shift+中键拖动平移；Home 复位</td></tr>
               <tr><td>空格 / + −　M</td><td>暂停 / 调整速度　开关音效</td></tr>
@@ -346,7 +398,7 @@ export class Hud {
     const start = this.help.querySelector('button')!;
     start.onclick = () => this.toggleHelp();
     this.help.onkeydown = e => {
-      if (e.key.startsWith('Arrow') || e.key === ' ' || e.key === 'Home') e.stopPropagation();
+      if (e.key.startsWith('Arrow') || e.key === ' ' || e.key === 'Home' || e.key === 'End' || e.key === 'PageUp' || e.key === 'PageDown') e.stopPropagation();
     };
     this.help.onclick = e => {
       if (e.target === this.help) this.toggleHelp();
@@ -364,7 +416,57 @@ export class Hud {
 
   toggleHelp(): void {
     this.help.hidden = !this.help.hidden;
+    // 设置面板浮在遮罩之上，不收起会留在帮助上面还能点
+    if (this.helpOpen) this.closeSettings();
     if (this.helpOpen) this.helpContent.focus({ preventScroll: true });
+  }
+
+  /** 收起 / 展开据点列表，记住选择 */
+  toggleSites(): void {
+    const folded = this.sitesBox.classList.toggle('folded');
+    savePref('sitesFolded', folded ? '1' : '0');
+  }
+
+  get settingsOpen(): boolean {
+    return !this.settings.hidden;
+  }
+
+  closeSettings(): void {
+    this.settings.hidden = true;
+    this.settingsBtn.classList.remove('on');
+  }
+
+  private buildSettings(): void {
+    const row = el('div', 'srow', '<span title="鼠标滚轮与触控板双指滑动怎么操作镜头">滚轮 / 双指</span>');
+    const seg = el('div', 'seg');
+    const btns = WHEEL_MODES.map(({ mode, label, tip }) => {
+      const b = el('button', '', label);
+      b.title = tip;
+      b.onclick = () => {
+        this.cb.setWheelMode(mode);
+        for (const x of btns) x.classList.toggle('on', x === b);
+      };
+      b.classList.toggle('on', this.cb.wheelMode() === mode);
+      return b;
+    });
+    seg.append(...btns);
+    row.appendChild(seg);
+    this.settings.append(row, el('div', 'shint', '触控板：双指滑动平移，捏合缩放，Option（Alt）+ 双指旋转。<br>鼠标：滚轮缩放，中键拖动旋转。<br>PageUp / PageDown（Mac：fn + ↑ / ↓）也能缩放'));
+
+    const lrow = el('div', 'srow', '<span title="开启后在画面上点一下，光标就出不了画面，甩到边缘即卷屏">锁定鼠标</span>');
+    const lseg = el('div', 'seg');
+    const lbtns = [true, false].map(on => {
+      const b = el('button', '', on ? '开' : '关');
+      b.onclick = () => {
+        this.cb.setLockMouse(on);
+        for (const x of lbtns) x.classList.toggle('on', x === b);
+      };
+      b.classList.toggle('on', this.cb.lockMouse() === on);
+      return b;
+    });
+    lseg.append(...lbtns);
+    lrow.appendChild(lseg);
+    this.settings.append(lrow, el('div', 'shint', '开启后在画面上点一下进入锁定，光标改由游戏自己画。按 Esc 退出锁定：全屏时（Chrome / Edge）锁定中 Esc 照常交给游戏（取消选择、退出指令模式），改为长按 Esc 退出锁定；其他浏览器与非全屏时，第一下 Esc 只解锁、不取消选择。解锁后再点一下画面重新锁定'));
   }
 
   setSound(on: boolean): void {
@@ -459,7 +561,7 @@ export class Hud {
     this.moraleBox.title = ['全军士气的加减项：', ...teamMoraleFactors(w, human).map(f => `${f.label} ${f.value > 0 ? '+' : ''}${f.value}`),
       '另受附近敌我兵力对比、伤亡、负伤影响'].join('\n');
     // 据点列表：正经据点一行一个，资源点挤成一排小牌子
-    let html = '<h3>据点与援军</h3>';
+    let html = '';
     const order = w.sites.slice().sort((a, b) => (a.owner === human ? 0 : a.owner === 0 ? 1 : 2) - (b.owner === human ? 0 : b.owner === 0 ? 1 : 2));
     let chips = '';
     for (const s of order) {
@@ -504,7 +606,7 @@ export class Hud {
       html += `<div class="site" data-id="${s.id}" title="${tip}"><span class="dot" style="background:${c}"></span><span class="nm">${s.name}${starsHtml(s, true)}</span><span class="st">${state}</span>${cap}</div>`;
     }
     if (chips) html += `<h3 class="sub">资源点</h3><div class="chips">${chips}</div>`;
-    if (html !== this.sitesHtml) this.sitesBox.innerHTML = this.sitesHtml = html;
+    if (html !== this.sitesHtml) this.sitesList.innerHTML = this.sitesHtml = html;
   }
 
   private portrait(defIdx: number, team: number): string {
@@ -874,6 +976,7 @@ export class Hud {
   }
 
   showGameOver(win: boolean | null, onAgain: () => void): void {
+    this.closeSettings();
     const w = this.world;
     const human = w.humanTeam || 1, other = 3 - human;
     const f = w.factions as FactionDef[];
@@ -899,6 +1002,7 @@ export class Hud {
   }
 
   destroy(): void {
+    for (const f of this.disposers) f();
     this.root.remove();
   }
 }

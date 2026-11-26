@@ -10,15 +10,16 @@ import { Minimap } from './render/minimap';
 import { Renderer } from './render/renderer';
 import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
+import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection } from './camInput';
+import { loadPref, savePref } from './prefs';
+import { PointerLock } from './pointerLock';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
 /** 镜头跟随的平滑程度：每秒把剩下的距离收拢多少（越大跟得越紧） */
 const FOLLOW_RATE = 4;
-/** 界面上能交互的元素：鼠标停在这些上面时不边缘卷屏 */
-const INTERACTIVE = 'button, canvas, input, select, a, .site, .chip, .ucard, .card, .unitbar, .detail';
-
-/** 离屏幕边缘多少像素以内开始卷屏 */
-const EDGE_ZONE = 72;
+/** 滚轮一格按行 / 按页计量时（Firefox 的鼠标滚轮）换算成多少像素 */
+const WHEEL_LINE = 33;
+const WHEEL_PAGE = 800;
 
 export class GameApp {
   readonly world: World;
@@ -41,8 +42,16 @@ export class GameApp {
   private raf = 0;
   private mode: Mode = '';
   private readonly keys = new Set<string>();
-  /** ui：鼠标正停在界面面板上（此时不卷屏；面板与屏幕边缘之间的空隙照常卷） */
-  private mouse = { x: 0, y: 0, inside: false, ui: false };
+  /**
+   * mx / my：最近一次移动的方向（判断鼠标从哪条边离开网页）；
+   * out：鼠标从某条边离开了网页，朝那个方向续卷，直到鼠标回来或窗口失去焦点
+   */
+  /** buttons：按着的鼠标键（拖框、拖小地图、在兵种栏拖框时不边缘卷屏） */
+  private mouse = { x: 0, y: 0, mx: 0, my: 0, buttons: 0, inside: false, out: null as { dx: number; dy: number } | null };
+  private wheelMode: WheelMode = asWheelMode(loadPref('wheel'));
+  private readonly wheel = new WheelClassifier();
+  /** Safari 的捏合手势进行中：开始时的缩放（期间忽略带 Ctrl 的 wheel，免得别的浏览器两种事件都发时缩两次） */
+  private gesture: { zoom: number } | null = null;
   private drag: { x: number; y: number; active: boolean } | null = null;
   private pan: { x: number; y: number; rotate: boolean } | null = null;
   /** 右键按下的位置：拖出一段距离就是在指定队列朝向 */
@@ -57,12 +66,21 @@ export class GameApp {
   private over = false;
   private fps = 60;
   private readonly cleanup: (() => void)[] = [];
+  /** 锁定鼠标模式：要在 Hud 之前建，它在 window 捕获阶段的监听得排在 Hud 的前面，才拦得住真实事件 */
+  private readonly pointer: PointerLock;
 
   constructor(private readonly root: HTMLElement, private readonly canvas: HTMLCanvasElement, opts: GameOptions,
     private readonly onExit: () => void) {
     this.game = createGame(opts);
     const w = (this.world = this.game.world);
     this.renderer = new Renderer(canvas, w);
+    this.pointer = new PointerLock(canvas, loadPref('lockMouse') === '1', locked => {
+      // 解锁后真实光标在哪不知道，等它动一下再算；虚拟光标停在边上时别接着卷
+      this.mouse.out = null;
+      if (!locked) this.mouse.inside = false;
+    }, giveUp => this.hud.message(giveUp
+      ? '锁定鼠标连续失败，这一局点画面不再进入锁定；在「设置」里关掉再打开即可重试'
+      : '锁定鼠标失败，请再点一下画面；一直失败可在「设置」里关掉', 'bad'));
     const rgb = this.renderer.teamRgb;
     this.hud = new Hud(root, w, rgb, {
       command: c => this.command(c),
@@ -75,6 +93,16 @@ export class GameApp {
       exit: () => this.onExit(),
       toggleSound: () => this.sound.toggle(),
       soundOn: () => this.sound.enabled,
+      wheelMode: () => this.wheelMode,
+      setWheelMode: m => {
+        this.wheelMode = m;
+        savePref('wheel', m);
+      },
+      lockMouse: () => this.pointer.enabled,
+      setLockMouse: on => {
+        this.pointer.setEnabled(on);
+        savePref('lockMouse', on ? '1' : '0');
+      },
     });
     this.minimap = new Minimap(this.hud.minimap, w, this.renderer.terrain.miniColors,
       rgb.map(c => `rgb(${c[0]},${c[1]},${c[2]})`));
@@ -102,6 +130,7 @@ export class GameApp {
   destroy(): void {
     cancelAnimationFrame(this.raf);
     for (const f of this.cleanup) f();
+    this.pointer.destroy();
     this.hud.destroy();
     this.sound.dispose();
     this.box.remove();
@@ -207,33 +236,60 @@ export class GameApp {
         else this.clickSelect(p.x, p.y, e.shiftKey);
       }
     });
-    // 鼠标位置在整个窗口上跟踪，并记下它是不是停在界面面板上
+    // 鼠标位置在整个窗口上跟踪（贴边卷屏不管底下是不是界面面板）
     this.on(window, 'pointermove', e => {
-      const p = this.local(e);
-      this.mouse.x = p.x;
-      this.mouse.y = p.y;
-      this.mouse.inside = p.x >= 0 && p.y >= 0 && p.x <= this.renderer.viewW && p.y <= this.renderer.viewH;
-      // 只读的面板（顶栏文字、提示条等）不挡卷屏；按钮、列表项、小地图这类能交互的才挡
-      const t = e.target as Element | null;
-      this.mouse.ui = t !== cv && !!t?.closest?.(INTERACTIVE);
+      const p = this.local(e), m = this.mouse;
+      if (p.x !== m.x || p.y !== m.y) {
+        m.mx = p.x - m.x;
+        m.my = p.y - m.y;
+      }
+      m.x = p.x;
+      m.y = p.y;
+      m.buttons = e.buttons;
+      m.inside = p.x >= 0 && p.y >= 0 && p.x <= this.renderer.viewW && p.y <= this.renderer.viewH;
+      m.out = null;
     });
-    this.on(document.documentElement, 'pointerleave', () => {
-      this.mouse.inside = false;
+    // 拖到边上松手、鼠标不再动时也要马上开始卷屏
+    this.on(window, 'pointerup', e => {
+      this.mouse.buttons = e.buttons;
     });
-    this.on(cv, 'wheel', e => {
-      e.preventDefault();
-      const cam = this.renderer.cam;
-      const p = this.local(e);
-      const before = this.renderer.screenToWorld(p.x, p.y);
-      cam.zoom *= Math.exp(-e.deltaY * 0.0015);
-      this.renderer.clampCam();
-      // 跟随中只缩放，不往鼠标处挪（挪了也会被拉回来）
-      if (this.follow) return;
-      const after = this.renderer.screenToWorld(p.x, p.y);
-      cam.x += before.x - after.x;
-      cam.y += before.y - after.y;
-      this.renderer.clampCam();
+    // 鼠标从某条边离开网页（冲过头进了浏览器的标签栏、macOS 全屏时碰出了菜单栏）：朝那个方向续卷，鼠标回来即停
+    this.on(document.documentElement, 'pointerleave', e => {
+      const p = this.local(e), m = this.mouse;
+      m.inside = false;
+      m.out = e.pointerType === 'mouse' && !e.buttons
+        ? exitDirection(p.x, p.y, m.mx, m.my, this.renderer.viewW, this.renderer.viewH) : null;
+    });
+    this.on(document.documentElement, 'pointerenter', () => {
+      this.mouse.out = null;
+    });
+    this.on(cv, 'wheel', e => this.onWheel(e), { passive: false });
+    // 捏合时浏览器默认缩放整个网页：在界面面板上捏合也拦下（面板里的列表照常滚动）
+    this.on(window, 'wheel', e => {
+      if (e.ctrlKey) e.preventDefault();
     }, { passive: false });
+    // Safari 的捏合不发带 Ctrl 的 wheel，而是自己的手势事件（不在标准类型里）
+    const gestureStart = (e: Event): void => {
+      e.preventDefault();
+      this.gesture = { zoom: this.renderer.cam.zoom };
+    };
+    const gestureChange = (e: Event): void => {
+      e.preventDefault();
+      const g = this.gesture, scale = (e as Event & { scale?: number }).scale;
+      // 锁定时手势事件的 target 多半是锁定元素：改看虚拟光标下的元素
+      const v = this.pointer.virtualPos;
+      const onCanvas = v ? document.elementFromPoint(v.x, v.y) === cv : e.target === cv;
+      if (!g || !scale || !onCanvas) return;
+      this.zoomAt(this.mouse.x, this.mouse.y, (g.zoom * scale) / this.renderer.cam.zoom);
+    };
+    const gestureEnd = (e: Event): void => {
+      e.preventDefault();
+      this.gesture = null;
+    };
+    for (const [type, fn] of [['gesturestart', gestureStart], ['gesturechange', gestureChange], ['gestureend', gestureEnd]] as const) {
+      window.addEventListener(type, fn, { passive: false });
+      this.cleanup.push(() => window.removeEventListener(type, fn));
+    }
 
     // 小地图
     const mm = this.hud.minimap;
@@ -272,11 +328,12 @@ export class GameApp {
       this.sound.unlock();
       if (e.repeat) return;
       const human = this.world.humanTeam;
-      if (k.startsWith('Arrow') || k === ' ') e.preventDefault();
+      if (k.startsWith('Arrow') || k === ' ' || k === 'PageUp' || k === 'PageDown') e.preventDefault();
       // 移动镜头的键一按下就取消跟随（卷屏是每帧轮询按住的键，点得太快可能一帧也没赶上）
       if (k.startsWith('Arrow') || (!e.ctrlKey && !e.metaKey && (k === 'w' || k === 'a' || k === 's' || k === 'd'))) this.stopFollow();
       if (k === 'Escape') {
         if (this.hud.helpOpen) this.hud.toggleHelp();
+        else if (this.hud.settingsOpen) this.hud.closeSettings();
         else if (this.mode) this.setMode('');
         else {
           this.setSelection([]);
@@ -289,6 +346,7 @@ export class GameApp {
       else if (k === '=' || k === '+') this.setSpeed(Math.min(4, Math.max(1, this.speed * 2)));
       else if (k === '-') this.setSpeed(Math.max(1, this.speed / 2));
       else if (k === 'm') this.hud.setSound(this.sound.toggle());
+      else if (k === 'l') this.hud.toggleSites();
       else if (!human) return;
       else if (k === 'a' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -354,7 +412,61 @@ export class GameApp {
       this.rdrag = null;
       this.renderer.arrow = null;
       this.mouse.inside = false;
+      this.mouse.out = null;
+      this.mouse.buttons = 0;
+      this.gesture = null;
     });
+  }
+
+  /**
+   * 滚轮与触控板：捏合（带 Ctrl 的 wheel）一律缩放；鼠标滚轮缩放；触控板双指滑动平移镜头，按住 Option（Alt）时旋转、调俯角。
+   * 鼠标还是触控板按设置，「自动」时由 `WheelClassifier` 按事件特征判断。
+   */
+  private onWheel(e: WheelEvent): void {
+    e.preventDefault();
+    const p = this.local(e);
+    const unit = e.deltaMode === 1 ? WHEEL_LINE : e.deltaMode === 2 ? WHEEL_PAGE : 1;
+    const dx = e.deltaX * unit, dy = e.deltaY * unit;
+    if (e.ctrlKey) {
+      if (this.gesture) return;
+      this.zoomAt(p.x, p.y, Math.exp(-Math.max(-50, Math.min(50, dy)) * 0.01));
+      return;
+    }
+    const kind = this.wheel.classify({ deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode,
+      wheelDeltaY: (e as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY }, this.wheelMode, performance.now() / 1000);
+    if (kind === 'mouse') {
+      this.zoomAt(p.x, p.y, Math.exp(-dy * 0.0015));
+      return;
+    }
+    const cam = this.renderer.cam;
+    if (e.altKey) {
+      // 自然滚动下手指右移时 deltaX 为负：与中键往右拖同向转
+      cam.yaw += dx * 0.006;
+      cam.pitch -= dy * 0.004;
+      this.renderer.clampCam();
+      return;
+    }
+    // 像滚动网页一样平移：屏幕中央那一点地面跟着手指走
+    const cx = this.renderer.viewW / 2, cy = this.renderer.viewH / 2;
+    const a = this.renderer.screenToWorld(cx, cy), b = this.renderer.screenToWorld(cx + dx, cy + dy);
+    if (a.x === b.x && a.y === b.y) return;
+    this.stopFollow();
+    cam.x += b.x - a.x;
+    cam.y += b.y - a.y;
+    this.renderer.clampCam();
+  }
+
+  /** 以屏幕上 (sx, sy) 为中心缩放 factor 倍；跟随中只缩放，不往那一点挪（挪了也会被拉回来） */
+  private zoomAt(sx: number, sy: number, factor: number): void {
+    const cam = this.renderer.cam;
+    const before = this.renderer.screenToWorld(sx, sy);
+    cam.zoom *= factor;
+    this.renderer.clampCam();
+    if (this.follow) return;
+    const after = this.renderer.screenToWorld(sx, sy);
+    cam.x += before.x - after.x;
+    cam.y += before.y - after.y;
+    this.renderer.clampCam();
   }
 
   private local(e: MouseEvent): { x: number; y: number } {
@@ -365,6 +477,7 @@ export class GameApp {
   private setMode(m: Mode): void {
     this.mode = m;
     this.canvas.style.cursor = m ? 'crosshair' : 'default';
+    this.pointer.refreshCursor();
     this.hud.setMode(m === 'amove' ? '攻击移动：左键指定目的地（右键取消）' : m === 'rally' ? `集结点：左键指定位置，${this.selSite >= 0 ? '只设所选据点' : '给全部据点设'}（右键退出；Shift+R 取消集结点）`
       : m === 'outpost' ? `扎营：左键指定临时据点的位置，所选部队会赶去搭建（木材 ${RULES.economy.outpostCost}，右键取消）` : '');
   }
@@ -865,12 +978,18 @@ export class GameApp {
     if (k.has('ArrowRight') || k.has('d')) dx += 1;
     if (k.has('ArrowUp') || k.has('w')) dy -= 1;
     if (k.has('ArrowDown') || k.has('s')) dy += 1;
-    // 鼠标移到屏幕边缘卷屏：越靠近边缘越快
-    if (this.mouse.inside && !this.mouse.ui && !this.drag && !this.pan && !this.rdrag?.active && !this.hud.helpOpen && document.hasFocus()) {
-      const m = EDGE_ZONE, vw = this.renderer.viewW, vh = this.renderer.viewH;
-      const edge = (v: number): number => (v >= m ? 0 : 0.25 + 0.75 * (1 - Math.max(0, v) / m) ** 2);
-      dx += edge(vw - this.mouse.x) - edge(this.mouse.x);
-      dy += edge(vh - this.mouse.y) - edge(this.mouse.y);
+    // 鼠标贴到屏幕最外沿卷屏，底下是界面面板也卷；从某条边离开了网页就朝那边续卷。
+    // 按着键拖动时不卷（画面上拖框、兵种栏拖框、拖小地图）：拖过头卷走了镜头，松手时选中的就不是框住的那批人
+    const m = this.mouse;
+    if (!m.buttons && !this.drag && !this.pan && !this.hud.helpOpen && document.hasFocus()) {
+      if (m.out) {
+        dx += m.out.dx;
+        dy += m.out.dy;
+      } else if (m.inside) {
+        const vw = this.renderer.viewW, vh = this.renderer.viewH;
+        dx += edgeSpeed(vw - 1 - m.x) - edgeSpeed(m.x);
+        dy += edgeSpeed(vh - 1 - m.y) - edgeSpeed(m.y);
+      }
     }
     if (dx || dy) {
       this.stopFollow();
@@ -881,6 +1000,9 @@ export class GameApp {
     // Q / E 旋转镜头
     const rot = (k.has('q') ? 1 : 0) - (k.has('e') ? 1 : 0);
     if (rot) cam.yaw += rot * 1.5 * dt;
+    // PageUp / PageDown（Mac 上 fn + ↑ / ↓）缩放：给不能捏合的 Magic Mouse 与键盘党
+    const zoom = (k.has('PageUp') ? 1 : 0) - (k.has('PageDown') ? 1 : 0);
+    if (zoom) this.zoomAt(this.renderer.viewW / 2, this.renderer.viewH / 2, Math.exp(zoom * 1.5 * dt));
   }
 
   private stopFollow(): void {

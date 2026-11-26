@@ -7,7 +7,10 @@
 | 路径 | 职责 |
 |------|------|
 | `src/main.ts` | 入口：菜单与对局的切换，加载模型素材后启动对局 |
-| `src/game.ts` | 一局游戏：主循环、镜头、选择与指令输入，把模拟、渲染、界面、音效串起来 |
+| `src/game.ts` | 一局游戏：主循环、镜头、选择与指令输入（含鼠标、触控板的镜头操作），把模拟、渲染、界面、音效串起来 |
+| `src/camInput.ts` | 镜头输入的纯判定，不碰 DOM：贴边卷屏速度、鼠标从哪条边离开网页的续卷方向、滚轮事件是鼠标还是触控板（`WheelClassifier`、`WheelMode`），由 `game.ts` 接到事件上 |
+| `src/pointerLock.ts` | 锁定鼠标模式（`PointerLock`：Pointer Lock + 自绘光标）：在 window 捕获阶段拦下真实事件，改发给虚拟光标下元素的合成事件，自带 pointer capture、悬停、连击计数、提示框，全屏时用 Keyboard Lock 拦 Esc；文件开头是不碰 DOM 的纯函数；由 `game.ts` 创建，须早于 `Hud`（监听注册顺序决定它能拦住真实事件） |
+| `src/prefs.ts` | 玩家偏好的本地存储（`loadPref`、`savePref`，键统一 `fengyan.` 前缀），`game.ts` 与 `hud.ts` 共用 |
 | `src/sim/` | 纯逻辑的模拟层（世界状态、地图、寻路、开局部署） |
 | `src/sim/world.ts` | 世界状态（单位、建筑、据点、投射物、环境、补给）与系统管线 `World.tick()` |
 | `src/sim/state.ts` | 模拟层共用常量：容量上限、指令、交手状态（`ENG_*`，`World.engaged` 的三态）、状态位、特效种类，不依赖任何模块 |
@@ -31,7 +34,7 @@
 | `src/render/quads.ts`、`src/render/portrait.ts`、`src/render/minimap.ts` | 贴地标记、粒子、血条与文字；兵种头像；小地图 |
 | `src/render/assets.ts`、`src/render/materials.ts`、`src/render/prims.ts` | glTF 加载与几何处理；材质补丁（迷雾、骨骼贴图动画）；代码生成的基本体 |
 | `src/render/models/` | 模型：`catalog.ts` 登记兵种用哪个模型（换素材改这里），`spec.ts` 说明格式与总入口，`builders.ts`、`human.ts` 代码建模 |
-| `src/ui/` | 主菜单（`menu.ts`）与游戏内界面（`hud.ts`） |
+| `src/ui/` | 主菜单（`menu.ts`）与游戏内界面（`hud.ts`，含右上角设置面板） |
 | `src/audio/sound.ts` | 音效：Web Audio 现场合成，战斗声取自模拟层的特效事件 |
 | `src/dev/viewer.ts` | 开发用预览页（兵种与动画、静态素材、glTF） |
 | [`tools/measure/`](../tools/measure/README.md) | 对战测量工具（开发用，游戏运行时不引用）：无头对战量出兵种点数与价目表，核对阵营点数与预算；生成 `content/prices.json` 与自带的实测表 |
