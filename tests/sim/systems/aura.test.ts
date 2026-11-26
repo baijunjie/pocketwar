@@ -13,7 +13,7 @@ import { flatWorld } from '../../helpers';
 const C = (120 * TILE) / 2;
 const NEUTRAL = AURA_KINDS[AU_RANGED_TAKEN].neutral;
 
-// 测试用的光环兵种：用真特性 cover 展开（价目表里有它），再把光环数据换成要测的半径与倍率；登记成 probe，不混进正式兵种
+// 测试用的光环兵种：用真特性 cover 展开（点数已声明），再把光环数据换成要测的半径与倍率；登记成 probe，不混进正式兵种
 function probeUnit(key: string, radius: number, value: number): number {
   const [d] = expandUnit({ faction: 'china', key, name: key, arch: 'inf', spec: { traits: ['cover'] }, desc: '' }, EXPAND_RULES, false);
   d.probe = true;

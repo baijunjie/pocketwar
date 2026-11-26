@@ -1,14 +1,45 @@
 /**
  * 对战测量工具：基准单位与按级数造变体。
  * 开发工具，不属于游戏本体：游戏运行时（src/）不引用本目录。
+ * 这里的「位置」只是对战测量的概念：兵种在标准混编军里占的位置。
  */
 import {
-  ARCHETYPES, ARCHETYPE_INDEX, DIMS, EXPAND_RULES, LEVELS, Levels, POSITIONS, Panel, SHIELD_SPEED_MUL, SIZES, WR_AUX, STEP, TILE, applyLevels, auxWeapon, levelTables, linkWeapons, weaponLevels, TraitUse, UNITS, UnitDef, expandUnit, linkMatchups, registerUnit, traitMix,
+  ARCHETYPES, ARCHETYPE_INDEX, DIMS, EXPAND_RULES, LEVELS, Levels, Panel, SHIELD_SPEED_MUL, SIZES, WR_AUX, STEP, TILE, applyLevels, auxWeapon, levelTables, linkWeapons, weaponLevels, TraitUse, UNITS, UnitDef, expandUnit, isContentUnit, linkMatchups, registerUnit, traitMix, archetypePower,
 } from '../../src/sim/defs';
 
-export { DIMS, STEP, POSITIONS };
+export { DIMS, STEP };
 export type { Levels };
 export type { Dim } from '../../src/sim/defs';
+
+/**
+ * 标准混编军里的位置：按原型分，带长柄的近战步兵单独一个位置。兵种测量都按位置。
+ * trait 是位置要求带的特性，位置基准 = 原型基准 + 这个特性。
+ * ref 是这个位置在标准混编军里顶替的位置（缺省是自己）：标准混编军的人数构成只按自己的位置排，
+ * 顶替的位置不进标准混编军，它的兵种实测在「把 ref 位置整个换成它的基准」的标准混编军上量，参照组也是这支军队。
+ */
+export const POSITIONS: Record<string, { arch: string; trait?: string; name: string; ref?: string }> = {
+  inf: { arch: 'inf', name: '近战步兵' },
+  spear: { arch: 'inf', trait: 'polearm', name: '近战步兵（长柄）' },
+  ranged: { arch: 'ranged', name: '远程步兵' },
+  cav: { arch: 'cav', name: '近战骑兵' },
+  cavr: { arch: 'cavr', name: '远程骑兵' },
+  siege: { arch: 'siege', name: '抛射器械' },
+  ele: { arch: 'vehicle', name: '载具' },
+  bolt: { arch: 'bolt', name: '直射器械', ref: 'siege' },
+};
+
+/** 兵种所在的位置：同原型，带位置要求的特性就归带特性的位置，否则归不带的 */
+export function positionOf(d: UnitDef): string {
+  const arch = ARCHETYPES[d.arch];
+  const has = (t: string): boolean => d.ownTraits.includes(t) || (arch.base.traits ?? []).some(u => (typeof u === 'string' ? u : u[0]) === t);
+  const cands = Object.entries(POSITIONS).filter(([, p]) => p.arch === arch.key);
+  const hit = cands.find(([, p]) => p.trait && has(p.trait)) ?? cands.find(([, p]) => !p.trait);
+  if (!hit) throw new Error(`没有对应的位置：${arch.key}`);
+  return hit[0];
+}
+
+/** 正式兵种（不含测量工具登记的基准单位与变体） */
+export const contentUnits = (): UnitDef[] => UNITS.filter(isContentUnit);
 
 /**
  * 各位置的基准单位：原型基准面板，带上位置要求的特性（枪兵的位置是近战步兵基准加长柄），不带兵种特有的特性。
@@ -20,6 +51,9 @@ for (const [key, pos] of Object.entries(POSITIONS)) {
     faction: 'china', key: `base_${key}`, name: `基准${pos.name}`, arch: pos.arch,
     spec: { traits: pos.trait ? [pos.trait] : [] }, desc: '',
   }, EXPAND_RULES, false)[0];
+  // 基准单位是位置的零点：位置要求的特性（长柄）不计点，战力估值取原型基准（对战里士气按战力估值算，见 systems/morale.ts）
+  d.points = 0;
+  d.power = archetypePower(ARCHETYPES[ARCHETYPE_INDEX[pos.arch]]);
   d.probe = true;
   registerUnit(d);
   BASE[key] = d;

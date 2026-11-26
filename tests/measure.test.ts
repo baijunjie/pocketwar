@@ -1,12 +1,12 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { POSITIONS, UNITS } from '../src/sim/defs';
+import { UNITS } from '../src/sim/defs';
 import { ArmySpec, buildArmy, refSpec } from '../tools/measure/army';
 import { battle, sample } from '../tools/measure/battle';
 import { Measurer } from '../tools/measure/measure';
 import { Job, Runner, inProcessRunner, poolRunner } from '../tools/measure/runner';
 import { pairedDiff, seedList, significant, stat, withinSe } from '../tools/measure/stats';
-import { BASE, REF_SHARE, STEP, proxySlots, refForce, slotOf, variant } from '../tools/measure/units';
+import { BASE, POSITIONS, REF_SHARE, STEP, proxySlots, refForce, slotOf, variant } from '../tools/measure/units';
 
 describe('对战测量：军队与变体', () => {
   it('标准混编军按位置表混编基准单位，规模按兵力份数计（100 人的标准混编军是 refForce(100) 份）', () => {
@@ -142,7 +142,6 @@ describe('对战测量：顶替别的位置的位置（直射器械顶替器械�
     const ref = { type: 'ref', size, slots: { siege: { unit: BASE.bolt.key } } };
     const dim = await m.dimension('bolt', { hp: 8 }, { size, n: 2 });
     expect(dim.label).toBe('bolt:hp=8');
-    expect(dim.meta).toEqual({ slot: 'bolt', levels: { hp: 8 } });
     const as = jobs.map(j => j.a);
     expect(as).toContainEqual({ type: 'ref', size, slots: { siege: { unit: BASE.bolt.key, levels: { hp: 8 } } } });
     expect(as).toContainEqual(ref);

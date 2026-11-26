@@ -2,8 +2,8 @@
  * 兵种表。加一个兵种 = 在这里加一行 U(...)：
  *   阵营、key、名称、原型、属性（没写的取原型缺省值）、说明。
  *   生命、输出、节奏、护甲、机动、射程、攻击距离、纪律、冲击、破甲、范围杀伤、举盾这些点数维度只填相对原型基准的级数（lv），
- *   面板由原型基准与阶梯算出，按价目表计点；只影响攻城的对建筑倍率、最近射程，以及投射物外观、碰撞半径这些字段不计点，直接填。
- * 兵种的特殊能力用特性（traits）挂上去，特性在下面用 defineTrait 定义，带标签、克制、受击修正、特殊动作、副武器或伤害类型，按价目表计点。
+ *   面板由原型基准与阶梯算出，按维度单价计点（points.ts 的 DIM_PRICE）；只影响攻城的对建筑倍率、最近射程，以及投射物外观、碰撞半径这些字段不计点，直接填。
+ * 兵种的特殊能力用特性（traits）挂上去，特性在下面用 defineTrait 定义，带标签、克制、受击修正、特殊动作、副武器或伤害类型，各自声明点数（points）。
  * 每个兵种自动带一个高级形态（key 加 _e，数值加成见 rules.ts 的 ELITE），名称缺省是「重甲 + 原名」。
  * 新原型用 defineArchetype，新体型在 rules.ts 里 defineSize。模型在 src/render/models/catalog.ts 里按 key 登记。
  */
@@ -63,11 +63,14 @@ defineArchetype('bolt', '直射器械', {
 });
 
 // ---------- 特性 ----------
-defineTrait('bushido', { name: '武士道', flag: TR_BUSHIDO });
-defineTrait('testudo', { name: '龟甲阵', flag: TR_TESTUDO });
-defineTrait('firemove', { name: '边走边射', flag: TR_FIREMOVE });
+// 点数口径：折成「相当于几级生命或输出（ln 倍率 ÷ ln 1.05）× 生效的场合占比」，取 0.5 的整倍数；原型缺省自带的特性不计点（见 UnitDef.ownTraits）。
+// 克制按目标类型的兵力占比算场合（现有四阵营开局编制的兵力比重平均：近战骑兵 32%、近战步兵 18%、长柄 15%、远程步兵 16%、抛射器械 11%、远程骑兵 4%、载具 3%）；
+// 只对近战或只对远程伤害生效的减伤按一半场合。
+defineTrait('bushido', { name: '武士道', flag: TR_BUSHIDO, points: 4.5 }); // 伤害 ×(1 + 0.5 × 已损生命比例)，一生平均约 +25% ≈ 4.6 级输出
+defineTrait('testudo', { name: '龟甲阵', flag: TR_TESTUDO, points: 4.5 }); // 常驻 −35% 远程伤害，对远程的有效生命 ×1.54 ≈ 8.9 级，远程按一半场合
+defineTrait('firemove', { name: '边走边射', flag: TR_FIREMOVE, points: 3 }); // 追、退、绕时不丢输出，按多出一成半的出手时间 ≈ 3 级
 // 践踏：近战攻击以目标为中心杀伤半径内的敌人
-defineTrait('trample', { name: '践踏', main: { splash: 28 } });
+defineTrait('trample', { name: '践踏', main: { splash: 28 }, points: 5.5 }); // 每下波及半径 28 内的敌人（边缘 40%），平均多打出三成伤害 ≈ 5.4 级
 // 长柄：立枪拒马，克制骑兵与载具。克制与受击修正合起来保持原来枪兵的行为：
 // 长柄互打 ×1，步兵打长柄 ×1.25，骑兵打长柄 ×0.8，载具打长柄 ×1（载具对近战步兵的 ×1.2 被抵消）。
 defineTrait('polearm', {
@@ -75,19 +78,22 @@ defineTrait('polearm', {
   abilities: { brace: { dmg: 60, speedMul: 0.15 } },
   counter: { cav: 2.4, cavr: 2, vehicle: 2, polearm: 0.8 },
   hitMod: { inf: 1.25, cav: 0.8, vehicle: 1 / 1.2 },
+  // 打近战骑兵 ×2.4（17.9 级 × 32% ≈ 5.7）、远程骑兵 ×2（≈ 0.6）、载具 ×2（≈ 0.4）、打长柄 ×0.8（≈ −0.7）；被近战步兵打 ×1.25（≈ −0.8）、被近战骑兵打 ×0.8（≈ +1.5）；
+  // 立枪挡冲锋与立枪时几乎不动相抵不计，合计约 6.7
+  points: 6.5,
 });
 // 兵种特有的克制
-defineTrait('naginata', { name: '薙刀', counter: { cav: 1.6, cavr: 1.4 } });
-defineTrait('javelin', { name: '标枪', counter: { vehicle: 2.5, cav: 1.3 } });
-defineTrait('ballista', { name: '重弩', counter: { vehicle: 2 } });
+defineTrait('naginata', { name: '薙刀', counter: { cav: 1.6, cavr: 1.4 }, points: 3.5 }); // 近战骑兵 ×1.6（9.6 级 × 32%）+ 远程骑兵 ×1.4（6.9 级 × 4%）≈ 3.4
+defineTrait('javelin', { name: '标枪', counter: { vehicle: 2.5, cav: 1.3 }, points: 2.5 }); // 载具 ×2.5（18.8 级 × 3%）+ 近战骑兵 ×1.3（5.4 级 × 32%）≈ 2.3
+defineTrait('ballista', { name: '重弩', counter: { vehicle: 2 }, points: 0.5 }); // 载具 ×2（14.2 级 × 3%）≈ 0.4
 // 副武器：接敌途中投出
-defineTrait('pilum', { name: '重标枪', aux: { dmg: 26, range: 95, cd: 14, proj: P_JAVELIN } });
-defineTrait('sidebow', { name: '副弓', aux: { dmg: 7, range: 170, cd: 2.4, proj: P_ARROW } });
+defineTrait('pilum', { name: '重标枪', aux: { dmg: 26, range: 95, cd: 14, proj: P_JAVELIN }, points: 2 }); // 每次接敌先投一两支（每支 26，约三下基准攻击），约多一成输出 ≈ 2 级
+defineTrait('sidebow', { name: '副弓', aux: { dmg: 7, range: 170, cd: 2.4, proj: P_ARROW }, points: 3.5 }); // 够不着时每 2.4 秒射 7（每秒 2.9，约基准近战输出 7.5 的四成），接敌途中与排在后排时才用、按一半时间，约 +19.5% 输出 ≈ 3.7 级
 // 穿刺攻击：抛射器械改打穿刺伤害（吃远程护甲与举盾、龟甲阵、林地减免；抛射器械的基准是无视护甲的攻城伤害）
-defineTrait('pierce', { name: '穿刺攻击', main: { atk: A_PIERCE } });
+defineTrait('pierce', { name: '穿刺攻击', main: { atk: A_PIERCE }, points: -2 }); // 抛射器械改吃远程护甲与举盾等减免，单发 53.5 打护甲 3 约少一成 ≈ −2 级
 
-// 光环：盾牌掩护身边的友军（不含自己），所受远程伤害 −20%。待定挂到哪些持盾步兵，先在近战步兵与长柄两个位置计价
-defineTrait('cover', { name: '盾墙掩护', aura: { kind: 'rangedTaken', radius: 60, value: 0.8 }, priceAt: ['inf', 'spear'] });
+// 光环：盾牌掩护身边的友军（不含自己），所受远程伤害 −20%。待定挂到哪些持盾步兵
+defineTrait('cover', { name: '盾墙掩护', aura: { kind: 'rangedTaken', radius: 60, value: 0.8 }, points: 2.5 }); // 身边友军所受远程伤害 ×0.8，对远程的有效生命 ×1.25 ≈ 4.6 级，远程按一半场合（按全队都带、人人受益估）
 
 // 中国：弩与火器之国，人多势众
 U('china', 'ji', '长戟兵', 'inf', { lv: { hp: -1, cad: -1, out: -4, armM: -1, armP: -2, spd: -1, reach: 1 }, traits: [['polearm', { cav: 2.5 }]] }, '结阵拒马，克制骑兵');

@@ -23,20 +23,19 @@ npm install
 npm run dev      # 开发服务器
 npm run build    # 类型检查并打包到 dist/
 npm test         # 无头模拟测试
-npm run measure -- <命令>   # 对战测量工具：兵种与阵营的点数、价目表（无头对战，耗时较长）
+npm run measure -- <命令>   # 对战测量工具：兵种与阵营的实战对比、点数明细（无头对战，耗时较长）
 ```
 
-对战测量工具用来量兵种与阵营的点数，命令清单与写法见 `tools/measure/cli.ts` 文件头，常用的：
+对战测量工具用来对比兵种与阵营的实战表现（对战测量命令只作参考、不写文件），并带阵营点数与补级的计算命令（`budget --write`、`reinf --write` 写回 `src/sim/content/factions.ts`），命令清单与写法见 `tools/measure/cli.ts` 文件头，常用的：
 
 ```bash
 npm run measure -- base                 # 各原型的基准面板
-npm run measure -- breakdown            # 各阵营的兵种点数、阵营点数与差预算（只算价目表，不跑对战）
-npm run measure -- reinf                # 各阵营的援军点数与援军预算
-npm run measure -- unit inf dao         # 把标准混编军里的近战步兵位置整个换成刀盾兵，量它的点数
-npm run measure -- prices               # 重量价目表，写 src/sim/content/prices.json（规则或原型变了才需要）
+npm run measure -- breakdown            # 各阵营的兵种点数、阵营点数与差预算（只算点数规则，不跑对战）
+npm run measure -- reinf                # 各阵营的援军点数与补到援军预算的援军级数
+npm run measure -- unit inf dao         # 把标准混编军里的近战步兵位置整个换成刀盾兵，量它的实战点数（相当于标准混编军全军生命加几级，只作参考）
 ```
 
-选项：`--workers N`（并行进程数，缺省 4）、`--size N`（兵力份数）、`--n N`（样本数）、`--out 文件`（写 TSV）。
+选项：`--workers N`（并行进程数，缺省为本机性能核数，1 为本进程）、`--size N`（兵力份数）、`--n N`（样本数）、`--out 文件`（写 TSV）。
 
 需要支持 WebGL2 的桌面浏览器。
 
@@ -112,9 +111,9 @@ src/sim/          纯逻辑，不依赖 DOM，可在 Node 中无头运行
   content/        可替换的内容：数据表，不含算法
     types.ts        类型与登记函数（defineUnit / defineArchetype / defineTrait / defineSize）
     units.ts        原型、特性与兵种（每个兵种自动带一个高级形态）
-    points.ts       点数：维度与阶梯、级数范围、价目表估算、阵营预算
+    points.ts       点数：维度与阶梯、级数范围、维度单价、阵营预算
+    budget.ts       阵营点数与援军点数的计账、补到预算要的级数
     force.ts        兵力占用：兵力份数换算成人数，兵员级数与援军级数的倍率
-    prices.json     价目表（工具生成，不手改）
     rules.ts        体型、等级，以及士气、昼夜、粮草、攻坚、资源与升级等全部规则数值
     factions.ts  buildings.ts  sites.ts
   systems/        固定的算法：每个文件一个系统，由 World.tick() 按管线调用
@@ -141,7 +140,7 @@ src/render/       three.js 渲染
 src/dev/          模型预览页
 src/ui/           主菜单与游戏内界面
 src/game.ts       主循环、镜头、选择与指令输入
-tools/measure/    对战测量工具：量兵种与阵营的点数、生成价目表（npm run measure）
+tools/measure/    对战测量工具：对战测量作参考，另有阵营点数与补级的计算命令（npm run measure）
 tests/            无头测试；VITE_BALANCE=1 npx vitest run -t 平衡 可跑阵营对战统计
 ```
 

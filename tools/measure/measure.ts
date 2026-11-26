@@ -1,16 +1,17 @@
 /**
  * 对战测量工具：五种测量与标尺。
  * 都是「被测的一方对标准混编军」的优势，换算成点数：1 点 = 标准混编军全军生命加 1 级。
+ * 这是实战当量，只作参考；配置用的兵种点数（src/sim/content/points.ts）是设计出来的固定价目，与它不是一个量，别混用。
  * 换算规程：让对手（标准混编军）全军生命 −6 级，使被测一方落在优势曲线的线性段；
  * 同一批种子再量被测一方全军生命 ±3 级，得到当地斜率；点数 = 优势的增量 ÷ 斜率。
  * 换算点数的测量按序贯检验分批打（stats.ts 的 SEQ）：被测军队的增量已明确显著或明确不显著就停，样本数（n）是上限，参照组与斜率总是打满；标尺、循环赛、阵营对冲打满固定组数。
  * 顶替别的位置的位置（POSITIONS 的 ref，如直射器械顶替器械位）的参照组不是标准混编军本身，而是把被顶替的位置整个换成它的基准单位的那支，
  * 增量相对这支参照组算（斜率仍用标准混编军的），所以它的基准单位正好是 0 点。
  */
-import { ARCHETYPES, ARCHETYPE_INDEX, FACTION_IDS, FactionId, MANPOWER_STEP, POSITIONS } from '../../src/sim/defs';
+import { FACTION_IDS, FactionId } from '../../src/sim/defs';
 import { ArmySpec, SlotSpec, refSpec } from './army';
 import { Job, Runner, Sample } from './runner';
-import { proxySlots, refCounts, refForce, slotOf } from './units';
+import { POSITIONS, proxySlots, refCounts, refForce, slotOf } from './units';
 import { Stat, Stop, looks, regressionDelta, seedList, significant, stat, stopRule } from './stats';
 import { Levels } from './units';
 
@@ -58,8 +59,6 @@ export interface Row {
   stop?: Stop;
   /** 逐个样本的优势（只有 pair 给出，供同一批种子上配对比较） */
   advs?: number[];
-  /** 被测的东西：位置与维度级数、特性或兵种，供汇总价目表与兵种实测表用 */
-  meta?: { slot: string; levels?: Levels; trait?: string; unit?: string; manpower?: number };
 }
 
 /** 兵力占用核对的一行：这个原型加了几人、每人值几点、相对近战步兵的比值 */
@@ -127,7 +126,7 @@ export class Measurer {
    * 按序贯检验分批打到 cap 组为止：被测军队每批续打，参照组与斜率被同规模的格子共用，一开始就打满 cap 组；
    * 每批打完用回归估计（stats.ts 的 regressionDelta）算增量，停止判断说停就按这 n 组出结果
    */
-  async points(kind: Row['kind'], label: string, test: ArmySpec, size: number, cap: number, meta?: Row['meta'], ref: ArmySpec = refSpec(size)): Promise<Row> {
+  async points(kind: Row['kind'], label: string, test: ArmySpec, size: number, cap: number, ref: ArmySpec = refSpec(size)): Promise<Row> {
     const opp = refSpec(size, { hp: HANDICAP });
     const shared = Promise.all([this.versus(ref, opp, cap), this.slope(size, cap)]);
     for (const n of looks(cap)) {
@@ -139,7 +138,7 @@ export class Measurer {
       const pointsSe = Math.hypot(diff.se / sl.slope, (points * sl.se) / sl.slope);
       return {
         kind, label, size, n, adv: t.stat.mean, advSe: t.stat.se, win: t.win,
-        delta: diff.mean, deltaSe: diff.se, slope: sl.slope, points, pointsSe, significant: significant(diff), stop, meta,
+        delta: diff.mean, deltaSe: diff.se, slope: sl.slope, points, pointsSe, significant: significant(diff), stop,
       };
     }
     throw new Error('序贯检验到上限也没停（不应发生）');
@@ -166,14 +165,14 @@ export class Measurer {
     const { size, n } = this.sparse(pos, DEFAULTS.dim, opts);
     const label = `${pos}:${Object.entries(levels).map(([k, v]) => `${k}=${v}`).join(',')}`;
     const a = this.armies(pos, { levels }, size);
-    return this.points('dim', label, a.test, size, n, { slot: pos, levels }, a.ref);
+    return this.points('dim', label, a.test, size, n, a.ref);
   }
 
   /** 特性测量：位置基准带上这个特性与不带的差 */
   trait(pos: string, trait: string, opts?: { size?: number; n?: number }): Promise<Row> {
     const { size, n } = this.sparse(pos, DEFAULTS.dim, opts);
     const a = this.armies(pos, { traits: [trait] }, size);
-    return this.points('trait', `${pos}:+${trait}`, a.test, size, n, { slot: pos, trait }, a.ref);
+    return this.points('trait', `${pos}:+${trait}`, a.test, size, n, a.ref);
   }
 
   /** 人数测量：标准混编军里某个位置加若干人 */
@@ -192,26 +191,7 @@ export class Measurer {
       slots[slot] = { ...proxySlots(pos)[slot], add };
     }
     const ref = Object.keys(proxy).length ? { type: 'ref' as const, size, slots: proxy } : refSpec(size);
-    return this.points('count', Object.entries(adds).map(([k, a]) => `${k}:add=${a}`).join('+'), { type: 'ref', size, slots }, size, n, undefined, ref);
-  }
-
-  /**
-   * 兵员测量：标准混编军每个位置都按兵员加 levels 级（人数 ×1.035^levels）加人，四舍五入到整人，
-   * 量出值几点；实际加的兵力份数折回成兵员级数（meta.manpower），每级的价格 = 点数 ÷ 这个级数
-   */
-  async manpower(levels = 8, opts?: { size?: number; n?: number }): Promise<Row> {
-    const size = opts?.size ?? DEFAULTS.count.size;
-    const counts = refCounts(size);
-    const adds: Record<string, number> = {};
-    let base = 0, added = 0;
-    for (const [k, c] of Object.entries(counts)) {
-      const f = ARCHETYPES[ARCHETYPE_INDEX[POSITIONS[k].arch]].force;
-      adds[k] = Math.round(c * (MANPOWER_STEP ** levels - 1));
-      base += c * f;
-      added += adds[k] * f;
-    }
-    const r = await this.countSlots(adds, opts);
-    return { ...r, label: `manpower:+${levels}`, meta: { slot: 'all', manpower: Math.log(1 + added / base) / Math.log(MANPOWER_STEP) } };
+    return this.points('count', Object.entries(adds).map(([k, a]) => `${k}:add=${a}`).join('+'), { type: 'ref', size, slots }, size, n, ref);
   }
 
   /**
@@ -249,7 +229,7 @@ export class Measurer {
     const lv = opts?.levels ? `|${Object.entries(opts.levels).map(([k, v]) => `${k}=${v}`).join(',')}` : '';
     const sp: SlotSpec = opts?.levels ? { unit, levels: opts.levels } : { unit };
     const a = this.armies(pos, sp, size);
-    return this.points('unit', `${pos}:${unit}${lv}`, a.test, size, n, { slot: pos, unit }, a.ref);
+    return this.points('unit', `${pos}:${unit}${lv}`, a.test, size, n, a.ref);
   }
 
   /**

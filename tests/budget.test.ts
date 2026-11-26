@@ -1,29 +1,11 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ARCHETYPES, DIMS, FACTIONS, FACTION_BUDGET, FACTION_IDS, FactionDef, LEVEL_RANGES, MANPOWER_STEP, PRICES, PriceTable, REINF_BUDGET, REINF_STEP, UNIT_BY_KEY,
-  UNIT_POINT_LIMITS, dimPoints, estimatePoints, forceList, headcount, levelRange, manpowerMult, reinforceMult,
+  ARCHETYPES, DIMS, FACTIONS, FACTION_BUDGET, FACTION_IDS, LEVEL_RANGES, MANPOWER_PRICE, MANPOWER_STEP, REINF_BUDGET, REINF_STEP, TRAITS, UNIT_BY_KEY,
+  UNIT_POINT_LIMITS, factionPoints, floorLevel, forceList, headcount, levelPoints, levelRange, manpowerForBudget, manpowerMult, reinfLevelForBudget, reinfPoints,
+  reinfShares, reinforceMult, unitPoints,
 } from '../src/sim/defs';
-import { derivePrices } from '../tools/measure/price';
-import type { Row } from '../tools/measure/measure';
 import { armyList } from '../src/sim/setup';
-import { contentUnits, measureFingerprint, pricingFingerprint } from '../tools/measure/fingerprint';
-import {
-  BUDGET_BASE_MANPOWER, factionBudgetOf, factionPoints, floorLevel, manpowerForBudget, reinfBudgetOf, reinfLevelForBudget, reinfPoints, reinfShares, shareRatio, unitPoints, unitStrategicCost,
-} from '../tools/measure/faction';
-import { PRICE_ROWS_FILE } from '../tools/measure/unitpoints';
-import { REF_SHARE, refForcePerHead } from '../tools/measure/units';
-
-/** 一张完整的试算价目表：游戏价目表每格减半，兵员每级 0.5 点 */
-function halfTable(): PriceTable {
-  const dims: PriceTable['dims'] = {}, traits: PriceTable['traits'] = {};
-  for (const [pos, d] of Object.entries(PRICES.dims)) {
-    dims[pos] = {};
-    for (const [k, v] of Object.entries(d)) dims[pos][k as keyof typeof d] = [v![0] / 2, v![1] / 2];
-  }
-  for (const [pos, d] of Object.entries(PRICES.traits)) traits[pos] = Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v / 2]));
-  return { dims, traits, manpower: 0.5 };
-}
+import { contentUnits } from '../tools/measure/units';
 
 const countBy = (list: number[]): Record<string, number> => {
   const byIdx = new Map(Object.values(UNIT_BY_KEY).map(d => [d.idx, d.key]));
@@ -78,153 +60,101 @@ describe('援军：阵营级维度，援军倍率只由援军级数给出', () =
 });
 
 describe('阵营点数的计算', () => {
-  const table = halfTable();
-
-  it('兵力份数之比 = 兵员倍率 × 比重 ÷（位置人数比例 × 占用 ÷ 标准混编军每人平均占用）', () => {
-    const d = UNIT_BY_KEY.samurai;
-    const slot = REF_SHARE[d.position] * ARCHETYPES[d.arch].force / refForcePerHead();
-    expect(shareRatio({ manpower: 0 }, 'samurai', 0.2)).toBeCloseTo(0.2 / slot, 9);
-    expect(shareRatio({ manpower: 2 }, 'samurai', 0.2)).toBeCloseTo(1.035 ** 2 * 0.2 / slot, 9);
+  it('兵种点数 = Σ 级数 × 维度单价 + 兵种自己的特性点数，就是兵种定义里的 points', () => {
+    for (const d of contentUnits().filter(u => u.tier === 0)) expect(unitPoints(d.key), d.key).toBe(d.points);
+    const samurai = UNIT_BY_KEY.samurai;
+    expect(samurai.ownTraits).toContain('bushido');
+    expect(samurai.points).toBeCloseTo(levelPoints(samurai.lv) + samurai.ownTraits.reduce((n, t) => n + TRAITS[t].points, 0), 9);
   });
 
-  it('顶替别的位置的兵种（直射器械的蝎弩）按被顶替的器械位的人数比例、自己原型的占用算份数之比', () => {
-    const d = UNIT_BY_KEY.scorpio;
-    expect(d.position).toBe('bolt');
-    const slot = REF_SHARE.siege * ARCHETYPES[d.arch].force / refForcePerHead();
-    expect(shareRatio({ manpower: 0 }, 'scorpio', 0.2)).toBeCloseTo(0.2 / slot, 9);
-    expect(Number.isFinite(shareRatio({ manpower: 0 }, 'scorpio', 0.2))).toBe(true);
-  });
-
-  it('兵种的战略维度成本：机动、射程、纪律的加级价目 × 高于基准的级数；低于基准的不计，其它维度不计', () => {
-    const lv = UNIT_BY_KEY.samurai.lv, inf = table.dims.inf;
-    expect(unitStrategicCost('samurai', table)).toBeCloseTo(Math.max(0, lv.spd ?? 0) * inf.spd![0] + Math.max(0, lv.disc ?? 0) * inf.disc![0], 9);
-    // 机动低于基准（铁甲骑兵）不倒找
-    const cata = UNIT_BY_KEY.cataphract.lv;
-    expect(cata.spd!).toBeLessThan(0);
-    expect(unitStrategicCost('cataphract', table)).toBeCloseTo(Math.max(0, cata.disc ?? 0) * table.dims.cav.disc![0], 9);
-  });
-
-  it('攻击距离按加级价目计进兵种点数，但不算战略成本：长戟兵（长柄位 +1 攻击距离）的点数比去掉攻击距离多一格价目，战略成本只看机动、射程、纪律', () => {
-    const d = UNIT_BY_KEY.ji;
-    expect(d.position).toBe('spear');
-    expect(d.lv.reach).toBe(1);
-    expect(unitPoints('ji', table) - estimatePoints('spear', { ...d.lv, reach: 0 }, d.ownTraits, table)).toBeCloseTo(table.dims.spear.reach![0], 9);
-    expect(table.dims.spear.reach![0]).toBeGreaterThan(0);
-    const lv = d.lv;
-    expect(unitStrategicCost('ji', table)).toBeCloseTo(Math.max(0, lv.spd ?? 0) * table.dims.spear.spd![0] + Math.max(0, lv.disc ?? 0) * table.dims.spear.disc![0], 9);
-  });
-
-  it('兵种点数 = 估算点数：各维度级数 × 价目（加级减级各用各的）+ 兵种自己的特性价目；战略维度只计加级，减级不计不退点', () => {
-    // 步兵位：生命、护甲加级用加级价目，节奏、近战护甲减级用减级价目；机动加级照计，纪律减级（战略维度）不计不退
-    const inf = table.dims.inf;
-    const L = { hp: 2, cad: -2, out: 3, armM: -1, armP: 1, spd: 2, disc: -3 };
-    const want = 2 * inf.hp![0] + -2 * inf.cad![1] + 3 * inf.out![0] + -1 * inf.armM![1] + 1 * inf.armP![0] + 2 * inf.spd![0] + table.traits.inf.testudo;
-    expect(table.traits.inf.testudo).toBeGreaterThan(0);
-    expect(estimatePoints('inf', L, ['testudo'], table)).toBeCloseTo(want, 9);
-    // 骑兵位：机动减级不计；生命、护甲、纪律加级照常
-    const cav = table.dims.cav;
-    expect(estimatePoints('cav', { hp: 4, armM: 2, spd: -4, disc: 3 }, [], table)).toBeCloseTo(4 * cav.hp![0] + 2 * cav.armM![0] + 3 * cav.disc![0], 9);
-    expect(dimPoints('spd', -4, [0.1, 0.3])).toBe(0);
-    expect(dimPoints('hp', -4, [0.1, 0.3])).toBeCloseTo(-1.2, 9);
-    // 兵种点数就是按它自己的位置、级数与特性估的
-    for (const key of ['samurai', 'cataphract']) {
-      const d = UNIT_BY_KEY[key];
-      expect(unitPoints(key, table), key).toBeCloseTo(estimatePoints(d.position, d.lv, d.ownTraits, table), 9);
-    }
-    // 用游戏的价目表时就是兵种定义里的估算点数
-    for (const d of contentUnits().filter(u => u.tier === 0)) expect(unitPoints(d.key), d.key).toBeCloseTo(d.points, 9);
-  });
-
-  it('蝎弩（直射器械）的点数：生命、护甲等级数都是基准，只有破甲 +8 与重弩特性计点', () => {
-    const d = UNIT_BY_KEY.scorpio;
-    expect(d.lv).toEqual({ pen: 8 });
-    expect(unitPoints('scorpio')).toBeCloseTo(PRICES.dims.bolt.pen![0] * 8 + PRICES.traits.bolt.ballista, 9);
-    expect(unitPoints('scorpio')).toBeGreaterThanOrEqual(UNIT_POINT_LIMITS[0]);
-    expect(unitPoints('scorpio')).toBeLessThanOrEqual(UNIT_POINT_LIMITS[1]);
-  });
-
-  it('兵种用到的维度或特性在价目表里没有条目时直接报错（显式记 0 的不算缺格）', () => {
-    const t = halfTable();
-    delete t.dims.inf.disc;
-    expect(() => unitPoints('samurai', t)).toThrow('价目表缺格：inf 的 disc');
-    const u = halfTable();
-    delete u.traits.inf.bushido;
-    expect(() => unitPoints('samurai', u)).toThrow('价目表缺格：inf 的特性 bushido');
-    const z = halfTable();
-    z.dims.inf.disc = [0, 0];
-    expect(() => unitPoints('samurai', z)).not.toThrow();
-  });
-
-  it('阵营点数 = Σ 兵种点数（已含战略维度成本）× 份数之比 + 兵员价目 × 兵员级数；战略维度成本单列只为看构成', () => {
+  it('阵营点数 = Σ 兵力比重 × 兵种点数 + 兵员级数 × 兵员单价', () => {
     for (const id of FACTION_IDS) {
       const f = FACTIONS[id];
-      let unit = 0, st = 0;
-      for (const [k, share] of f.army) {
-        const r = shareRatio(f, k, share);
-        unit += unitPoints(k, table) * r;
-        st += unitStrategicCost(k, table) * r;
-      }
-      const p = factionPoints(f, table);
+      const unit = f.army.reduce((n, [k, share]) => n + share * UNIT_BY_KEY[k].points, 0);
+      const p = factionPoints(f);
       expect(p.unitSum, id).toBeCloseTo(unit, 9);
-      expect(p.strategic, id).toBeCloseTo(st, 9);
-      expect(p.manpowerCost, id).toBeCloseTo(0.5 * f.manpower, 9);
-      expect(p.total, id).toBeCloseTo(unit + 0.5 * f.manpower, 9);
+      expect(p.manpowerCost, id).toBeCloseTo(MANPOWER_PRICE * f.manpower, 9);
+      expect(p.total, id).toBeCloseTo(unit + MANPOWER_PRICE * f.manpower, 9);
       expect(p.units.map(u => u.key), id).toEqual(f.army.map(([k]) => k));
     }
   });
 
-  it('补到预算要的兵员级数：代回去阵营点数等于预算；预算更高级数更高', () => {
-    const f: FactionDef = { ...FACTIONS.japan, manpower: 0 };
+  it('自造编制核对：比重 0.25 / 0.75 的两个兵种、兵员 2 级 = 0.25 × 甲 + 0.75 × 乙 + 2 × 兵员单价', () => {
+    const [a, b] = [UNIT_BY_KEY.legion.points, UNIT_BY_KEY.equites.points];
+    expect(a).not.toBe(b);
+    const army: [string, number][] = [['legion', 0.25], ['equites', 0.75]];
+    expect(factionPoints({ army, manpower: 2 }).total).toBeCloseTo(0.25 * a + 0.75 * b + 2 * MANPOWER_PRICE, 9);
+  });
+
+  it('兵员级数只通过「级数 × 兵员单价」一项进账，是线性的；兵种构成不变时阵营点数只差这一项', () => {
+    const army = FACTIONS.persia.army;
+    const at0 = factionPoints({ army, manpower: 0 }).total;
+    for (const m of [-3, -0.5, 1, 4.25]) expect(factionPoints({ army, manpower: m }).total, `${m}`).toBeCloseTo(at0 + MANPOWER_PRICE * m, 9);
+  });
+
+  it('补到预算要的兵员级数 = (预算 − Σ 比重 × 兵种点数) ÷ 兵员单价；代回去阵营点数等于预算；预算更高级数更高', () => {
+    const sum = FACTIONS.japan.army.reduce((n, [k, share]) => n + share * UNIT_BY_KEY[k].points, 0);
+    expect(manpowerForBudget(FACTIONS.japan, FACTION_BUDGET)).toBeCloseTo((FACTION_BUDGET - sum) / MANPOWER_PRICE, 9);
+    const f = { ...FACTIONS.japan, manpower: 0 };
     for (const budget of [-3, 2, 9]) {
-      const lv = manpowerForBudget(f, budget, PRICES);
+      const lv = manpowerForBudget(f, budget);
       expect(factionPoints({ ...f, manpower: lv }).total, `预算 ${budget}`).toBeCloseTo(budget, 6);
     }
     expect(manpowerForBudget(f, 5)).toBeGreaterThan(manpowerForBudget(f, 2));
+    expect(manpowerForBudget(f, 5) - manpowerForBudget(f, 2)).toBeCloseTo(3 / MANPOWER_PRICE, 9);
   });
 });
 
-describe('阵营点数预算（按提交的价目表计账）', () => {
-  // TODO：价目表机制待重构（价目不再由对战测量决定）。行军规则项变了之后提交的价目测量与价目表的指纹已经过期，
-  // 这里先不核对「指纹是最新的」，等重构定下价目表怎么维护后恢复或改写这道核对；在那之前不要为了让指纹对上去重量价目
-  it('指纹不含具体兵种，配新兵种不会让它们失效', () => {
-    const before = [measureFingerprint(), pricingFingerprint()];
-    UNIT_BY_KEY.samurai.lv.hp = (UNIT_BY_KEY.samurai.lv.hp ?? 0) + 1;
-    try {
-      expect([measureFingerprint(), pricingFingerprint()]).toEqual(before);
-    } finally {
-      UNIT_BY_KEY.samurai.lv.hp! -= 1;
-    }
+describe('向下取到 0.01 级', () => {
+  it('floorLevel 向下取整到两位小数，负数也是向下（更小）', () => {
+    expect(floorLevel(0.689)).toBe(0.68);
+    expect(floorLevel(1.5)).toBe(1.5);
+    expect(floorLevel(-2.831)).toBe(-2.84);
+    expect(floorLevel(0.004)).toBe(0);
   });
 
-  it('兵员价目由人数测量给出，为正', () => {
-    expect(PRICES.manpower).toBeGreaterThan(0);
+  it('floorLevel：恰好落在 0.01 格点上的值不因浮点误差多降一格，略低于格点的才降', () => {
+    for (const x of [0.29, 1.15, 4.35, 0.57, -0.29, -1.15]) expect(floorLevel(x), `${x}`).toBe(x);
+    expect(floorLevel(0.299)).toBe(0.29);
+    expect(floorLevel(-0.291)).toBe(-0.3);
+    expect(floorLevel(4.349)).toBe(4.34);
+  });
+
+  it('补到预算的级数向下取到 0.01 后：阵营点数不超过预算，差额小于一个 0.01 级的价（0.014）', () => {
+    for (const id of FACTION_IDS) {
+      for (const budget of [FACTION_BUDGET, 0, 3.7, 12.345]) {
+        const left = budget - factionPoints({ ...FACTIONS[id], manpower: floorLevel(manpowerForBudget(FACTIONS[id], budget)) }).total;
+        expect(left, `${id} 预算 ${budget}`).toBeGreaterThanOrEqual(-1e-9);
+        expect(left, `${id} 预算 ${budget}`).toBeLessThan(MANPOWER_PRICE * 0.01 + 1e-9);
+        const rleft = budget - reinfPoints({ reinf: FACTIONS[id].reinf, reinfLevel: floorLevel(reinfLevelForBudget(FACTIONS[id], budget)) }).total;
+        expect(rleft, `${id} 援军 预算 ${budget}`).toBeGreaterThanOrEqual(-1e-9);
+        expect(rleft, `${id} 援军 预算 ${budget}`).toBeLessThan(MANPOWER_PRICE * 0.01 + 1e-9);
+      }
+    }
+  });
+});
+
+describe('阵营点数预算', () => {
+  it('预算是固定常量（有限正数），各阵营共用同一个，阵营定义里没有自己的预算字段', () => {
+    for (const b of [FACTION_BUDGET, REINF_BUDGET]) expect(Number.isFinite(b) && b > 0).toBe(true);
+    for (const id of FACTION_IDS) expect(Object.keys(FACTIONS[id]).filter(k => /budget/i.test(k)), id).toEqual([]);
   });
 
   it('每个阵营的阵营点数不超过预算', () => {
     for (const id of FACTION_IDS) expect(factionPoints(FACTIONS[id]).total, id).toBeLessThanOrEqual(FACTION_BUDGET + 1e-9);
   });
 
-  it('现有四阵营用兵员级数补到了预算（差额不到 0.02 点）', () => {
-    for (const id of FACTION_IDS) expect(FACTION_BUDGET - factionPoints(FACTIONS[id]).total, id).toBeLessThan(0.02);
-  });
-
-  it('预算与兵员级数按规则算出且是最新的（价目或兵种变了要运行 npm run measure -- budget --write）', () => {
-    const stale = '阵营预算或兵员级数过期，运行 npm run measure -- budget --write';
-    expect(BUDGET_BASE_MANPOWER).toEqual({ china: 1.69, japan: -2.11, rome: -1.95, persia: -1.19 });
-    expect(FACTION_BUDGET, stale).toBeCloseTo(factionBudgetOf(FACTION_IDS.map(id => FACTIONS[id])), 3);
-    for (const id of FACTION_IDS) expect(FACTIONS[id].manpower, `${id} ${stale}`).toBe(floorLevel(manpowerForBudget(FACTIONS[id], FACTION_BUDGET)));
-  });
-
-  it('提交的价目表就是按提交的测量结果汇总出来的（汇总规则改了要运行 npm run measure -- prices --derive）', () => {
-    const rows = readJson<{ rows: Row[] }>(PRICE_ROWS_FILE).rows;
-    const { fingerprint: _f, ...prices } = PRICES;
-    expect(derivePrices(rows)).toEqual(prices);
+  it('现有四阵营用兵员级数补到了预算（差额不到 0.014 点，一个 0.01 级的价），级数就是补到预算的级数（兵种变了要运行 npm run measure -- budget --write）', () => {
+    const stale = '兵员级数过期，运行 npm run measure -- budget --write';
+    for (const id of FACTION_IDS) {
+      expect(FACTION_BUDGET - factionPoints(FACTIONS[id]).total, id).toBeLessThan(MANPOWER_PRICE * 0.01 + 1e-9);
+      expect(FACTIONS[id].manpower, `${id} ${stale}`).toBe(floorLevel(manpowerForBudget(FACTIONS[id], FACTION_BUDGET)));
+    }
   });
 });
 
 describe('援军点数预算（城池、城镇的全兵种援军表，按与开局同一套算法计账）', () => {
   const ids = FACTION_IDS;
-  const at0 = (id: (typeof FACTION_IDS)[number]): number => reinfPoints({ reinf: FACTIONS[id].reinf, reinfLevel: 0 }).total;
 
   it('援军比重 = 每个兵种的份数 ÷ 全表每批总份数，和为 1', () => {
     for (const id of ids) {
@@ -238,56 +168,46 @@ describe('援军点数预算（城池、城镇的全兵种援军表，按与开�
     }
   });
 
-  it('援军点数 = Σ 兵种点数 × 份数之比 + 兵员价目 × 援军级数（份数之比里的倍率是援军倍率）', () => {
-    const table = halfTable();
+  it('自造援军表核对：份数 3 : 1 的两个兵种、援军 1 级 = 0.75 × 甲 + 0.25 × 乙 + 兵员单价', () => {
+    const [x, y] = [UNIT_BY_KEY.legion.points, UNIT_BY_KEY.equites.points];
+    expect(reinfPoints({ reinf: [['legion', 3], ['equites', 1]], reinfLevel: 1 }).total).toBeCloseTo(0.75 * x + 0.25 * y + MANPOWER_PRICE, 9);
+  });
+
+  it('援军点数 = Σ 援军表比重 × 兵种点数 + 援军级数 × 兵员单价', () => {
     for (const id of ids) {
       const f = { ...FACTIONS[id], reinfLevel: 1.5 };
-      let unit = 0, st = 0;
-      for (const [k, share] of reinfShares(f)) {
-        const r = shareRatio({ manpower: 1.5 }, k, share);
-        unit += unitPoints(k, table) * r;
-        st += unitStrategicCost(k, table) * r;
-      }
-      const p = reinfPoints(f, table);
+      const unit = reinfShares(f).reduce((n, [k, share]) => n + share * UNIT_BY_KEY[k].points, 0);
+      const p = reinfPoints(f);
       expect(p.unitSum, id).toBeCloseTo(unit, 9);
-      expect(p.strategic, id).toBeCloseTo(st, 9);
-      expect(p.manpowerCost, id).toBeCloseTo(0.5 * 1.5, 9);
-      expect(p.total, id).toBeCloseTo(unit + 0.75, 9);
+      expect(p.manpowerCost, id).toBeCloseTo(MANPOWER_PRICE * 1.5, 9);
+      expect(p.total, id).toBeCloseTo(unit + MANPOWER_PRICE * 1.5, 9);
       expect(p.units.map(u => u.key), id).toEqual(f.reinf.map(([k]) => k));
     }
   });
 
-  it('援军级数的价格与兵员级数共用价目表里的同一个价', () => {
+  it('援军级数的价格与兵员级数共用同一个兵员单价', () => {
     const f = FACTIONS.china;
-    const d = reinfPoints({ reinf: f.reinf, reinfLevel: 1 }).manpowerCost;
-    expect(d).toBeCloseTo(PRICES.manpower, 12);
-    expect(factionPoints({ ...f, manpower: 1 }).manpowerCost).toBeCloseTo(PRICES.manpower, 12);
+    expect(reinfPoints({ reinf: f.reinf, reinfLevel: 1 }).manpowerCost).toBeCloseTo(MANPOWER_PRICE, 12);
+    expect(factionPoints({ ...f, manpower: 1 }).manpowerCost).toBeCloseTo(MANPOWER_PRICE, 12);
   });
 
   it('补到预算要的援军级数：代回去援军点数等于预算；预算更高级数更高', () => {
     const f = { id: 'china' as const, reinf: FACTIONS.china.reinf };
     for (const budget of [3, 7.6, 12]) {
-      const lv = reinfLevelForBudget(f, budget, PRICES);
+      const lv = reinfLevelForBudget(f, budget);
       expect(reinfPoints({ reinf: f.reinf, reinfLevel: lv }).total, `预算 ${budget}`).toBeCloseTo(budget, 6);
     }
     expect(reinfLevelForBudget(f, 9)).toBeGreaterThan(reinfLevelForBudget(f, 6));
-  });
-
-  it('援军预算 = 各阵营援军点数（援军级数按 0）的中位数（四舍五入到 0.001）；规则变了用 npm run measure -- reinf --write 重算', () => {
-    const stale = '援军预算或援军级数已过期：价目、兵种表或援军表变了，请运行 npm run measure -- reinf --write 重算并提交';
-    expect(reinfBudgetOf(ids.map(id => FACTIONS[id])), stale).toBeCloseTo(REINF_BUDGET, 3);
-    const v = ids.map(at0).sort((a, b) => a - b);
-    expect(REINF_BUDGET, stale).toBeCloseTo((v[1] + v[2]) / 2, 3);
   });
 
   it('每个阵营的援军点数不超过援军预算', () => {
     for (const id of ids) expect(reinfPoints(FACTIONS[id]).total, id).toBeLessThanOrEqual(REINF_BUDGET + 1e-9);
   });
 
-  it('现有四阵营用援军级数补到了预算（差额不到 0.02 点），级数就是补到预算的级数（向下取到 0.01）', () => {
+  it('现有四阵营用援军级数补到了预算（差额不到 0.014 点），级数就是补到预算的级数（向下取到 0.01）', () => {
     const stale = '援军级数已过期：请运行 npm run measure -- reinf --write 重算并提交';
     for (const id of ids) {
-      expect(REINF_BUDGET - reinfPoints(FACTIONS[id]).total, `${id} ${stale}`).toBeLessThan(0.02);
+      expect(REINF_BUDGET - reinfPoints(FACTIONS[id]).total, `${id} ${stale}`).toBeLessThan(MANPOWER_PRICE * 0.01 + 1e-9);
       expect(FACTIONS[id].reinfLevel, `${id} ${stale}`).toBe(floorLevel(reinfLevelForBudget(FACTIONS[id], REINF_BUDGET)));
     }
   });
@@ -316,8 +236,7 @@ describe('级数范围与单兵种上下限', () => {
     });
   });
 
-  it('各兵种的点数（估算点数）在 −2…+5 内', () => {
-    expect(UNIT_POINT_LIMITS).toEqual([-2, 5]);
+  it('各兵种的点数在单兵种上下限内（含边界）', () => {
     for (const d of contentUnits().filter(u => u.tier === 0)) {
       expect(d.points, d.key).toBeGreaterThanOrEqual(UNIT_POINT_LIMITS[0]);
       expect(d.points, d.key).toBeLessThanOrEqual(UNIT_POINT_LIMITS[1]);
@@ -328,5 +247,3 @@ describe('级数范围与单兵种上下限', () => {
     for (const id of FACTION_IDS) expect(FACTIONS[id].army.reduce((n, [, x]) => n + x, 0), id).toBeCloseTo(1, 6);
   });
 });
-
-const readJson = <T>(file: string): T => JSON.parse(readFileSync(file, 'utf8')) as T;

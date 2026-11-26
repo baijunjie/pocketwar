@@ -1,7 +1,7 @@
 /** 对战测量工具：军队描述。描述是可序列化的纯数据，工作进程收到后在本进程里建出兵种下标列表。 */
 import { FACTIONS, FactionId, TraitUse, UNITS, UNIT_BY_KEY } from '../../src/sim/defs';
 import { armyList } from '../../src/sim/setup';
-import { BASE, Dim, DIMS, Levels, SLOTS, refCounts, variant } from './units';
+import { BASE, Dim, DIMS, Levels, SLOTS, positionOf, refCounts, variant } from './units';
 
 /** 标准混编军里一个位置的改动 */
 export interface SlotSpec {
@@ -43,7 +43,7 @@ export function buildArmy(spec: ArmySpec): number[] {
       let j = map.get(i);
       if (j === undefined) {
         const d = UNITS[i];
-        const from = d.key === spec.swap ? BASE[d.position] : d;
+        const from = d.key === spec.swap ? BASE[positionOf(d)] : d;
         j = spec.all && DIMS.some(k => spec.all![k]) ? variant(from, spec.all).idx : from.idx;
         map.set(i, j);
       }

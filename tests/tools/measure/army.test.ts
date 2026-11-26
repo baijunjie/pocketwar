@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FACTIONS, UNITS, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { armyList } from '../../../src/sim/setup';
 import { buildArmy, parseLevels, refSpec } from '../../../tools/measure/army';
-import { BASE, STEP, refForce } from '../../../tools/measure/units';
+import { BASE, STEP, positionOf, refForce } from '../../../tools/measure/units';
 
 describe('测量工具：解析命令行的级数写法', () => {
   it('逗号分隔的 维度=级数，可以是负数与小数', () => {
@@ -51,7 +51,7 @@ describe('测量工具：阵营的标准军', () => {
     const swapped = buildArmy({ type: 'faction', faction: 'china', size, swap: key });
     expect(swapped.length).toBe(base.length);
     base.forEach((u, i) => {
-      if (UNITS[u].key === key) expect(swapped[i]).toBe(BASE[UNITS[u].position].idx);
+      if (UNITS[u].key === key) expect(swapped[i]).toBe(BASE[positionOf(UNITS[u])].idx);
       else expect(swapped[i]).toBe(u);
     });
   });
@@ -84,7 +84,7 @@ describe('测量工具：标准混编军的描述', () => {
 
   it('位置上的特性加进该位置全员；没有这个兵种报错', () => {
     const army = buildArmy({ type: 'ref', size: refForce(100), slots: { inf: { traits: ['naginata'] } } });
-    const inf = army.filter(i => UNITS[i].position === 'inf');
+    const inf = army.filter(i => positionOf(UNITS[i]) === 'inf');
     expect(inf.length).toBeGreaterThan(0);
     for (const i of inf) expect(UNITS[i].vs[BASE.cav.idx]).toBeGreaterThan(BASE.inf.vs[BASE.cav.idx]);
     expect(() => buildArmy({ type: 'ref', size: 30, slots: { inf: { unit: 'no_such_unit' } } })).toThrow();

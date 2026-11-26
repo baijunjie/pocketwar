@@ -13,6 +13,7 @@ finalizeUnits(EXPAND_RULES);
 export * from './types';
 export * from './points';
 export * from './force';
+export * from './budget';
 export * from './rules';
 export * from './factions';
 export * from './buildings';

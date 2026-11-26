@@ -35,16 +35,16 @@
 
 ## 内容层与点数
 
-点数机制见 `docs/product/units.md`「点数机制」，原型验证得来的标尺与估算的边界见 `docs/unit-stat-model.md`。
+点数机制见 `docs/product/units.md`「点数机制」，设计取舍与对战测量工具的依据见 `docs/unit-stat-model.md`。
 
 - 兵种的点数维度（`points.ts` 的 `DIMS`：生命、输出、节奏、护甲、机动、射程、攻击距离、纪律、冲击、破甲、范围杀伤、举盾）在 `units.ts` 的 `lv` 里只填相对原型基准的级数，不直接填面板数值：面板由原型基准与 `points.ts` 的阶梯算出。要动整个原型的底盘改原型的 `panel`，不改各兵种。
 - 不计点的字段（对建筑倍率、最近射程、投射物、体型、视野等）照原值填；特有的克制、受击修正、副武器、特殊动作写成特性（`defineTrait`），不写进系统代码。
 - 兵力按兵力份数计：原型的 `force` 是每人占几份，开局编制与援军用 `src/sim/content/force.ts` 的 `headcount` / `forceList` 换算成人数，不直接填人头。
-- 价目表 `src/sim/content/prices.json` 与 `tools/measure/data/` 下的实测表是工具生成的文件，不手改：
-  改了原型、特性、规则表或测量规程，运行 `npm run measure -- prices` 重量；只改汇总规则或地板价，运行 `npm run measure -- prices --derive`；
-  改了价目或兵种表，运行 `npm run measure -- budget --write` 与 `npm run measure -- reinf --write`。
+- 维度单价（`points.ts` 的 `DIM_PRICE`）、特性点数、兵员单价与两个预算是手工定的设计规则，只在有意改价时才改，改时把理由写进注释；
+  不要因为对战测量的结果与它对不上、或改了战斗与行军代码就去调它（依据见 `docs/unit-stat-model.md`「点数是配置资源，单价是设计规则」）。
+- 改了兵种级数、特性、编制、援军表或单价，运行 `npm run measure -- budget --write` 与 `npm run measure -- reinf --write` 重算各阵营的兵员级数、援军级数（纯计算，不跑对战）。
 - 新兵种或新阵营落进预算的做法：用 `npm run measure -- breakdown` 看阵营点数与差额，用兵员级数、援军级数补齐到预算；兵种点数要落在 `UNIT_POINT_LIMITS` 内、各维度级数落在 `LEVEL_RANGES` 内。
-- 测量工具（`tools/measure/`）只在 Node 里跑，不被 `src/` 引用。
+- 测量工具（`tools/measure/`）只在 Node 里跑，不被 `src/` 引用；对战测量只作参考，结果不写回游戏数据。
 
 ## 渲染
 

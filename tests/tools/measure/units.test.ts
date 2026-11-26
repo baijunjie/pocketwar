@@ -1,6 +1,52 @@
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { AU_RANGED_TAKEN, A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, POSITIONS, RULES, STEP, TRAITS } from '../../../src/sim/defs';
-import { BASE, REF_SHARE, SLOTS, proxySlots, refCounts, refForce, refForcePerHead, slotOf, variant } from '../../../tools/measure/units';
+import { AU_RANGED_TAKEN, A_PIERCE, A_SIEGE, ARCHETYPES, HP_SCALE, RULES, STEP, TRAITS, UNIT_BY_KEY, archetypePower } from '../../../src/sim/defs';
+import { BASE, POSITIONS, REF_SHARE, SLOTS, contentUnits, positionOf, proxySlots, refCounts, refForce, refForcePerHead, slotOf, variant } from '../../../tools/measure/units';
+
+describe('测量工具：兵种所在的位置', () => {
+  it('同原型里，带位置要求的特性（长柄）就归带特性的位置，其余归不带的：四个长柄兵种归 spear，别的近战步兵归 inf', () => {
+    for (const k of ['ji', 'yari', 'auxilia', 'spara']) expect(positionOf(UNIT_BY_KEY[k]), k).toBe('spear');
+    for (const k of ['dao', 'samurai', 'legion', 'sohei']) expect(positionOf(UNIT_BY_KEY[k]), k).toBe('inf');
+  });
+
+  it('其余原型各归自己的位置：弩兵与弓手 ranged、骑兵 cav、骑射手 cavr、抛射器械 siege、战象 ele、蝎弩 bolt', () => {
+    expect(positionOf(UNIT_BY_KEY.nu)).toBe('ranged');
+    expect(positionOf(UNIT_BY_KEY.tieqi)).toBe('cav');
+    expect(positionOf(UNIT_BY_KEY.asvaran)).toBe('cavr');
+    expect(positionOf(UNIT_BY_KEY.onager)).toBe('siege');
+    expect(positionOf(UNIT_BY_KEY.elephant)).toBe('ele');
+    expect(positionOf(UNIT_BY_KEY.scorpio)).toBe('bolt');
+  });
+
+  it('每个正式兵种与它的高级形态都有位置，位置的原型与兵种的原型一致', () => {
+    for (const d of contentUnits()) expect(POSITIONS[positionOf(d)].arch, d.key).toBe(ARCHETYPES[d.arch].key);
+  });
+});
+
+describe('测量工具：基准单位是点数的零点', () => {
+  it('各位置基准单位的点数为 0、战力估值等于原型基准的估值；带长柄的 spear 基准也是 0 点', () => {
+    for (const [pos, d] of Object.entries(BASE)) {
+      expect(d.points, pos).toBe(0);
+      expect(d.power, pos).toBeCloseTo(archetypePower(ARCHETYPES.find(a => a.key === POSITIONS[pos].arch)!), 9);
+    }
+    expect(BASE.spear.ownTraits).toContain('polearm');
+    expect(BASE.spear.points).toBe(0);
+  });
+
+  it('基准单位不是正式兵种：不计入 contentUnits', () => {
+    const keys = new Set(contentUnits().map(d => d.key));
+    for (const d of Object.values(BASE)) expect(keys.has(d.key), d.key).toBe(false);
+  });
+});
+
+describe('游戏本体不依赖测量工具', () => {
+  it('src/ 下没有任何文件引用 tools/ 目录', () => {
+    const files = readdirSync('src', { recursive: true }).filter(n => /\.tsx?$/.test(n)).map(n => `src/${n}`);
+    expect(files.length).toBeGreaterThan(0);
+    const bad = files.filter(f => /(?:from\s+|import\s*\(\s*|import\s+)['"][^'"]*\btools\//.test(readFileSync(f, 'utf8')));
+    expect(bad).toEqual([]);
+  });
+});
 
 describe('测量工具：位置与顶替', () => {
   it('每个位置都有基准单位；顶替别的位置的位置（直射器械）顶替器械位，其余各占自己', () => {

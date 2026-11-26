@@ -3,8 +3,7 @@ import { BR_COMMON, BR_DEFENSE, BR_MILITARY, FACTIONS, SITE_CAMP, SITE_CITY, SIT
 import { createGame } from '../../../src/sim/setup';
 import { campBatch, defenseLocked, factionUnits, initPicks, militaryLeft, pickedUnit, reinfPaused } from '../../../src/sim/systems/sites';
 import type { Site, World } from '../../../src/sim/world';
-import { contentUnits } from '../../../tools/measure/fingerprint';
-import { BASE } from '../../../tools/measure/units';
+import { BASE, contentUnits } from '../../../tools/measure/units';
 import { flatWorld, run } from '../../helpers';
 
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;

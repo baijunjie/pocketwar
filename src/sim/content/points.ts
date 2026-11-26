@@ -1,10 +1,10 @@
 /**
- * 点数：兵种按「原型基准 + 各维度级数 + 特性」描述，点数是兵种强弱的统一尺度。
- * 1 点 = 标准混编军全军生命加 1 级（×1.05）带来的战果变化。兵种点数像给人物加属性点一样按价目表计账（估算点数），
- * 阵营点数、单兵种上下限、战力估值都用它；价目表在原型基准上实测一次（tools/measure 的「prices」命令生成，不手改），
- * 不依赖具体兵种。兵种整体的对战实测（tools/measure/data/unit-points.json）只作参考，用来发现估算的偏差。
+ * 点数：兵种按「原型基准 + 各维度级数 + 特性」描述，点数是兵种强弱的统一尺度，也是纯粹的配置资源。
+ * 1 点 = 生命 1 级（×1.05）。价目是设计出来的固定规则：各维度一个单价（DIM_PRICE，所有原型共用，加级花点、减级退点同价），
+ * 各特性在 defineTrait 里声明自己的点数；不由对战决定，不随战斗、行军代码变化，战场上谁强也不是平衡目标。
+ * 兵种点数 = Σ 级数 × 维度单价 + Σ 兵种自己的特性点数；阵营点数 = Σ 兵力比重 × 兵种点数 + 兵员级数 × 兵员单价，
+ * 各阵营的点数上限相同（FACTION_BUDGET），差额由兵员级数补。
  */
-import prices from './prices.json';
 
 // ---------- 维度与阶梯 ----------
 /** 各维度的级数；没写的为 0。级数都相对原型基准 */
@@ -51,21 +51,43 @@ export const LEVEL_RANGES: Record<Dim, [number, number]> = {
   pen: [0, 8], splash: [-15, 5], block: [0, 14],
 };
 
-/** 单兵种上下限：兵种点数（估算点数，UnitDef.points）要落在里面 */
-export const UNIT_POINT_LIMITS: [number, number] = [-2, 5];
+/** 单兵种上下限：兵种点数（UnitDef.points）要落在里面 */
+export const UNIT_POINT_LIMITS: [number, number] = [-12, 24];
 
 /**
- * 阵营点数预算：每个阵营的阵营点数（tools/measure/faction.ts 的 factionPoints）不超过它。
- * 取现有四阵营阵营点数的中位数（兵员级数取迁移前阵营特色倍率换算的级数）；阵营的差额用兵员级数补
+ * 维度单价：每级几点，所有原型共用，加级花点、减级退点同价。1 点 = 生命 1 级（×1.05）。
+ * - 生命 1：定义。
+ * - 输出 1：每秒伤害 ×1.05，对「生命 × 输出」的贡献与生命 ×1.05 相同。
+ * - 近战护甲、远程护甲各 1：每级让对应类型的伤害少一成多（基准攻击 9 打护甲 2→3 少 13%），约合 3 级有效生命；
+ *   攻击越重越不管用（攻击 15 约 2 级，冲撞与攻城伤害几乎不减），平均按 2 级，又只对近战或远程一类伤害有效，按一半场合。
+ * - 节奏 0.5：每秒伤害不变，只是单发更重、更能打穿护甲（对护甲 2 的目标一级约多 4% 有效伤害，对无甲没有）。
+ * - 机动、射程、纪律 0.5：不直接改变生命与输出。
+ * - 冲击 0.5：冲锋只是骑兵输出的一部分。
+ * - 破甲 0.5：对护甲 3 的目标约多 4% 伤害，对无甲没有。
+ * - 举盾 0.5：每级再减 5% 远程伤害，约合 1 级对远程的有效生命，远程按一半场合。
+ * - 范围杀伤 1.5：半径 30 时每级杀伤面积约 +14%，落点周围不总有那么多人，按一半多计。
+ * - 攻击距离 8：后排隔着一排自己人也能出手，战线上同时出手的人最多翻倍；战线不总站得满两排、隔排也不是每个目标都够得着，
+ *   按多一半计，ln 1.5 ÷ ln 1.05 ≈ 8 级输出。
+ * - 治疗 1：未启用，占位。
  */
-export const FACTION_BUDGET = 4.685;
+export const DIM_PRICE: Record<Dim, number> = {
+  hp: 1, out: 1, cad: 0.5, armM: 1, armP: 1, spd: 0.5, rng: 0.5, disc: 0.5, imp: 0.5, pen: 0.5, block: 0.5, splash: 1.5, reach: 8, heal: 1,
+};
 
 /**
- * 援军预算：每个阵营的援军点数（tools/measure/faction.ts 的 reinfPoints，全兵种援军表按与开局同一套算法计点）不超过它。
- * 取现有阵营援军点数（援军级数按 0，即援军倍率 1）的中位数；阵营的差额用援军级数补。
- * 价目或兵种表变了（含援军表与阵营增减）按 npm run measure -- reinf --write 重算
+ * 兵员单价：每级兵员（人数 ×1.035）几点。人数 ×1.035 使全军总生命与总输出各 ×1.035，
+ * 各合 ln 1.035 ÷ ln 1.05 ≈ 0.7 级，按生命、输出各 1 点计。援军级数同价。
  */
-export const REINF_BUDGET = 4.448;
+export const MANPOWER_PRICE = 1.4;
+
+/**
+ * 阵营点数预算：每个阵营的阵营点数（Σ 兵力比重 × 兵种点数 + 兵员级数 × 兵员单价，见 budget.ts）不超过它。
+ * 固定常量，兵种或单价变了预算不动，由各阵营自己的兵员级数补差
+ */
+export const FACTION_BUDGET = 5.5;
+
+/** 援军预算：每个阵营的援军点数（全兵种援军表按与开局同一套算法计点，级数换成援军级数，见 budget.ts）不超过它；差额由援军级数补 */
+export const REINF_BUDGET = 5.5;
 
 /** 点数维度上的面板：原型基准。生命是展开前的数（不含全局生命倍率） */
 export interface Panel {
@@ -114,76 +136,10 @@ export function applyLevels(b: Panel, L: Levels): Panel {
   };
 }
 
-// ---------- 位置 ----------
-/**
- * 标准混编军里的位置：按原型分，带长柄的近战步兵单独一个位置。价目表与兵种测量都按位置。
- * trait 是位置要求带的特性，位置基准 = 原型基准 + 这个特性。
- * ref 是这个位置在标准混编军里顶替的位置（缺省是自己）：标准混编军的人数构成只按自己的位置排，
- * 顶替的位置不进标准混编军，它的价目与兵种实测在「把 ref 位置整个换成它的基准」的标准混编军上量，参照组也是这支军队。
- */
-export const POSITIONS: Record<string, { arch: string; trait?: string; name: string; ref?: string }> = {
-  inf: { arch: 'inf', name: '近战步兵' },
-  spear: { arch: 'inf', trait: 'polearm', name: '近战步兵（长柄）' },
-  ranged: { arch: 'ranged', name: '远程步兵' },
-  cav: { arch: 'cav', name: '近战骑兵' },
-  cavr: { arch: 'cavr', name: '远程骑兵' },
-  siege: { arch: 'siege', name: '抛射器械' },
-  ele: { arch: 'vehicle', name: '载具' },
-  bolt: { arch: 'bolt', name: '直射器械', ref: 'siege' },
-};
-
-/** 兵种所在的位置：同原型，带位置要求的特性就归带特性的位置，否则归不带的 */
-export function positionOf(archKey: string, hasTrait: (trait: string) => boolean): string {
-  const cands = Object.entries(POSITIONS).filter(([, p]) => p.arch === archKey);
-  const hit = cands.find(([, p]) => p.trait && hasTrait(p.trait)) ?? cands.find(([, p]) => !p.trait);
-  if (!hit) throw new Error(`没有对应的位置：${archKey}`);
-  return hit[0];
-}
-
-// ---------- 价目表 ----------
-export interface PriceTable {
-  /** 生成时原型基准、特性与规则的指纹 */
-  fingerprint?: string;
-  /** 位置 → 维度 → [加级每级几点, 减级每级几点]；减级的数是「每少一级少几点」，估算时乘以负的级数 */
-  dims: Record<string, Partial<Record<Dim, [number, number]>>>;
-  /** 位置 → 特性 → 点数（位置基准带上它与不带它之差） */
-  traits: Record<string, Record<string, number>>;
-  /** 阵营的兵员每级几点（加级减级同价，全阵营共用）：标准混编军每个位置都按兵员加级加人量出 */
-  manpower: number;
-}
-export const PRICES = prices as unknown as PriceTable;
-
-/**
- * 战略维度：机动、射程、纪律。平地会战里量不出价值（价目取地板价），只按高于基准的级数 × 加级价目计，
- * 低于基准不计、不退点。理由：这三样加级的好处在平地量不出，不计就能白堆；减级的损失只在整局里，不能倒找点数
- */
-export const STRATEGIC_DIMS: Dim[] = ['spd', 'rng', 'disc'];
-
-/** 一个维度的点数：加级 × 加级价目，减级 × 减级价目；战略维度减级不计 */
-export function dimPoints(k: Dim, lv: number, p: [number, number]): number {
-  if (lv > 0) return p[0] * lv;
-  return STRATEGIC_DIMS.includes(k) ? 0 : p[1] * lv;
-}
-
-/**
- * 兵种点数（估算点数）= Σ 各维度的点数 + 特性价目。traits 是兵种自己的特性（不含位置基准本来就带的）。
- * 用到的维度或特性在价目表里没有条目（显式记 0 的不算）直接报错：缺格按 0 会让人白拿
- */
-export function estimatePoints(pos: string, L: Levels, traits: string[], table: PriceTable = PRICES): number {
+/** 各维度级数 × 维度单价之和 */
+export function levelPoints(L: Levels): number {
   let pts = 0;
-  const dims = table.dims[pos];
-  for (const k of DIMS) {
-    const lv = L[k];
-    if (!lv) continue;
-    const p = dims?.[k];
-    if (!p) throw new Error(`价目表缺格：${pos} 的 ${k}`);
-    pts += dimPoints(k, lv, p);
-  }
-  for (const t of traits) {
-    const v = table.traits[pos]?.[t];
-    if (v === undefined) throw new Error(`价目表缺格：${pos} 的特性 ${t}`);
-    pts += v;
-  }
+  for (const k of DIMS) if (L[k]) pts += L[k]! * DIM_PRICE[k];
   return pts;
 }
 
@@ -192,9 +148,7 @@ export function panelPower(hp: number, dmg: number, cd: number, ranged: boolean,
   return Math.sqrt((hp / 60) * (dmg / cd / 6.5)) * (ranged ? 1.15 : 1) * (splash ? 1.6 : 1);
 }
 
-/** 战力估值 = 原型基准的战力估值 × 1.05 的（点数 ÷（生命价目 + 输出价目））次方，即把点数折成「生命与输出各加几级」 */
-export function powerFromPoints(basePower: number, pos: string, points: number, table: PriceTable = PRICES): number {
-  const d = table.dims[pos];
-  const unit = (d?.hp?.[0] ?? 0) + (d?.out?.[0] ?? 0);
-  return unit > 0.01 ? basePower * 1.05 ** (points / unit) : basePower;
+/** 战力估值 = 原型基准的战力估值 × 1.05 的（点数 ÷（生命单价 + 输出单价））次方，即把点数折成「生命与输出各加几级」 */
+export function powerFromPoints(basePower: number, points: number): number {
+  return basePower * 1.05 ** (points / (DIM_PRICE.hp + DIM_PRICE.out));
 }

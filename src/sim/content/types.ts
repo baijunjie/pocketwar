@@ -4,7 +4,7 @@
  * 「系统」（src/sim/systems）= 固定算法，只读这些表，不认识任何具体兵种。
  */
 
-import { DIMS, Dim, LEVEL_RANGES, Levels, POSITIONS, Panel, applyLevels, estimatePoints, panelPower, positionOf, powerFromPoints } from './points';
+import { DIMS, Dim, LEVEL_RANGES, Levels, Panel, applyLevels, levelPoints, panelPower, powerFromPoints } from './points';
 
 export const TILE = 32;
 export const TICK_RATE = 30;
@@ -206,13 +206,6 @@ export function defineArchetype(key: string, name: string, a: ArchetypeSpec): nu
   return idx;
 }
 
-/** 位置基准本来就带的特性 key：原型自带的加位置要求的；兵种的这些特性不另计价，价目表也不给它们在这个位置计价 */
-export function positionTraits(pos: string): string[] {
-  const p = POSITIONS[pos];
-  const arch = ARCHETYPES[ARCHETYPE_INDEX[p.arch]];
-  return [...(arch.base.traits ?? []).map(u => (typeof u === 'string' ? u : u[0])), ...(p.trait ? [p.trait] : [])];
-}
-
 /** 原型在某个维度上的级数范围：原型自己声明的，没声明的取全局初值 */
 export function levelRange(arch: ArchetypeDef, dim: Dim): [number, number] {
   return arch.ranges[dim] ?? LEVEL_RANGES[dim];
@@ -289,11 +282,8 @@ export interface TraitDef {
   main?: MainTweak;
   /** 光环：让身边的己方单位获得加成 */
   aura?: AuraSpec;
-  /**
-   * 价目表一律在这些位置（POSITIONS 的 key）给它计价，与带它的兵种所在位置取并集。
-   * 用于先定义、待定挂到哪些兵种的特性；挂到兵种之后不再需要的位置要手动删掉，否则每次重量都多量这几格
-   */
-  priceAt: string[];
+  /** 点数：兵种每带一个（原型缺省自带的除外）就加这么多，可以为负（减值，退点） */
+  points: number;
 }
 export const TRAITS: Record<string, TraitDef> = {};
 export interface TraitSpec {
@@ -306,16 +296,17 @@ export interface TraitSpec {
   aux?: AuxAttack;
   main?: MainTweak;
   aura?: AuraSpec;
-  priceAt?: string[];
+  /** 点数，必填，可为负 */
+  points: number;
 }
 export function defineTrait(key: string, t: TraitSpec): void {
   if (TRAITS[key]) throw new Error(`特性重复：${key}`);
+  if (!Number.isFinite(t.points)) throw new Error(`特性 ${key}：点数 points 必填，且要是有限数`);
   for (const tag of t.tags ?? []) tagBit(tag);
   if (t.aura) checkAura(key, t.aura);
-  for (const pos of t.priceAt ?? []) if (!POSITIONS[pos]) throw new Error(`特性 ${key}：未知位置 ${pos}`);
   TRAITS[key] = {
     key, name: t.name, flag: t.flag ?? 0, tags: t.tags ?? [], abilities: t.abilities, counter: t.counter ?? {}, hitMod: t.hitMod ?? {}, aux: t.aux, main: t.main,
-    ...(t.aura ? { aura: { ...t.aura } } : {}), priceAt: t.priceAt ?? [],
+    ...(t.aura ? { aura: { ...t.aura } } : {}), points: t.points,
   };
 }
 /** 兵种使用特性：只写 key，或写 [key, 覆盖的克制倍率] */
@@ -366,13 +357,11 @@ export interface UnitDef {
   faction: FactionId;
   /** 原型下标（ARCHETYPES） */
   arch: number;
-  /** 标准混编军里的位置 key（POSITIONS） */
-  position: string;
   /** 各维度相对原型基准的级数 */
   lv: Levels;
-  /** 兵种自己的特性（不含原型与位置基准本来就带的），价目表按它们计价 */
+  /** 兵种自己的特性（不含原型缺省自带的），按它们的点数计点 */
   ownTraits: string[];
-  /** 兵种点数（估算点数）：按价目表计账，阵营点数与单兵种上下限都用它；兵种整体实测（tools/measure/data/unit-points.json）只作参考 */
+  /** 兵种点数 = Σ 级数 × 维度单价 + Σ 兵种自己的特性点数；阵营点数与单兵种上下限都用它 */
   points: number;
   /** 标签位（原型标签加特性给的标签） */
   tags: number;
@@ -563,7 +552,7 @@ export interface ExpandRules {
   torch: { range: number; dmg: number; cd: number };
 }
 
-/** 原型基准的战力估值（面板的估值式，不含位置价目） */
+/** 原型基准的战力估值（面板的估值式，不含点数） */
 export function archetypePower(arch: ArchetypeDef): number {
   const p = arch.panel;
   return panelPower(p.hp, p.dmg, p.cd, p.range > 0, p.splash > 0);
@@ -593,7 +582,6 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
   const uses = [...(base.traits ?? []), ...(s.traits ?? [])];
   const mix = composeTraits(arch, uses);
   const traitKeys = uses.map(u => (typeof u === 'string' ? u : u[0]));
-  const pos = positionOf(arch.key, t => traitKeys.includes(t));
   const panel = applyLevels(arch.panel, L);
   if (panel.armM < 0 || panel.armP < 0) throw new Error(`${p.key}：护甲低于 0`);
   const abilities: Abilities = { ...base.abilities, ...mix.abilities, ...s.abilities };
@@ -612,13 +600,13 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
   const xpBase = R.xp.value[arch.key];
   if (xpBase === undefined) throw new Error(`原型 ${arch.key} 没有登记经验值`);
   if (arch.ranged !== (range > 0)) throw new Error(`${p.key}：原型 ${arch.key} 是${arch.ranged ? '远程' : '近战'}，射程是 ${range}`);
-  // 估算点数：兵种自己的特性（不含原型与位置基准本来就带的）按位置价目计
-  const carried = positionTraits(pos);
+  // 兵种自己的特性：用到的特性里去掉原型缺省自带的。特性点数不依赖兵种改写的克制倍率
+  const carried = (base.traits ?? []).map(u => (typeof u === 'string' ? u : u[0]));
   const ownTraits = traitKeys.filter(t => !carried.includes(t));
-  const points = estimatePoints(pos, L, ownTraits);
-  const power0 = powerFromPoints(archetypePower(arch), pos, points);
+  const points = levelPoints(L) + ownTraits.reduce((n, t) => n + TRAITS[t].points, 0);
+  const power0 = powerFromPoints(archetypePower(arch), points);
   const base0: Omit<UnitDef, 'weapons' | 'main' | 'aux' | 'torch' | 'melee'> = {
-    idx: UNITS.length, key: p.key, name: p.name, faction: p.faction, arch: ai, position: pos, lv: { ...L }, ownTraits, points,
+    idx: UNITS.length, key: p.key, name: p.name, faction: p.faction, arch: ai, lv: { ...L }, ownTraits, points,
     tags: mix.tags, counter: mix.counter, hitMod: mix.hitMod, size,
     radius: m.radius ?? sz.radius,
     // 近战在前、远程在后，同一档里快的在前；器械殿后
@@ -671,7 +659,7 @@ export function expandUnit(p: UnitInput, R: ExpandRules, withElite = true): Unit
   return out;
 }
 
-/** 是否正式兵种：兵种表里除了兵种定义展开的，还有测量工具登记的基准单位与变体（带 probe 标记），据点出兵、界面列表、价目与指纹只认正式兵种 */
+/** 是否正式兵种：兵种表里除了兵种定义展开的，还有测量工具登记的基准单位与变体（带 probe 标记），据点出兵、界面列表只认正式兵种 */
 export const isContentUnit = (d: UnitDef): boolean => !d.probe;
 
 /** 按等级展开的生命与护甲（下标为等级） */
