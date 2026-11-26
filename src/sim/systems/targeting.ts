@@ -27,9 +27,10 @@ export function crowded(w: World, d: UnitDef, j: number, dist: number): boolean 
 
 /**
  * @param leash 大于 0 时，只挑离岗位（homeX, homeY）不超过这个距离的目标——待命的部队不会被引得越追越远
+ * @param keep 给出时，只挑它认可的目标（不影响 near）
  */
 export function scan(w: World, i: number, tm: number, ux: number, uy: number, scanR: number, acqR: number, d: UnitDef,
-  cur: number, leash = 0): void {
+  cur: number, leash = 0, keep?: (j: number) => boolean): void {
   SCAN.pick = SCAN.near = NONE;
   SCAN.nearD2 = 0;
   if (!w.foeNear(ux, uy, tm, scanR)) return;
@@ -61,6 +62,7 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
       }
       if (d2 > acq2 || d2 < min2) continue;
       if (leash2 > 0 && j !== cur && (x[j] - hx) * (x[j] - hx) + (y[j] - hy) * (y[j] - hy) > leash2) continue;
+      if (keep !== undefined && !keep(j)) continue;
       const jd = defs[type[j]];
       // 优先打自己克制的兵种
       const v = d.vs[jd.idx];

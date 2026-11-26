@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BUILDINGS, P_TORCH, RULES, SITE_CAMP, SITE_CITY, STEP, T_MOUNTAIN, TILE, TRAITS, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { fightState, siteContains } from '../../../src/sim/siteArea';
 import { S_COMBAT } from '../../../src/sim/world';
-import { BLD_SKIP_ALL, ENG_CLOSE, ENG_NONE, ENG_REACH, NONE, O_AMOVE, O_ATTACK, O_IDLE, O_MOVE, S_CHARGE, S_ROUT, S_SHIELD, S_WALL } from '../../../src/sim/state';
+import { BLD_SKIP_ALL, ENG_CLOSE, ENG_NONE, ENG_REACH, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_CHARGE, S_ROUT, S_SHIELD, S_WALL } from '../../../src/sim/state';
 import { createGame } from '../../../src/sim/setup';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE } from '../../../src/sim/systems/around';
 import { tryDetour } from '../../../src/sim/systems/detour';
@@ -3129,6 +3129,317 @@ describe('近战挤不到自己挑中的建筑跟前：放下它接着执行原�
         if (first === NONE && w.target[me] !== NONE) first = w.target[me];
       });
       expect(first).toBe(-a.id - 2);
+    });
+  });
+});
+
+describe('据点里待命的近战守军迎击进了据点的敌人', () => {
+  const ALARM = RULES.site.alarm;
+  const dao = UNIT_BY_KEY.dao;
+  /** 己方营寨：两座对角的木栅围出 27×27 格（约 864 像素见方）的据点范围，中心在地图中心 */
+  const camp = () => {
+    const w = flatWorld();
+    const s = w.addSite(SITE_CAMP, '我营', C, C, 1);
+    const cx = (C / TILE) | 0;
+    for (const t of [cx - 13, cx + 13]) s.buildings.push(w.addBuilding(BUILDINGS.palisade, t, t, 1, s.id).id);
+    w.sealWalls();
+    return { w, site: s, rect: s.rect! };
+  };
+  /** 己方原地待命、血量近乎无限的守军 */
+  const guardAt = (w: World, x: number, y: number, key = 'dao'): number => {
+    const u = w.spawnUnit(idx(key), 1, x, y);
+    w.hp[u] = w.maxHp[u] = 1e7;
+    w.orderStop([u], false);
+    return u;
+  };
+  /**
+   * 敌方原地坚守的单位；hp 缺省时血量近乎无限。
+   * 己方视野只及单位 320 像素、建筑更远：在它北边 96 像素处给己方摆一座民居，保证敌兵看得见
+   */
+  const foeAt = (w: World, x: number, y: number, key = 'dao', hp = 1e7): number => {
+    w.addBuilding(BUILDINGS.house, ((x / TILE) | 0) - 1, (((y - 96) / TILE) | 0) - 1, 1, -1);
+    const e = w.spawnUnit(idx(key), 2, x, y);
+    w.hp[e] = w.maxHp[e] = hp;
+    w.orderStop([e], true);
+    return e;
+  };
+  /** 跑 secs 秒；each 在每帧之后调用。返回 u 出现过的全部目标，和离岗位最远走到多少 */
+  const track = (w: World, u: number, secs: number, each?: () => void): { targets: Set<number>; away: number } => {
+    const targets = new Set<number>();
+    let away = 0;
+    for (let t = 0; t < secs * 30; t++) {
+      w.tick();
+      w.fxN = 0;
+      if (w.target[u] !== NONE) targets.add(w.target[u]);
+      away = Math.max(away, Math.hypot(w.x[u] - w.homeX[u], w.y[u] - w.homeY[u]));
+      each?.();
+    }
+    return { targets, away };
+  };
+  const damaged = (w: World, e: number): number => 1e7 - w.hp[e];
+  const homeGap = (w: World, u: number): number => Math.hypot(w.x[u] - w.homeX[u], w.y[u] - w.homeY[u]);
+
+  it('场景前提：营寨有据点范围；守军在范围里待命时是守军；平时的索敌距离、离岗距离都比据点警戒距离短得多', () => {
+    const { w, site, rect } = camp();
+    const u = guardAt(w, rect.x0 + 80, C);
+    run(w, 1);
+    expect(site.rect).not.toBeNull();
+    expect(rect.x1 - rect.x0).toBeGreaterThan(ALARM + 100);
+    expect(w.sheltered[u]).toBe(1);
+    expect(w.order[u]).toBe(O_IDLE);
+    expect(dao.acq).toBeLessThan(ALARM - 200);
+    expect(RULES.combat.leash).toBeLessThan(ALARM - 200);
+  });
+
+  it('据点内离自己不到警戒距离、却远超平时索敌与离岗距离的敌兵：上前迎击，一路盯着它，走到离岗位超过离岗距离也不放手', () => {
+    const { w, rect } = camp();
+    const u = guardAt(w, rect.x0 + 80, C);
+    const e = foeAt(w, rect.x0 + 80 + 500, C);
+    expect(Math.hypot(w.x[e] - w.x[u], w.y[e] - w.y[u])).toBeGreaterThan(Math.max(RULES.combat.leash, dao.acq));
+    run(w, 1);
+    expect(w.seen[e] & 2, '己方看得见').toBe(2);
+    let locked = false, lost = 0;
+    const r = track(w, u, 15, () => {
+      if (w.target[u] === e) locked = true;
+      else if (locked && w.alive[e]) lost++;
+    });
+    expect(locked).toBe(true);
+    expect(lost, '盯上之后没有一帧放掉').toBe(0);
+    expect(r.away, '走出了离岗距离').toBeGreaterThan(RULES.combat.leash + 30);
+    expect(damaged(w, e), '打到了').toBeGreaterThan(0);
+  });
+
+  it.each([
+    [ALARM - 20, true],
+    [ALARM + 20, false],
+  ])('据点内、离自己 %d 像素的敌兵：警戒距离以内上前迎击=%s，超过警戒距离的不理', (gap, picked) => {
+    const { w, rect } = camp();
+    const u = guardAt(w, rect.x0 + 60, C);
+    const e = foeAt(w, rect.x0 + 60 + gap, C);
+    run(w, 1);
+    expect(siteContains(w.sites[0], w.x[e], w.y[e]), '敌兵在据点范围内').toBe(true);
+    const r = track(w, u, 8);
+    expect(r.targets.has(e)).toBe(picked);
+    if (!picked) expect(r.away, '没动').toBeLessThan(5);
+  });
+
+  it('据点范围外的敌兵不挑：只有它时不动；它比据点内的敌兵更近时，挑据点内那个，不是谁也不挑', () => {
+    const { w, rect } = camp();
+    const gx = rect.x1 - 100;
+    const out = foeAt(w, rect.x1 + 30, C);
+    const u = guardAt(w, gx, C);
+    run(w, 1);
+    expect(siteContains(w.sites[0], w.x[out], w.y[out]), '敌兵在据点范围外').toBe(false);
+    expect(w.seen[out] & 2).toBe(2);
+    const alone = track(w, u, 6);
+    expect(alone.targets.size, '只有据点外的敌兵：谁也不挑').toBe(0);
+    expect(alone.away, '没有朝它走过去').toBeLessThan(30);
+
+    const inn = foeAt(w, gx - 400, C);
+    const r = track(w, u, 15);
+    expect(r.targets.has(inn), '挑了据点内的').toBe(true);
+    expect(r.targets.has(out), '据点外更近的那个没挑').toBe(false);
+    expect(damaged(w, inn)).toBeGreaterThan(0);
+    expect(damaged(w, out)).toBe(0);
+  });
+
+  it('已盯上的目标出了据点范围、又不是打过自己的人：放手，之后不再挑它，回原位', () => {
+    const { w, rect } = camp();
+    const gx = rect.x1 - 100;
+    const u = guardAt(w, gx, C);
+    const e = foeAt(w, gx - 400, C);
+    run(w, 1);
+    let tick = 0;
+    while (w.target[u] !== e && tick++ < 300) {
+      w.tick();
+      w.fxN = 0;
+    }
+    expect(w.target[u], '先是盯上了').toBe(e);
+    run(w, 1);
+    expect(Math.hypot(w.x[u] - w.homeX[u], w.y[u] - w.homeY[u]), '已经上前一段').toBeGreaterThan(30);
+    // 敌兵被挪到据点范围外、离守军仍在警戒距离之内
+    w.x[e] = w.homeX[e] = rect.x1 + 60;
+    w.y[e] = w.homeY[e] = C;
+    expect(siteContains(w.sites[0], w.x[e], w.y[e])).toBe(false);
+    expect(Math.hypot(w.x[e] - w.x[u], w.y[e] - w.y[u])).toBeLessThan(ALARM);
+    w.tick();
+    w.fxN = 0;
+    run(w, 1);
+    expect(w.target[u], '放手').toBe(NONE);
+    const hp = w.hp[e];
+    const r = track(w, u, 5);
+    expect(r.targets.has(e), '不再挑它').toBe(false);
+    expect(w.hp[e]).toBe(hp);
+    run(w, 25);
+    expect(homeGap(w, u), '回原位').toBeLessThan(40);
+    expect(w.order[u]).toBe(O_IDLE);
+  });
+
+  it('最近打过自己的人例外：据点外的射手挨了打，守军追出据点去打它', () => {
+    const { w, rect } = camp();
+    const gx = rect.x1 - 60;
+    const u = guardAt(w, gx, C);
+    const nu = UNIT_BY_KEY.nu;
+    const e = foeAt(w, rect.x1 + 140, C, 'nu');
+    run(w, 1);
+    expect(siteContains(w.sites[0], w.x[e], w.y[e]), '射手在据点范围外').toBe(false);
+    expect(nu.main.range, '射程够得着守军').toBeGreaterThan(w.x[e] - gx);
+    let outside = false;
+    const r = track(w, u, 15, () => {
+      if (w.x[u] > rect.x1) outside = true;
+    });
+    expect(w.hitBy[u * 2] === e || w.hitBy[u * 2 + 1] === e, '被它打过').toBe(true);
+    expect(r.targets.has(e)).toBe(true);
+    expect(outside, '追出了据点').toBe(true);
+    expect(damaged(w, e), '打到了它').toBeGreaterThan(0);
+  });
+
+  /** 记下 a 在 ago 秒前打过 u（u 的 hitBy 第 0 位） */
+  const markHit = (w: World, u: number, a: number, ago: number): void => {
+    w.hitBy[u * 2] = a;
+    w.hitByUid[u * 2] = w.uid[a];
+    w.hitByTick[u * 2] = w.tickCount - ago * 30;
+  };
+
+  it.each([60, 200])('很久以前打过自己的敌方近战现在站在据点外 %d 像素处：新挑目标不挑它，守军不走出据点', gap => {
+    const { w, rect } = camp();
+    const u = guardAt(w, rect.x1 - 100, C);
+    // 据点归属每 15 帧才刷新一次：先让它成为守军，敌兵再出现
+    run(w, 1);
+    expect(w.sheltered[u]).toBe(1);
+    const e = foeAt(w, rect.x1 + gap, C);
+    markHit(w, u, e, 120);
+    run(w, 1);
+    expect(siteContains(w.sites[0], w.x[e], w.y[e]), '敌兵在据点范围外').toBe(false);
+    expect(w.seen[e] & 2).toBe(2);
+    let maxX = 0;
+    const r = track(w, u, 8, () => {
+      maxX = Math.max(maxX, w.x[u]);
+    });
+    expect(r.targets.has(e)).toBe(false);
+    expect(maxX, '没走出据点').toBeLessThanOrEqual(rect.x1);
+    expect(damaged(w, e)).toBe(0);
+  });
+
+  it('已盯上的目标是最近打过自己的人：它走出据点后不放手，守军追出据点去', () => {
+    const { w, rect } = camp();
+    const gx = rect.x1 - 100;
+    const u = guardAt(w, gx, C);
+    const e = foeAt(w, gx - 400, C);
+    run(w, 1);
+    let k = 0;
+    while (w.target[u] !== e && k++ < 300) {
+      w.tick();
+      w.fxN = 0;
+    }
+    expect(w.target[u], '先是盯上了').toBe(e);
+    markHit(w, u, e, 1);
+    run(w, 1);
+    w.x[e] = w.homeX[e] = rect.x1 + 60;
+    w.y[e] = w.homeY[e] = C;
+    expect(siteContains(w.sites[0], w.x[e], w.y[e])).toBe(false);
+    let outside = false, lost = 0;
+    track(w, u, 4, () => {
+      if (w.x[u] > rect.x1) outside = true;
+      if (w.target[u] !== e) lost++;
+    });
+    expect(lost, '一直盯着它').toBe(0);
+    expect(outside, '追出了据点').toBe(true);
+  });
+
+  it('被自己人挡住、另找目标时也不会换到据点外的敌兵', () => {
+    const { w, rect } = camp();
+    const gx = rect.x1 - 120;
+    const u = guardAt(w, gx, C);
+    // 据点归属每 15 帧才刷新一次：先让它成为守军，其余单位再出现
+    run(w, 1);
+    expect(w.sheltered[u]).toBe(1);
+    // 守军与据点内的目标之间，站一排坚守的己方近战把路堵上；据点外紧挨着边缘、离守军约 130 像素处另有一个没被围的敌兵（空位、直线都通）
+    for (let k = -5; k <= 5; k++) {
+      const a = w.spawnUnit(idx('dao'), 1, gx - 40, C + k * 16);
+      w.hp[a] = w.maxHp[a] = 1e7;
+      w.orderStop([a], true);
+    }
+    const inn = foeAt(w, gx - 130, C);
+    const out = foeAt(w, rect.x1 + 5, C + 10);
+    expect(siteContains(w.sites[0], w.x[out], w.y[out]), '这个敌兵在据点范围外').toBe(false);
+    let maxX = 0, peakStuck = 0;
+    const r = track(w, u, 8, () => {
+      maxX = Math.max(maxX, w.x[u]);
+      peakStuck = Math.max(peakStuck, w.stuck[u]);
+    });
+    expect(r.targets.has(inn), '先挑了据点内的').toBe(true);
+    expect(peakStuck, '确实被自己人挡到了换目标的时候').toBeGreaterThan(RULES.combat.blockedAfter - 0.2);
+    expect(r.targets.has(out)).toBe(false);
+    expect(maxX, '没走出据点').toBeLessThanOrEqual(rect.x1);
+  });
+
+  it('打完回原位：目标被打死后走回岗位附近，命令仍是待命', () => {
+    const { w, rect } = camp();
+    const u = guardAt(w, rect.x0 + 80, C);
+    const e = foeAt(w, rect.x0 + 80 + 400, C, 'dao', 30);
+    const r = track(w, u, 40);
+    expect(r.targets.has(e)).toBe(true);
+    expect(r.away, '出去过').toBeGreaterThan(200);
+    expect(w.alive[e], '目标死了').toBe(0);
+    expect(w.target[u]).toBe(NONE);
+    expect(homeGap(w, u), '回到岗位附近').toBeLessThan(40);
+    expect(w.order[u]).toBe(O_IDLE);
+  });
+
+  describe('不受影响的', () => {
+    it.each([
+      [ALARM - 60, true],
+      [ALARM + 60, false],
+    ])('据点里待命的远程守军：据点内离自己 %d 像素的敌兵迎击=%s（原本就按警戒距离）', (gap, picked) => {
+      const { w, rect } = camp();
+      const u = guardAt(w, rect.x0 + 60, C, 'nu');
+      const e = foeAt(w, rect.x0 + 60 + gap, C);
+      run(w, 1);
+      expect(w.sheltered[u]).toBe(1);
+      expect(track(w, u, 8).targets.has(e)).toBe(picked);
+    });
+
+    it.each([
+      [120, true],
+      [250, false],
+      [500, false],
+    ])('不在据点里待命的近战（sheltered 为 0）：离自己 %d 像素的敌兵（据点内）迎击=%s，只按平时的索敌距离', (gap, picked) => {
+      const { w, rect } = camp();
+      const u = guardAt(w, rect.x0 - 300, C);
+      const e = foeAt(w, rect.x0 - 300 + gap, C);
+      run(w, 1);
+      expect(w.sheltered[u], '不在据点里').toBe(0);
+      expect(dao.acq).toBeGreaterThan(130);
+      expect(dao.acq).toBeLessThan(250);
+      const r = track(w, u, 8);
+      expect(r.targets.has(e)).toBe(picked);
+      if (!picked) expect(r.away).toBeLessThan(5);
+    });
+
+    it('据点里的近战守军坚守：不为 500 像素外的敌兵动', () => {
+      const { w, rect } = camp();
+      const u = guardAt(w, rect.x0 + 80, C);
+      w.orderStop([u], true);
+      const e = foeAt(w, rect.x0 + 80 + 500, C);
+      run(w, 1);
+      expect(w.order[u]).toBe(O_HOLD);
+      const r = track(w, u, 8);
+      expect(r.targets.has(e)).toBe(false);
+      expect(r.away).toBeLessThan(5);
+    });
+
+    it('据点里的近战单位攻击移动：敌兵在攻击移动的警戒距离之外，不盯上它', () => {
+      const { w, rect } = camp();
+      const u = guardAt(w, rect.x0 + 80, C);
+      const e = foeAt(w, rect.x0 + 80 + 450, C);
+      run(w, 1);
+      expect(Math.hypot(w.x[e] - w.x[u], w.y[e] - w.y[u])).toBeGreaterThan(dao.alert);
+      w.orderMove([u], rect.x0 + 80, C - 350, true);
+      expect(w.order[u]).toBe(O_AMOVE);
+      const r = track(w, u, 3);
+      expect(r.targets.has(e)).toBe(false);
+      expect(w.y[u], '往目的地走了').toBeLessThan(C - 20);
     });
   });
 });

@@ -653,3 +653,51 @@ describe('findBuilding：跳过刚因为挤不到跟前而放下的那座建筑'
     });
   });
 });
+
+describe('scan 的 keep：只在认可的敌兵里挑，不影响警戒的 near', () => {
+  const C = (120 * TILE) / 2;
+  /** 己方 dao 在 (C, C)；敌方 A、B、F 分别在正东 100、200、450 处（F 在警戒距离之外），都不出手。scan 的警戒距离 400、索敌距离 300 */
+  const setup = () => {
+    const w = flatWorld();
+    const a = w.spawnUnit(idx('dao'), 1, C, C);
+    const [A, B, F] = [100, 200, 450].map((dx, k) => w.spawnUnit(idx('dao'), 2, C + dx, C + 13 * k));
+    for (const u of [a, A, B, F]) {
+      w.hp[u] = w.maxHp[u] = 1e5;
+      w.cd[u] = 1e9;
+    }
+    w.orderStop([A, B, F], true);
+    w.orderStop([a], true);
+    // 走一帧让空间网格与视野登记好
+    w.tick();
+    const run1 = (keep?: (j: number) => boolean) => {
+      scan(w, a, 1, w.x[a], w.y[a], 400, 300, UNIT_BY_KEY.dao, NONE, 0, keep);
+      return { pick: SCAN.pick, near: SCAN.near };
+    };
+    return { A, B, F, run1 };
+  };
+
+  it('不传 keep：挑最近的，near 也是它', () => {
+    const { A, run1 } = setup();
+    expect(run1()).toEqual({ pick: A, near: A });
+  });
+
+  it('keep 认可全部：与不传时一样', () => {
+    const { A, run1 } = setup();
+    expect(run1(() => true)).toEqual({ pick: A, near: A });
+  });
+
+  it('keep 不认可最近的：挑通过它的、更远的那个；near 仍是最近的', () => {
+    const { A, B, run1 } = setup();
+    expect(run1(j => j === B)).toEqual({ pick: B, near: A });
+  });
+
+  it('keep 一个都不认可：pick 是 NONE，near 仍是警戒距离内最近的', () => {
+    const { A, run1 } = setup();
+    expect(run1(() => false)).toEqual({ pick: NONE, near: A });
+  });
+
+  it('keep 认可的敌兵在索敌距离之外：挑不到它，仍然 NONE', () => {
+    const { A, F, run1 } = setup();
+    expect(run1(j => j === F)).toEqual({ pick: NONE, near: A });
+  });
+});

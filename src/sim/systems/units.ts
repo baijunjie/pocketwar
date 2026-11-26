@@ -168,16 +168,20 @@ export function updateUnits(w: World): void {
         }
         const hill = tt === T_HILL && !melee ? 1.12 : 1;
         // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击（城池里的自动登城），
-        // 近战的不出据点，只打进了据点的敌人；挨了敌方远程的打才出击追打那个射手
+        // 近战的也一样上前，但只挑进了据点的敌人（不追出据点）；挨了敌方远程的打才出击追打那个射手
         const guard = ord === O_IDLE && w.sheltered[i] === 1;
         const prov = guard && melee ? provoker(w, i, tm, TICK_RATE * SITE.provoke) : NONE;
         let acqR = ord === O_HOLD ? (melee ? C.holdAcq + d.main.range - C.meleeContact : d.main.range * (onWall ? SG.wallRange : hill) * windMax) : d.acq * hill;
         // 攻击移动：看见了就打，不等敌人走进平时的索敌距离
         if (ord === O_AMOVE && d.alert > acqR) acqR = d.alert;
         if (guard && !melee && SITE.alarm > acqR) acqR = SITE.alarm;
+        // 据点里的近战守军挑目标按警戒距离，但挑选只在据点内的敌兵里：据点外更近的（围城的）不挡住据点内的候选。
+        // 放宽的只是这次挑选，找建筑等仍按平时的索敌距离（acqR）
+        const pickR = guard && melee && SITE.alarm > acqR ? SITE.alarm : acqR;
         let scanR = d.alert > acqR ? d.alert : acqR;
         if (guard && SITE.alarm > scanR) scanR = SITE.alarm;
-        scan(w, i, tm, ux, uy, scanR, acqR, d, tgt, ord === O_IDLE ? (acqR > C.leash ? acqR : C.leash) : 0);
+        scan(w, i, tm, ux, uy, scanR, pickR, d, tgt, ord === O_IDLE ? (pickR > C.leash ? pickR : C.leash) : 0,
+          guardPick(w, i, d, ord));
         const near = SCAN.near;
         if (near !== NONE) {
           w.combatT[i] = C.linger;
@@ -237,7 +241,6 @@ export function updateUnits(w: World): void {
           tgt = target[i];
         } else if (auto && (tgt === NONE || (tgt < 0 && !d.siege) || (tgt >= 0 && melee && !w.engaged[i] && w.waitT[i] <= 0 && w.detourT[i] <= 0))) {
           let e = SCAN.pick;
-          if (e !== NONE && guard && melee && !inSite(w, w.shelterSite[i], x[e], y[e])) e = NONE;
           // 人形单位先打敌兵：手头盯着的是建筑也换过去。
           // 近战隔着民房这类小障碍（直线不通）的，绕得过去才挑（追击时沿局部路线绕）；绕不过去的几秒内不再挑它，下次换别人
           let took = e !== NONE && e === tgt;
@@ -796,7 +799,7 @@ export function updateUnits(w: World): void {
         w.avoidT[i] = C.avoidFor;
         let alt = NONE;
         if (ord !== O_ATTACK && tgt >= 0) {
-          scan(w, i, tm, ux, uy, d.acq, d.acq, d, NONE, ord === O_IDLE ? C.leash : 0);
+          scan(w, i, tm, ux, uy, d.acq, d.acq, d, NONE, ord === O_IDLE ? C.leash : 0, guardPick(w, i, d, ord));
           alt = SCAN.pick;
           // 换过去的目标得真有空位，否则只是在两个围满的敌人之间来回跑
           if (alt !== NONE && (alt === tgt || crowded(w, d, alt, Math.hypot(x[alt] - ux, y[alt] - uy)) || w.lineBlocked(ux, uy, x[alt], y[alt], tm))) alt = NONE;
@@ -835,18 +838,26 @@ export function updateUnits(w: World): void {
 const ONE = [0];
 
 /**
- * 待命的单位追敌：敌人离岗位超过这个距离（的平方）就不追。据点里的守军（远程，或追打过自己的人）按据点警戒距离算；
+ * 待命的单位追敌：敌人离岗位超过这个距离（的平方）就不追。据点里的守军按据点警戒距离算（近战守军追出据点的由 guardDrops 放手）；
  * 远程追的墙顶敌兵按 wallSeek 算（与 findWallFoe 挑目标时的离岗位距离一致）
  */
 function idleLeash2(w: World, i: number, d: UnitDef, tgt: number): number {
   const C = RULES.combat, SITE = RULES.site;
-  let r = w.sheltered[i] && (!d.melee || tgt === w.hitBy[i * 2] || tgt === w.hitBy[i * 2 + 1]) ? SITE.alarm : C.leash;
+  let r = w.sheltered[i] ? SITE.alarm : C.leash;
   if (!d.melee && tgt >= 0 && w.state[tgt] & S_WALL && C.wallSeek > r) r = C.wallSeek;
   return r * r * 1.2;
 }
 /** 据点里的近战守军不追出据点：目标在据点外、又不是最近打过自己的人，就该丢掉 */
 function guardDrops(w: World, i: number, tgt: number): boolean {
   return tgt !== w.hitBy[i * 2] && tgt !== w.hitBy[i * 2 + 1] && !inSite(w, w.shelterSite[i], w.x[tgt], w.y[tgt]);
+}
+
+/**
+ * 挑新目标时敌兵要满足的条件：据点里的近战守军只挑据点范围内的（打过自己的人也要在据点里才新挑，豁免只管已盯上的目标，它们照旧保留，由 guardDrops 定去留）；
+ * 其余没有限制（undefined）
+ */
+function guardPick(w: World, i: number, d: UnitDef, ord: number): ((foe: number) => boolean) | undefined {
+  return ord === O_IDLE && w.sheltered[i] === 1 && d.melee ? foe => foe === w.target[i] || inSite(w, w.shelterSite[i], w.x[foe], w.y[foe]) : undefined;
 }
 
 /** 绕行时空位所属的敌兵要满足的条件：据点里的近战守军只留不会被 guardDrops 丢掉的；其余没有限制（undefined） */
