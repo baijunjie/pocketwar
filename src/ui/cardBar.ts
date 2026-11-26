@@ -143,9 +143,9 @@ export class CardBar {
       + '\n拖到地面或小地图上松开：这些部队攻击移动过去，松在敌军身上则攻击它　从画面上拉框扫过卡片：一并选中它们';
     // 屏幕内没人（选着的全在屏幕外）时全选卡片变暗、按下不响应（见 bind）：点它只会把选择清空
     let html = `<div class="ucard acard${allOn ? ' on' : ''}${screen.length ? '' : ' off'}" data-all="1" title="${allTip}">
-      <span class="ah">全选</span>
-      <b>${screen.length}</b>
-      ${sel.length ? `<span class="mor${mAvg < 40 ? ' bad' : mAvg < 55 ? ' warn' : ''}">士气 ${mAvg}</span>` : '<span>拖去下令</span>'}
+      <span class="ab"><span class="ah">全选</span><b>${screen.length}</b></span>
+      ${sel.length ? `<span class="nm mor${mAvg < 40 ? ' bad' : mAvg < 55 ? ' warn' : ''}">士气 ${mAvg}</span>` : '<span class="nm">拖去下令</span>'}
+      <span class="hp"></span>
       ${sel.length ? `<span class="sel">选 ${sel.length}</span>` : ''}</div>`;
     for (const t of types) {
       const r = rows.get(t)!, d = UNITS[t], k = r.n || r.scr;
@@ -336,7 +336,7 @@ export class CardBar {
         // 全选卡片上的士气说的也是选着的人，拖动时换回「拖去下令」
         const mor = ghost.querySelector('.mor');
         if (mor) {
-          mor.className = '';
+          mor.className = 'nm';
           mor.textContent = '拖去下令';
         }
         ghost.classList.remove('hover', 'hot', 'on');
