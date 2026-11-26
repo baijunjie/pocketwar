@@ -119,6 +119,7 @@ export class GameApp {
         savePref('ui', m);
         this.applyLayout();
       },
+      lockMouseSupported: () => this.pointer.supported,
       lockMouse: () => this.pointer.enabled,
       setLockMouse: on => {
         this.pointer.setEnabled(on);

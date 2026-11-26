@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLICK_DIST, CLICK_GAP, moveCursor, nextClickCount, tipPosition } from '../src/pointerLock';
+import { CLICK_DIST, CLICK_GAP, isLocked, moveCursor, nextClickCount, tipPosition } from '../src/pointerLock';
 
 describe('常量', () => {
   it('连击 400ms / 6px', () => {
@@ -129,5 +129,16 @@ describe('tipPosition 提示框位置', () => {
 
   it('提示框比视口还大时贴左上角', () => {
     expect(tipPosition(50, 50, 400, 300, 200, 150)).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe('isLocked 锁定判定', () => {
+  it('有锁定元素才算锁定', () => {
+    expect(isLocked({} as Element)).toBe(true);
+    expect(isLocked(null)).toBe(false);
+  });
+
+  it('不支持 Pointer Lock 的浏览器（pointerLockElement 为 undefined）算没锁定', () => {
+    expect(isLocked(undefined)).toBe(false);
   });
 });

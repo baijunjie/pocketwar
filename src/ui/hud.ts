@@ -72,6 +72,8 @@ export interface HudCallbacks extends CardBarCallbacks {
   /** 滚轮 / 双指滑动的解释方式（设置面板里改） */
   wheelMode(): WheelMode;
   setWheelMode(m: WheelMode): void;
+  /** 浏览器支不支持锁定鼠标：不支持（iOS Safari）时设置里不显示这一项 */
+  lockMouseSupported(): boolean;
   /** 锁定鼠标（光标出不了画面，甩到边就卷屏） */
   lockMouse(): boolean;
   setLockMouse(on: boolean): void;
@@ -503,20 +505,22 @@ export class Hud {
     row.classList.add('desktop-only');
     this.settings.append(row, el('div', 'shint desktop-only', '触控板：双指滑动平移，捏合缩放，Option（Alt）+ 双指旋转。<br>鼠标：滚轮缩放，中键拖动旋转。<br>PageUp / PageDown（Mac：fn + ↑ / ↓）也能缩放'));
 
-    const lrow = el('div', 'srow desktop-only', '<span title="开启后在画面上点一下，光标就出不了画面，甩到边缘即卷屏">锁定鼠标</span>');
-    const lseg = el('div', 'seg');
-    const lbtns = [true, false].map(on => {
-      const b = el('button', '', on ? '开' : '关');
-      b.onclick = () => {
-        this.cb.setLockMouse(on);
-        for (const x of lbtns) x.classList.toggle('on', x === b);
-      };
-      b.classList.toggle('on', this.cb.lockMouse() === on);
-      return b;
-    });
-    lseg.append(...lbtns);
-    lrow.appendChild(lseg);
-    this.settings.append(lrow, el('div', 'shint desktop-only', '开启后在画面上点一下进入锁定，光标改由游戏自己画。按 Esc 退出锁定：全屏时（Chrome / Edge）锁定中 Esc 照常交给游戏（取消选择、退出指令模式），改为长按 Esc 退出锁定；其他浏览器与非全屏时，第一下 Esc 只解锁、不取消选择。解锁后再点一下画面重新锁定'));
+    if (this.cb.lockMouseSupported()) {
+      const lrow = el('div', 'srow desktop-only', '<span title="开启后在画面上点一下，光标就出不了画面，甩到边缘即卷屏">锁定鼠标</span>');
+      const lseg = el('div', 'seg');
+      const lbtns = [true, false].map(on => {
+        const b = el('button', '', on ? '开' : '关');
+        b.onclick = () => {
+          this.cb.setLockMouse(on);
+          for (const x of lbtns) x.classList.toggle('on', x === b);
+        };
+        b.classList.toggle('on', this.cb.lockMouse() === on);
+        return b;
+      });
+      lseg.append(...lbtns);
+      lrow.appendChild(lseg);
+      this.settings.append(lrow, el('div', 'shint desktop-only', '开启后在画面上点一下进入锁定，光标改由游戏自己画。按 Esc 退出锁定：全屏时（Chrome / Edge）锁定中 Esc 照常交给游戏（取消选择、退出指令模式），改为长按 Esc 退出锁定；其他浏览器与非全屏时，第一下 Esc 只解锁、不取消选择。解锁后再点一下画面重新锁定'));
+    }
 
     const urow = el('div', 'srow', '<span title="触屏设备竖屏时自动用移动版；在电脑上调试移动版时手动选「移动」">界面</span>');
     const useg = el('div', 'seg');

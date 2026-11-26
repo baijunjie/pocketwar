@@ -16,6 +16,14 @@ export function moveCursor(x: number, y: number, mx: number, my: number, w: numb
   };
 }
 
+/**
+ * 指针是否处于锁定：没锁定时 pointerLockElement 是 null，不支持 Pointer Lock 的浏览器（iOS Safari）上是 undefined，
+ * 两者都算没锁定。只比 null 会把 iOS 误判成锁定中，进而拦下全部触摸事件、调不存在的 exitPointerLock
+ */
+export function isLocked(el: Element | null | undefined): boolean {
+  return el != null;
+}
+
 /** 两次点击隔多久以内、离多远以内算连击（毫秒、像素） */
 export const CLICK_GAP = 400;
 export const CLICK_DIST = 6;
@@ -98,6 +106,8 @@ export class PointerLock {
   private tipTimer = 0;
   private tipSource: Element | null = null;
   private cursorKind = '';
+  /** 浏览器有没有 Pointer Lock API（iOS Safari 没有）：没有就从不请求锁定，设置里也不显示开关 */
+  readonly supported = typeof document.documentElement.requestPointerLock === 'function';
   private patched: { set: Element['setPointerCapture']; release: Element['releasePointerCapture'] } | null = null;
   private readonly cleanup: (() => void)[] = [];
 
@@ -130,7 +140,7 @@ export class PointerLock {
   }
 
   get locked(): boolean {
-    return document.pointerLockElement !== null;
+    return isLocked(document.pointerLockElement);
   }
 
   setEnabled(on: boolean): void {
@@ -283,7 +293,7 @@ export class PointerLock {
       } else if (type === 'pointerdown') {
         this.swallowing = false;
         const p = e as PointerEvent;
-        if (this.enabled && !this.gaveUp && p.button === 0 && p.target === this.canvas) {
+        if (this.supported && this.enabled && !this.gaveUp && p.button === 0 && p.target === this.canvas) {
           this.swallowing = true;
           const m = moveCursor(p.clientX, p.clientY, 0, 0, this.viewW(), this.viewH());
           this.x = m.x;
