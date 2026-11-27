@@ -14,6 +14,7 @@ class GainStub extends NodeStub {
   private ramp?: { start: number; from: number; to: number; fade: number };
   readonly gain = {
     value: 1,
+    exponentialRampToValueAtTime: vi.fn(),
     setTargetAtTime: (to: number, start: number, fade: number) => {
       this.ramp = { from: this.localGain(start), to, start, fade };
     },
@@ -45,6 +46,7 @@ class AudioContextStub {
   static last: AudioContextStub;
   readonly destination = new NodeStub();
   readonly sources: SourceStub[] = [];
+  readonly oscillators: SourceStub[] = [];
   state = 'running';
   currentTime = 0;
   readonly decodeAudioData = vi.fn(async (data: ArrayBuffer) => ({
@@ -56,6 +58,13 @@ class AudioContextStub {
     const source = new SourceStub();
     this.sources.push(source);
     return source;
+  }
+  createOscillator() {
+    const oscillator = Object.assign(new SourceStub(), {
+      frequency: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+    });
+    this.oscillators.push(oscillator);
+    return oscillator;
   }
   createDynamicsCompressor() { return Object.assign(new NodeStub(), { threshold: { value: 0 }, ratio: { value: 0 } }); }
   createGain() { return new GainStub(); }
@@ -69,8 +78,7 @@ class AudioContextStub {
 
 const settle = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 function response(path: string) { return { ok: true, arrayBuffer: async () => new TextEncoder().encode(path).buffer }; }
-function setup(unlock = true) {
-  const storage = new Map<string, string>();
+function setup(unlock = true, storage = new Map<string, string>()) {
   vi.stubGlobal('window', { AudioContext: AudioContextStub });
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -260,5 +268,93 @@ it.each([false, true])('配乐冷切时先保留旧曲，目标反转 %s', async
   } else {
     expect(ctx.playing(battle)).toHaveLength(1);
     expect(ctx.playing(original)).toHaveLength(0);
+  }
+});
+
+it.each([[undefined, true], ['1', true], ['0', false]] as const)(
+  '旧声音设置 %s 决定两个分类的初始状态，之后各自持久化', (oldValue, initial) => {
+    const storage = new Map<string, string>();
+    if (oldValue !== undefined) storage.set('fengyan.sound', oldValue);
+    const { sound } = setup(false, storage);
+    const settings = (s: Sound) => [s.enabled, s.musicEnabled];
+    expect(settings(sound)).toEqual([initial, initial]);
+    sound.toggle();
+    expect(settings(new Sound())).toEqual([!initial, initial]);
+    sound.toggleMusic();
+    expect(settings(new Sound())).toEqual([!initial, !initial]);
+    sound.toggle();
+    expect(settings(new Sound())).toEqual([initial, !initial]);
+  },
+);
+
+it.each(['音效', '音乐'] as const)('关闭%s时只停止同类音轨、禁止同类新声音', async muted => {
+  const { sound } = setup();
+  const ctx = AudioContextStub.last;
+  const wind = 'environment/wind-open-field-loop', shot = 'field/bow-release-1', score = 'music/deployment-loop';
+  sound.bed(wind, 0.4);
+  sound.oneShot(shot, 0.4);
+  sound.music(score, 0.4);
+  sound.ui('order');
+  await settle();
+  const [windVoice] = ctx.playing(wind), [shotVoice] = ctx.playing(shot), [scoreVoice] = ctx.playing(score);
+  expect(ctx.oscillators).toHaveLength(1);
+  const effectsOn = muted === '音乐';
+  if (effectsOn) sound.toggleMusic();
+  else sound.toggle();
+  ctx.currentTime += 2;
+  expect(windVoice.gainAt(ctx.currentTime) > 0).toBe(effectsOn);
+  expect(shotVoice.gainAt(ctx.currentTime) > 0).toBe(effectsOn);
+  expect(scoreVoice.gainAt(ctx.currentTime) > 0).toBe(!effectsOn);
+  sound.bed('environment/rain-grass-loop', 0.4);
+  sound.oneShot('signals/watch-bell', 0.5);
+  sound.ui('attack');
+  sound.music('music/field-battle-loop', 0.4);
+  await settle();
+  expect(ctx.playing('environment/rain-grass-loop')).toHaveLength(Number(effectsOn));
+  expect(ctx.playing('signals/watch-bell')).toHaveLength(Number(effectsOn));
+  expect(ctx.oscillators).toHaveLength(effectsOn ? 2 : 1);
+  expect(ctx.playing('music/field-battle-loop')).toHaveLength(Number(!effectsOn));
+});
+
+it.each(['音效', '音乐'] as const)('加载途中关闭%s，迟到的解码仍按所属开关处理', async muted => {
+  const { sound, fetch } = setup();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  fetch.mockImplementation(async path => { await gate; return response(path); });
+  const fire = 'environment/timber-fire-loop', shot = 'field/shield-impact-1', score = 'music/field-battle-loop';
+  sound.bed(fire, 0.3);
+  sound.oneShot(shot, 0.3);
+  sound.music(score, 0.3);
+  const effectsOn = muted === '音乐';
+  if (effectsOn) sound.toggleMusic();
+  else sound.toggle();
+  release();
+  await settle();
+  const ctx = AudioContextStub.last;
+  expect(ctx.playing(fire)).toHaveLength(Number(effectsOn));
+  expect(ctx.playing(shot)).toHaveLength(Number(effectsOn));
+  expect(ctx.playing(score)).toHaveLength(Number(!effectsOn));
+});
+
+it.each([true, false])('胜败配乐只受音乐开关控制：胜利 %s', async won => {
+  for (const musicOn of [false, true]) {
+    const { sound } = setup();
+    if (musicOn) sound.toggle();
+    else sound.toggleMusic();
+    sound.finish(won);
+    await settle();
+    const ctx = AudioContextStub.last;
+    const path = won ? 'music/victory' : 'music/retreat';
+    expect(ctx.playing(path)).toHaveLength(Number(musicOn));
+    if (musicOn) {
+      const [ending] = ctx.playing(path);
+      sound.toggle();
+      ctx.currentTime += 1;
+      expect(ending.gainAt(ctx.currentTime)).toBeGreaterThan(0);
+      sound.toggleMusic();
+      ctx.currentTime += 1;
+      expect(ending.gainAt(ctx.currentTime)).toBe(0);
+    }
+    sound.dispose();
   }
 });

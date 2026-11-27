@@ -97,6 +97,8 @@ export interface HudCallbacks extends Omit<CardBarCallbacks, 'holdCard' | 'tapBu
   exit(): void;
   toggleSound(): boolean;
   soundOn(): boolean;
+  toggleMusic(): boolean;
+  musicOn(): boolean;
   /** 滚轮 / 双指滑动的解释方式（设置面板里改） */
   wheelMode(): WheelMode;
   setWheelMode(m: WheelMode): void;
@@ -233,6 +235,8 @@ export class Hud {
   /** 最近一次的运行速度：暂停时速度按钮写它 */
   private runSpeed = 1;
   private soundBtn!: HTMLButtonElement;
+  private readonly effectsSwitch = el('button');
+  private readonly musicSwitch = el('button');
   private settingsBtn!: HTMLButtonElement;
   private readonly portraits = new Map<number, string>();
   private selKey = '?';
@@ -305,7 +309,6 @@ export class Hud {
     this.soundBtn = el('button', '', '');
     this.soundBtn.title = '开 / 关音效（M）';
     this.soundBtn.onclick = () => this.setSound(cb.toggleSound());
-    this.setSound(cb.soundOn());
     const hb = el('button', '', '帮助');
     hb.onclick = () => this.toggleHelp();
     const sb = (this.settingsBtn = el('button', '', '设置'));
@@ -786,6 +789,18 @@ export class Hud {
   }
 
   private buildSettings(): void {
+    for (const [label, button] of [['音效', this.effectsSwitch], ['音乐', this.musicSwitch]] as const) {
+      const row = el('div', 'srow');
+      button.setAttribute('role', 'switch');
+      button.setAttribute('aria-label', label);
+      row.append(el('span', '', label), button);
+      this.settings.appendChild(row);
+    }
+    this.effectsSwitch.onclick = () => this.setSound(this.cb.toggleSound());
+    this.musicSwitch.onclick = () => this.setAudioSwitch(this.musicSwitch, this.cb.toggleMusic());
+    this.setSound(this.cb.soundOn());
+    this.setAudioSwitch(this.musicSwitch, this.cb.musicOn());
+
     const row = el('div', 'srow', '<span title="鼠标滚轮与触控板双指滑动怎么操作镜头">滚轮 / 双指</span>');
     const seg = el('div', 'seg');
     const btns = WHEEL_MODES.map(({ mode, label, tip }) => {
@@ -947,7 +962,14 @@ export class Hud {
     while (this.feed.children.length > this.feedMax) this.feed.lastChild!.remove();
   }
 
+  private setAudioSwitch(button: HTMLButtonElement, on: boolean): void {
+    button.textContent = on ? '开' : '关';
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-checked', String(on));
+  }
+
   setSound(on: boolean): void {
+    this.setAudioSwitch(this.effectsSwitch, on);
     this.soundBtn.textContent = on ? '音效：开' : '音效：关';
     this.soundBtn.classList.toggle('on', on);
   }

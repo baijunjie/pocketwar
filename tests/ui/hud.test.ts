@@ -318,7 +318,7 @@ describe('Hud 移动版新增的界面', () => {
   };
   const mk = (w = world, rgb: [number, number, number][] = [[0, 0, 0], [200, 0, 0], [0, 0, 200]]): Hud => {
     const callbacks = new Proxy({} as Record<string, ReturnType<typeof vi.fn>>, {
-      get: (t, k: string) => (t[k] ??= vi.fn(k === 'soundOn' || k === 'toggleSound' ? () => false : undefined)),
+      get: (t, k: string) => (t[k] ??= vi.fn(['soundOn', 'toggleSound', 'musicOn', 'toggleMusic'].includes(k) ? () => false : undefined)),
     });
     cb = callbacks;
     hud = new Hud(host as unknown as HTMLElement, w, rgb, callbacks as unknown as HudCallbacks);
@@ -377,6 +377,37 @@ describe('Hud 移动版新增的界面', () => {
       mk(world);
       expect(host.classList.contains('watch')).toBe(false);
     });
+  });
+
+  it('设置中的音效与音乐可独立切换，顶栏音效按钮及 M 的状态更新只同步音效', () => {
+    const hud = mk();
+    const buttons: FakeEl[] = [];
+    walk(host, el => { if (el.attrs.role === 'switch') buttons.push(el); });
+    const effects = buttons.find(b => b.attrs['aria-label'] === '音效')!;
+    const music = buttons.find(b => b.attrs['aria-label'] === '音乐')!;
+    const top = find(b => b.tagName === 'button' && b.textContent === '音效：关')!;
+    expect(effects.attrs['aria-checked']).toBe('false');
+    expect(music.attrs['aria-checked']).toBe('false');
+
+    cb.toggleMusic.mockReturnValue(true);
+    music.onclick!(new Event('click'));
+    expect(cb.toggleMusic).toHaveBeenCalledTimes(1);
+    expect(cb.toggleSound).not.toHaveBeenCalled();
+    expect(music.attrs['aria-checked']).toBe('true');
+    expect(effects.attrs['aria-checked']).toBe('false');
+
+    cb.toggleSound.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    effects.onclick!(new Event('click'));
+    expect(top.textContent).toBe('音效：开');
+    expect(effects.attrs['aria-checked']).toBe('true');
+    top.onclick!(new Event('click'));
+    expect(effects.attrs['aria-checked']).toBe('false');
+
+    hud.setSound(true);
+    expect(top.textContent).toBe('音效：开');
+    expect(effects.attrs['aria-checked']).toBe('true');
+    expect(music.attrs['aria-checked']).toBe('true');
+    expect(cb.toggleMusic).toHaveBeenCalledTimes(1);
   });
 
   describe('取消选择按钮', () => {

@@ -1,9 +1,15 @@
+import { loadPref, savePref } from '../prefs';
 import type { World } from '../sim/world';
 import { Battlefield } from './battlefield';
 
-const KEY = 'fengyan.sound';
 const CACHE_BYTES = 48 * 1024 * 1024;
 const MAX_SHOTS = 20;
+
+type Channel = 'effects' | 'music';
+
+function bedChannel(path: string): Channel {
+  return path.startsWith('music/') ? 'music' : 'effects';
+}
 
 interface Voice {
   source: AudioBufferSourceNode;
@@ -27,7 +33,9 @@ export class Sound {
   private readonly retryAfter = new Map<string, number>();
   private readonly abort = new AbortController();
   private readonly beds = new Map<string, Bed>();
-  private readonly sources = new Set<AudioScheduledSourceNode>();
+  private readonly sources: Record<Channel, Set<AudioScheduledSourceNode>> = {
+    effects: new Set(), music: new Set(),
+  };
   private readonly shots = new Set<AudioBufferSourceNode>();
   private readonly pending = new Map<string, { gain: number; pan: number; time: number }>();
   private requestedMusic?: string;
@@ -35,14 +43,14 @@ export class Sound {
   private ending?: string;
   private finished = false;
   private paused = false;
-  enabled = true;
+  enabled: boolean;
+  musicEnabled: boolean;
 
   constructor() {
-    try {
-      this.enabled = localStorage.getItem(KEY) !== '0';
-    } catch {
-      // 读不到设置就按默认开启
-    }
+    // 旧版本只有总开关；两项新偏好各自首次修改前继承它。
+    const legacy = loadPref('sound');
+    this.enabled = (loadPref('effects') ?? legacy) !== '0';
+    this.musicEnabled = (loadPref('music') ?? legacy) !== '0';
   }
 
   /** 浏览器只允许在用户操作后启动或恢复音频。 */
@@ -59,7 +67,7 @@ export class Sound {
         compressor.ratio.value = 5;
         compressor.connect(ctx.destination);
         const master = ctx.createGain();
-        master.gain.value = this.enabled ? 0.9 : 0;
+        master.gain.value = 0.9;
         master.connect(compressor);
         this.master = master;
         this.ctx = ctx;
@@ -76,8 +84,9 @@ export class Sound {
     }
   }
 
-  private get audible(): boolean {
-    return this.enabled && !this.paused && this.ctx?.state === 'running' && !this.abort.signal.aborted;
+  private canPlay(channel: Channel): boolean {
+    const enabled = channel === 'music' ? this.musicEnabled : this.enabled;
+    return enabled && !this.paused && this.ctx?.state === 'running' && !this.abort.signal.aborted;
   }
 
   private load(path: string): Promise<AudioBuffer | null> {
@@ -116,7 +125,7 @@ export class Sound {
     return job;
   }
 
-  private voice(buffer: AudioBuffer, gain: number, pan: number, loop: boolean): Voice {
+  private voice(buffer: AudioBuffer, gain: number, pan: number, loop: boolean, channel: Channel): Voice {
     const ctx = this.ctx!;
     const source = ctx.createBufferSource();
     source.buffer = buffer;
@@ -132,20 +141,20 @@ export class Sound {
       volume.connect(this.master!);
     }
     source.onended = () => {
-      this.sources.delete(source);
+      this.sources[channel].delete(source);
       this.shots.delete(source);
       source.disconnect();
       volume.disconnect();
       panner?.disconnect();
     };
-    this.sources.add(source);
-    if (!loop) this.shots.add(source);
+    this.sources[channel].add(source);
+    if (!loop && channel === 'effects') this.shots.add(source);
     source.start();
     return { source, gain: volume, panner };
   }
 
   oneShot(path: string, gain: number, pan = 0): void {
-    if (!this.audible || this.finished || gain <= 0 || this.shots.size >= MAX_SHOTS) return;
+    if (!this.canPlay('effects') || this.finished || gain <= 0 || this.shots.size >= MAX_SHOTS) return;
     const now = performance.now();
     if (now < (this.retryAfter.get(path) ?? 0)) return;
     const shot = { gain, pan, time: now };
@@ -159,14 +168,15 @@ export class Sound {
       if (this.pending.get(path) !== shot) return;
       this.pending.delete(path);
       // 冷启动时即便解码慢，也不能把早已过去的刀剑与炮击积压到同一帧补放。
-      if (buffer && this.audible && performance.now() - shot.time < 350 && this.shots.size < MAX_SHOTS) {
-        this.voice(buffer, shot.gain, shot.pan, false);
+      if (buffer && this.canPlay('effects') && performance.now() - shot.time < 350 && this.shots.size < MAX_SHOTS) {
+        this.voice(buffer, shot.gain, shot.pan, false, 'effects');
       }
     });
   }
 
   bed(path: string, gain: number, pan = 0): void {
-    if (!this.audible || this.finished) return;
+    const channel = bedChannel(path);
+    if (!this.canPlay(channel) || this.finished) return;
     const now = this.ctx!.currentTime;
     const bed = this.beds.get(path);
     if (gain <= 0) {
@@ -189,11 +199,11 @@ export class Sound {
     this.beds.set(path, next);
     void this.load(path).then(buffer => {
       if (this.beds.get(path) !== next) return;
-      if (!buffer || !this.audible) {
+      if (!buffer || !this.canPlay(channel)) {
         this.beds.delete(path);
         return;
       }
-      next.voice = this.voice(buffer, 0, next.pan, true);
+      next.voice = this.voice(buffer, 0, next.pan, true, channel);
       next.voice.gain.gain.setTargetAtTime(next.gain, this.ctx!.currentTime, 0.22);
       if (path === this.requestedMusic && this.playingMusic !== path) {
         if (this.playingMusic) this.bed(this.playingMusic, 0);
@@ -204,7 +214,7 @@ export class Sound {
 
   /** 新曲加载时旧曲持续演奏。若战况先恢复，保留旧曲的播放位置。 */
   music(path: string, gain: number): void {
-    if (!this.audible || this.finished) return;
+    if (!this.canPlay('music') || this.finished) return;
     if (this.requestedMusic !== path && this.requestedMusic !== this.playingMusic && this.requestedMusic) {
       this.beds.delete(this.requestedMusic);
     }
@@ -213,11 +223,11 @@ export class Sound {
   }
 
   update(w: World, camX: number, camY: number, radius: number, zoom: number, toPan: (x: number, y: number) => number): void {
-    if (this.audible && !this.finished) this.battlefield.update(this, w, camX, camY, radius, zoom, toPan);
+    if (!this.finished && (this.canPlay('music') || this.canPlay('effects'))) this.battlefield.update(this, w, camX, camY, radius, zoom, toPan);
   }
 
   ui(kind: 'order' | 'attack' | 'select' | 'deny'): void {
-    if (!this.audible || this.finished) return;
+    if (!this.canPlay('effects') || this.finished) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
     const pitch = { order: 150, attack: 190, select: 550, deny: 110 }[kind];
@@ -229,20 +239,25 @@ export class Sound {
     level.gain.value = kind === 'select' ? 0.035 : 0.13;
     level.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
     osc.connect(level).connect(this.master!);
-    this.sources.add(osc);
-    osc.onended = () => { this.sources.delete(osc); osc.disconnect(); level.disconnect(); };
+    this.sources.effects.add(osc);
+    osc.onended = () => { this.sources.effects.delete(osc); osc.disconnect(); level.disconnect(); };
     osc.start(t);
     osc.stop(t + 0.13);
   }
 
-  private stopScene(): void {
-    this.pending.clear();
-    for (const source of this.sources) source.stop();
-    this.sources.clear();
-    this.shots.clear();
-    this.beds.clear();
-    this.playingMusic = undefined;
-    this.requestedMusic = undefined;
+  private stopChannel(channel: Channel): void {
+    for (const source of this.sources[channel]) source.stop();
+    this.sources[channel].clear();
+    for (const path of this.beds.keys()) {
+      if (bedChannel(path) === channel) this.beds.delete(path);
+    }
+    if (channel === 'effects') {
+      this.pending.clear();
+      this.shots.clear();
+    } else {
+      this.playingMusic = undefined;
+      this.requestedMusic = undefined;
+    }
   }
 
   setPaused(paused: boolean): void {
@@ -259,39 +274,44 @@ export class Sound {
 
   toggle(): boolean {
     this.enabled = !this.enabled;
-    try {
-      localStorage.setItem(KEY, this.enabled ? '1' : '0');
-    } catch {
-      // 存不了就只在本次生效
-    }
-    if (!this.enabled) this.stopScene();
-    if (this.master && this.ctx) this.master.gain.setTargetAtTime(this.enabled ? 0.9 : 0, this.ctx.currentTime, 0.025);
+    savePref('effects', this.enabled ? '1' : '0');
     if (this.enabled) this.unlock();
+    else this.stopChannel('effects');
     return this.enabled;
+  }
+
+  toggleMusic(): boolean {
+    this.musicEnabled = !this.musicEnabled;
+    savePref('music', this.musicEnabled ? '1' : '0');
+    if (this.musicEnabled) this.unlock();
+    else this.stopChannel('music');
+    return this.musicEnabled;
   }
 
   finish(won: boolean | null): void {
     if (this.finished) return;
     this.finished = true;
-    this.stopScene();
+    this.stopChannel('effects');
+    this.stopChannel('music');
     if (won !== null) this.ending = won ? 'music/victory' : 'music/retreat';
     this.playEnding();
   }
 
   private playEnding(): void {
     const path = this.ending;
-    if (!path || !this.audible || performance.now() < (this.retryAfter.get(path) ?? 0)) return;
+    if (!path || !this.canPlay('music') || performance.now() < (this.retryAfter.get(path) ?? 0)) return;
     void this.load(path).then(buffer => {
-      if (!buffer || !this.audible || this.ending !== path) return;
+      if (!buffer || !this.canPlay('music') || this.ending !== path) return;
       this.ending = undefined;
-      this.voice(buffer, 0.46, 0, false);
+      this.voice(buffer, 0.46, 0, false, 'music');
     });
   }
 
   dispose(): void {
     this.abort.abort();
     this.ending = undefined;
-    this.stopScene();
+    this.stopChannel('effects');
+    this.stopChannel('music');
     this.buffers.clear();
     this.bufferBytes = 0;
     if (this.ctx) void this.ctx.close().catch(() => {});

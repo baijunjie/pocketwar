@@ -41,6 +41,8 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .dbg { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctl { top: 0; right: 0; display: flex; gap: 4px; padding: 6px 8px 6px 6px; border-top: none; border-right: none; border-radius: 0 0 0 6px; }
 .settings { top: 48px; right: 0; z-index: 2; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; width: 300px; box-sizing: border-box; border-right: none; border-radius: 6px 0 0 6px; background: rgba(20, 16, 12, 0.96); }
+.settings { max-height: calc(100% - 48px); overflow-y: auto; }
+.settings [role="switch"] { min-width: 48px; }
 .settings[hidden] { display: none; }
 .settings .srow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .settings .srow > span { color: var(--dim); white-space: nowrap; }

@@ -127,6 +127,8 @@ export class GameApp {
       exit: () => this.onExit(),
       toggleSound: () => this.sound.toggle(),
       soundOn: () => this.sound.enabled,
+      toggleMusic: () => this.sound.toggleMusic(),
+      musicOn: () => this.sound.musicEnabled,
       wheelMode: () => this.wheelMode,
       setWheelMode: m => {
         this.wheelMode = m;
