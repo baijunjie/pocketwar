@@ -25,6 +25,16 @@ const FOV = 30;
 const TAN = Math.tan((FOV / 2) * (Math.PI / 180));
 const DULL = new THREE.Color(0.42, 0.45, 0.48);
 const PALE = new THREE.Color(0.78, 0.81, 0.86);
+const WIND_STREAKS = 108;
+
+interface WindStreak {
+  x: number;
+  z: number;
+  age: number;
+  life: number;
+  scale: number;
+  height: number;
+}
 
 export interface Marker {
   x: number;
@@ -119,6 +129,7 @@ export class Renderer {
   private bldSig = new Int32Array(0);
   /** 地面积雪 0..1：下雪时慢慢积起来，雪停后慢慢化掉 */
   private snowCover = 0;
+  private readonly windStreaks: WindStreak[] = [];
   private readonly flags: THREE.InstancedMesh;
   private readonly siteFlags: THREE.InstancedMesh;
   private readonly disposables: { dispose(): void }[] = [];
@@ -767,6 +778,44 @@ export class Renderer {
     }
   }
 
+  /** 风痕留在世界坐标里，转镜头时自然改变投影方向 */
+  private drawWind(S: Quads, dt: number): void {
+    const { wind, windDir, light, rain, snow } = this.world.env;
+    const streaks = this.windStreaks;
+    if (wind <= 0) {
+      streaks.length = 0;
+      return;
+    }
+    const wx = Math.cos(windDir), wz = Math.sin(windDir);
+    const dist = this.dist, pad = dist * 0.18;
+    const x0 = this.vx0 - pad, x1 = this.vx1 + pad;
+    const z0 = this.vy0 - pad, z1 = this.vy1 + pad;
+    const step = (85 + dist * 0.04) * wind * dt;
+    const len = Math.max(34, dist * 0.1) * (0.65 + 0.35 * wind);
+    const width = Math.max(2, dist * 0.0055);
+    const fadeIn = Math.min(1, wind / 0.2);
+    const opacity = fadeIn * (0.45 + 0.55 * wind) * (0.25 + light * 0.12) * (1 - Math.max(rain, snow) * 0.22);
+    const starting = streaks.length === 0;
+
+    for (let k = 0; k < WIND_STREAKS; k++) {
+      const p = streaks[k] ?? (streaks[k] = { x: 0, z: 0, age: 0, life: 0, scale: 1, height: 0 });
+      p.x += wx * step * p.scale;
+      p.z += wz * step * p.scale;
+      p.age += dt;
+      if (p.age >= p.life || p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1) {
+        p.x = x0 + Math.random() * (x1 - x0);
+        p.z = z0 + Math.random() * (z1 - z0);
+        p.life = 1.8 + Math.random() * 2.6;
+        p.age = starting ? Math.random() * p.life : 0;
+        p.scale = 0.7 + Math.random() * 1.1;
+        p.height = Math.random();
+      }
+      const fade = Math.min(1, p.age / 0.55, (p.life - p.age) / 0.7);
+      const y = this.groundY(p.x, p.z) + 18 + p.height * Math.min(170, dist * 0.1);
+      S.add(Q_AXIS, this.soft, p.x, y, p.z, len * p.scale, width, 0.91, 0.95, 1, opacity * fade, 0.5, 0.5, wx, 0, wz);
+    }
+  }
+
   /** 夜里据点自动升起火把：塔楼、门楼顶上和主建筑门前各一处火光 */
   private drawSiteTorches(S: Quads, G: Quads, fog: boolean): void {
     const w = this.world;
@@ -1256,6 +1305,7 @@ export class Renderer {
     }
     this.drawRain(S);
     this.drawSnow(S);
+    this.drawWind(S, dt);
     this.drawSiteTorches(S, G, fog);
     this.raised.end(this.viewW, this.viewH);
     G.end(this.viewW, this.viewH);

@@ -22,13 +22,13 @@ export class Sound {
   private noise: AudioBuffer | null = null;
   private rainGain: GainNode | null = null;
   private windGain: GainNode | null = null;
-  private windFilter: BiquadFilterNode | null = null;
+  private windGust: GainNode | null = null;
+  private nextGust = 0;
   private readonly last = new Float64Array(16);
   private readonly accN = new Float32Array(16);
   private readonly accG = new Float32Array(16);
   private readonly accP = new Float32Array(16);
   private readonly accA = new Float32Array(16);
-  private wind = 0;
   enabled = true;
 
   constructor() {
@@ -55,7 +55,7 @@ export class Sound {
     this.master = ctx.createGain();
     this.master.gain.value = this.enabled ? 0.9 : 0;
     this.master.connect(comp);
-    // 两秒白噪声，所有带噪声成分的声音共用
+    // 两秒白噪声，战斗声和提示音的噪声成分共用
     const len = ctx.sampleRate * 2;
     this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = this.noise.getChannelData(0);
@@ -81,22 +81,38 @@ export class Sound {
     const dropGain = ctx.createGain();
     dropGain.gain.value = 0.55;
     drops.connect(dropLp).connect(dropGain).connect(this.rainGain);
-    // 风：带通噪声，中心频率和音量缓慢起伏
-    const wind = this.loop();
-    this.windFilter = ctx.createBiquadFilter();
-    this.windFilter.type = 'bandpass';
-    this.windFilter.frequency.value = 380;
-    this.windFilter.Q.value = 0.9;
+
+    // 风声由持续的低沉气流和间歇的轻响叠成。两层从同一长循环的不同位置开始，避开同相叠加。
+    const wind = this.pinkNoise(21);
     this.windGain = ctx.createGain();
     this.windGain.gain.value = 0;
-    wind.connect(this.windFilter).connect(this.windGain).connect(this.master);
+    this.windGain.connect(this.master);
+    this.windBand(this.loop(wind), 95, 580).connect(this.windGain);
+    this.windGust = ctx.createGain();
+    this.windGust.gain.value = 0.22;
+    this.nextGust = 0;
+    this.windBand(this.loop(wind, 10 + Math.random() * 7), 420, 1450).connect(this.windGust).connect(this.windGain);
   }
 
-  private loop(buf: AudioBuffer | null = this.noise): AudioBufferSourceNode {
+  private windBand(source: AudioBufferSourceNode, low: number, high: number): BiquadFilterNode {
+    const ctx = this.ctx!;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = low;
+    hp.Q.value = 0.3;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = high;
+    lp.Q.value = 0.3;
+    source.connect(hp).connect(lp);
+    return lp;
+  }
+
+  private loop(buf: AudioBuffer, offset = Math.random() * 1.5): AudioBufferSourceNode {
     const src = this.ctx!.createBufferSource();
     src.buffer = buf;
     src.loop = true;
-    src.start(0, Math.random() * 1.5);
+    src.start(0, offset);
     return src;
   }
 
@@ -254,12 +270,11 @@ export class Sound {
     const env = w.env;
     // 雨声是垫在底下的：音量压得很低，镜头拉高了更轻
     this.rainGain!.gain.setTargetAtTime(env.rain * (0.09 + 0.05 * zk), now, 0.8);
-    // 风：只在刮风时有（env.wind 为 0 就静音），风越大越响，镜头越高越明显；强弱缓慢起伏
-    this.wind += 0.016;
-    const gust = 0.6 + 0.4 * Math.sin(this.wind * 0.37) * Math.sin(this.wind * 0.11 + 1.3);
-    const high = Math.max(0, Math.min(1, (1.2 - zoom) / 0.9));
-    this.windGain!.gain.setTargetAtTime(env.wind * (0.06 + high * 0.07 + env.rain * 0.03) * gust, now, 0.5);
-    this.windFilter!.frequency.setTargetAtTime(280 + gust * 200 + env.wind * 220, now, 0.6);
+    this.windGain!.gain.setTargetAtTime(env.wind * (0.022 + 0.010 * zk), now, 0.6);
+    if (env.wind > 0 && now >= this.nextGust) {
+      this.nextGust = now + 1.8 + Math.random() * 3.8;
+      this.windGust!.gain.setTargetAtTime(0.12 + Math.random() ** 2 * 0.57, now, 0.85);
+    }
   }
 
   /** 界面与号令的提示音 */

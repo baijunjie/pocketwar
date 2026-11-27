@@ -1,0 +1,89 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { InstancedBufferGeometry, Mesh, Scene } from 'three';
+import { Renderer } from '../../src/render/renderer';
+import { FACTIONS } from '../../src/sim/content/factions';
+import type { FactionId } from '../../src/sim/content/types';
+import { flatWorld } from '../helpers';
+
+const submit = vi.hoisted(() => vi.fn<(scene: Scene) => void>());
+
+vi.mock('three', async importOriginal => ({
+  ...await importOriginal<typeof import('three')>(),
+  WebGLRenderer: class {
+    shadowMap = {};
+    setPixelRatio() {}
+    setSize() {}
+    render = submit;
+    dispose() {}
+    forceContextLoss() {}
+  },
+}));
+
+afterEach(() => {
+  submit.mockReset();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+/** 读取送到 WebGL 的实例，测试场景里只有风会提交半透明粒子。 */
+function submittedStreaks() {
+  const scene = submit.mock.lastCall![0];
+  return scene.children.flatMap(node => {
+    if (!(node instanceof Mesh) || !(node.geometry instanceof InstancedBufferGeometry) || !node.visible) return [];
+    const geometry = node.geometry;
+    const pos = geometry.getAttribute('aPos');
+    const color = geometry.getAttribute('aColor');
+    return Array.from({ length: geometry.instanceCount }, (_, i) => ({
+      x: pos.getX(i), z: pos.getZ(i), opacity: color.getW(i),
+    }));
+  });
+}
+
+it('起风时气流顺着世界风向移动，转镜头后仍沿世界风向，停风时消失', () => {
+  const noop = () => {};
+  const canvasContext = {
+    save: noop, restore: noop, translate: noop, scale: noop, fillRect: noop,
+    beginPath: noop, closePath: noop, arc: noop, stroke: noop, fill: noop, setLineDash: noop,
+    moveTo: noop, lineTo: noop, strokeText: noop, fillText: noop,
+    createRadialGradient: () => ({ addColorStop: noop }),
+  };
+  vi.stubGlobal('document', { createElement: () => ({ getContext: () => canvasContext }) });
+  vi.stubGlobal('window', { devicePixelRatio: 1 });
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const world = flatWorld();
+  // 空场景使用没有单位模型的阵营，免去加载与天气无关的角色资源。
+  world.factions[1] = world.factions[2] = { ...FACTIONS.china, id: 'weather-test' as FactionId };
+  const canvas = { clientWidth: 1000, clientHeight: 700 } as HTMLCanvasElement;
+  const renderer = new Renderer(canvas, world);
+  renderer.cam.x = world.W / 2;
+  renderer.cam.y = world.H / 2;
+  const selection = new Uint8Array(0);
+  const render = (dt = 0) => {
+    renderer.render(0, dt, selection);
+    return submittedStreaks();
+  };
+
+  try {
+    expect(render()).toEqual([]);
+    world.env.wind = 0.4;
+    const lightWind = render().find(streak => streak.opacity > 0)!;
+    expect(lightWind).toBeDefined();
+    world.env.wind = 0.9;
+    const strongerWind = render(1 / 60).find(streak => streak.opacity > 0)!;
+    expect(strongerWind.opacity).toBeGreaterThan(lightWind.opacity);
+    expect(strongerWind.x).toBeGreaterThan(lightWind.x);
+    expect(strongerWind.z).toBeCloseTo(lightWind.z, 3);
+
+    renderer.cam.yaw = Math.PI / 2;
+    world.env.windDir = -Math.PI / 4;
+    const turned = render(1 / 60).find(streak => streak.opacity > 0)!;
+    const dx = turned.x - strongerWind.x, dz = turned.z - strongerWind.z;
+    expect(dx).toBeGreaterThan(0);
+    expect(dz).toBeCloseTo(-dx, 3);
+
+    world.env.wind = 0;
+    expect(render()).toEqual([]);
+  } finally {
+    renderer.dispose();
+  }
+});

@@ -360,9 +360,10 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile canvas.view { height: var(--split); touch-action: none; }
 .mobile .hud > * { touch-action: none; }
 .mobile button { min-height: calc(40 * var(--u)); }
-/* 顶栏缩成画面顶端一条细栏：只留双方人数、时间、粮、木石金，其余收进菜单（天气与风向画在小地图的两个上角） */
+/* 移动顶栏保留风力文字，天气与风向箭头放在小地图的两个上角。 */
 .mobile .topbar { width: 100%; max-width: none; height: var(--bar); gap: calc(5 * var(--u)); padding: calc(2 * var(--u)) calc(6 * var(--u)); border-right: none; border-radius: 0; font-size: max(10px, calc(11 * var(--u))); overflow: visible; }
-.mobile .topbar .env, .mobile .topbar .wind, .mobile .topbar .morale, .mobile .topbar .dbg, .mobile .counts .vs { display: none !important; }
+.mobile .topbar .env, .mobile .topbar .wind i, .mobile .topbar .morale, .mobile .topbar .dbg, .mobile .counts .vs { display: none !important; }
+.mobile .topbar .wind { font-size: max(10px, calc(11 * var(--u))); padding: 2px calc(3 * var(--u)); }
 .mobile .topbar .counts, .mobile .topbar .clock, .mobile .topbar .food, .mobile .topbar .res { font-size: max(10px, calc(11 * var(--u))); padding-left: 0; padding-right: 0; background: none; }
 .mobile .counts { gap: calc(4 * var(--u)); }
 /* 阵营牌缩成一个色点（名字在悬停提示里），省出宽度给粮草与资源 */
