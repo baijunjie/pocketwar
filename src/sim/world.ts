@@ -252,9 +252,22 @@ export class World {
   /** 挤不到跟前而放下的建筑（自己挑中的；接连两座都挤不进时记 BLD_SKIP_ALL，什么建筑都不挑），以及多久之内不再挑它 */
   readonly bldSkip = new Int32Array(MAX_UNITS);
   readonly bldSkipT = new Float32Array(MAX_UNITS);
-  /** 挤不进战线时原地列队等待的倒计时，以及连续等待的次数 */
+  /** 挤不进战线时等待的倒计时，以及连续等待的次数 */
   readonly waitT = new Float32Array(MAX_UNITS);
   readonly waits = new Uint8Array(MAX_UNITS);
+  /**
+   * 等待期间沿敌群外缘游走：0 是站着等；正负是绕最近敌兵转的方向，绝对值 2 表示刚掉过头、还没走动过。
+   * prowlPivot 是绕着走的那个敌兵（约每 0.27 秒换成当时最近的；它死后下标可能被别的单位占用，用 prowlUid 核对），
+   * prowlD 是与它保持的距离（0 表示还没量），
+   * prowlStall 是已连续走不动的秒数
+   */
+  readonly prowl = new Int8Array(MAX_UNITS);
+  readonly prowlPivot = new Int32Array(MAX_UNITS);
+  readonly prowlUid = new Uint32Array(MAX_UNITS);
+  readonly prowlD = new Float32Array(MAX_UNITS);
+  readonly prowlStall = new Float32Array(MAX_UNITS);
+  /** 以这个单位为目标找敌群外缘的空位、上一次整圈都没有空位是在第几帧（很久以前为负的大数）；短时间内别人再为它找就不必重试 */
+  readonly noOpening = new Int32Array(MAX_UNITS).fill(-1e9);
   /** 绕向敌群外缘空位的剩余秒数（大于 0 即在绕行）、空位坐标、绕行圆的圆心（敌群重心）与半径 */
   readonly detourT = new Float32Array(MAX_UNITS);
   readonly detourX = new Float32Array(MAX_UNITS);
@@ -264,7 +277,7 @@ export class World {
   readonly detourR = new Float32Array(MAX_UNITS);
   /** 绕行中已连续走不动的秒数 */
   readonly detourStall = new Float32Array(MAX_UNITS);
-  /** 放弃绕行改列队等之后的这段时间里不当站定的人，让重叠的自己人把他推开 */
+  /** 放弃绕行之后的这段时间里，站着等的也不当站定的人，让重叠的自己人把他推开 */
   readonly detourLoose = new Float32Array(MAX_UNITS);
   /**
    * 追击绕开小障碍：上次为哪个目标（uid）判断过、判断结果（WAY_DIRECT / WAY_AROUND / WAY_NONE），
@@ -520,7 +533,8 @@ export class World {
     this.chargeHits[i] = 0;
     this.torchOff[i] = 0;
     this.avoidT[i] = this.waitT[i] = this.bldSkipT[i] = 0;
-    this.waits[i] = this.crowd[i] = 0;
+    this.waits[i] = this.crowd[i] = this.prowl[i] = 0;
+    this.noOpening[i] = -1e9;
     this.detourT[i] = this.detourLoose[i] = 0;
     this.wayUid[i] = this.wayMode[i] = this.wayNoT[i] = this.wallUid[i] = 0;
     this.seen[i] = 0;

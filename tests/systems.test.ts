@@ -8,7 +8,7 @@ import { lightAt } from '../src/sim/systems/environment';
 import { startRout } from '../src/sim/systems/morale';
 import { initSupply } from '../src/sim/systems/supply';
 import { S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL, World } from '../src/sim/world';
-import { breathe, flatWorld, run, spinStats } from './helpers';
+import { breathe, flatWorld, run, watchProwl } from './helpers';
 
 const C = (120 * TILE) / 2;
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;
@@ -337,8 +337,8 @@ describe('粮草', () => {
 });
 
 describe('战斗寻敌', () => {
-  // 旧版在这三个场景里的无效位移分别约为 1.9、35、22.6 像素/秒（待命和骑兵两项会来回乱跑）
-  const scene = (mode: 'amove' | 'idle' | 'cav'): { turn: number; wander: number; idle: number } => {
+  // 140 人围 14 个血量无限的敌人：外圈的人够不着，要靠绕、换目标和游走找空隙
+  const scene = (mode: 'amove' | 'idle' | 'cav'): ReturnType<typeof watchProwl> => {
     const w = flatWorld();
     const a = w.spawnGroup(1, Array(140).fill(idx(mode === 'cav' ? 'tieqi' : 'dao')), C - 200, C, 1, 0);
     const b = w.spawnGroup(2, Array(14).fill(idx('samurai')), C + 120, C, -1, 0);
@@ -348,16 +348,20 @@ describe('战斗寻敌', () => {
     if (mode === 'idle') w.orderStop(a, false);
     else w.orderMove(a, C + 120, C, true);
     run(w, 10);
-    return spinStats(w, a, 15);
+    return watchProwl(w, a, 15);
   };
 
-  it('挤不进战线的近战单位原地列队，不来回乱跑', () => {
+  it('挤不进战线的近战单位等待时沿敌群外缘游走：大多在走，没有成批僵站，也不来回掉头', () => {
     for (const mode of ['amove', 'idle', 'cav'] as const) {
       const st = scene(mode);
-      console.log(`${mode}: 未接敌 ${st.idle} 人，每秒转向 ${st.turn.toFixed(2)} rad，无效位移 ${st.wander.toFixed(1)} px/s`);
       expect(st.idle, mode).toBeGreaterThan(40);
-      expect(st.turn, mode).toBeLessThan(0.9);
-      expect(st.wander, mode).toBeLessThan(mode === 'idle' ? 26 : mode === 'amove' ? 16 : 12);
+      expect(st.waitFrames, mode).toBeGreaterThan(300);
+      // 站着等的人几乎不动，游走的人大多在走
+      expect(st.walkRatio, mode).toBeGreaterThan(0.3);
+      // 平均每帧连续不动超过 3 秒的人只是个别，不是成批僵站
+      expect(st.frozen, mode).toBeLessThan(6);
+      // 掉头不频繁：每人每秒不到 0.8 次，不是来回抖
+      expect(st.turnsPerSec, mode).toBeLessThan(0.8);
     }
   }, 30000);
 

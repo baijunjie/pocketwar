@@ -37,40 +37,48 @@ export function run(w: World, secs: number): void {
 }
 
 /**
- * 没在交手的单位：平均每秒转过多少弧度、白跑了多少路（路程减去净位移）。
- * 用血量无限的靶子时，靶子会被人群推着走，围着它的人跟着漂，这部分也算进白跑。
+ * 逐帧观察一批单位里没在交手的（够不着敌人的），统计他们在等待中是在走还是站着：
+ * - walkRatio：等待中（waitT > 0）的帧里，这一帧位移不低于奔跑速度 15% 的占比；
+ * - frozen：平均每帧有多少人已连续不动超过 3 秒（不论是否在等待）；
+ * - turnsPerSec：游走掉头的次数除以等待的人秒数；
+ * - waitFrames：等待的人帧数（样本量）；
+ * - idle：全程至少有一半时间没在交手的人数。
+ * 用血量无限的靶子时，靶子会被人群推着走，围着它的人跟着漂；这里只看位移的有无，不受影响。
  */
-export function spinStats(w: World, slots: number[], secs: number): { turn: number; wander: number; idle: number } {
-  const n = slots.length;
-  const turn = new Float64Array(n), path = new Float64Array(n), x0 = new Float64Array(n), y0 = new Float64Array(n);
-  const samples = new Float64Array(n);
-  slots.forEach((s, k) => {
-    x0[k] = w.x[s];
-    y0[k] = w.y[s];
-  });
-  for (let t = 0; t < secs * 30; t++) {
-    const pd = slots.map(s => w.dir[s]), px = slots.map(s => w.x[s]), py = slots.map(s => w.y[s]);
+export function watchProwl(w: World, slots: number[], secs: number): {
+  walkRatio: number; frozen: number; turnsPerSec: number; waitFrames: number; idle: number;
+} {
+  const n = slots.length, frames = secs * 30;
+  const still = new Int32Array(n), free = new Int32Array(n);
+  let waitFrames = 0, walkFrames = 0, turns = 0, frozenSum = 0;
+  for (let t = 0; t < frames; t++) {
+    const px = slots.map(s => w.x[s]), py = slots.map(s => w.y[s]), pp = slots.map(s => w.prowl[s]);
     w.tick();
     w.fxN = 0;
     slots.forEach((s, k) => {
-      if (!w.alive[s] || w.engaged[s]) return;
-      let d = w.dir[s] - pd[k];
-      if (d > Math.PI) d -= Math.PI * 2;
-      else if (d < -Math.PI) d += Math.PI * 2;
-      turn[k] += Math.abs(d);
-      path[k] += Math.hypot(w.x[s] - px[k], w.y[s] - py[k]);
-      samples[k]++;
+      if (!w.alive[s] || w.engaged[s]) {
+        still[k] = 0;
+        return;
+      }
+      free[k]++;
+      const moved = Math.hypot(w.x[s] - px[k], w.y[s] - py[k]);
+      const walking = moved >= w.defs[w.type[s]].speed * 0.15 / 30;
+      still[k] = walking ? 0 : still[k] + 1;
+      if (still[k] > 90) frozenSum++;
+      if (w.waitT[s] > 0) {
+        waitFrames++;
+        if (walking) walkFrames++;
+        if (Math.abs(w.prowl[s]) === 2 && Math.abs(pp[k]) !== 2) turns++;
+      }
     });
   }
-  let tSum = 0, wSum = 0, cnt = 0;
-  slots.forEach((s, k) => {
-    if (!w.alive[s] || samples[k] < secs * 15) return;
-    const sec = samples[k] / 30;
-    tSum += turn[k] / sec;
-    wSum += Math.max(0, path[k] - Math.hypot(w.x[s] - x0[k], w.y[s] - y0[k])) / sec;
-    cnt++;
-  });
-  return { turn: cnt ? tSum / cnt : 0, wander: cnt ? wSum / cnt : 0, idle: cnt };
+  return {
+    walkRatio: waitFrames ? walkFrames / waitFrames : 0,
+    frozen: frozenSum / frames,
+    turnsPerSec: waitFrames ? turns / (waitFrames / 30) : 0,
+    waitFrames,
+    idle: free.filter(f => f >= frames / 2).length,
+  };
 }
 
 /** 建筑火力里的箭（fan 武器） */

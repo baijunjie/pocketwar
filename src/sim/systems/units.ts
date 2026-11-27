@@ -15,7 +15,7 @@ import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
 import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul, windSpeedMul } from './targeting';
 import { terrainSpeedMul, weatherSpeedMul } from './effects';
-import { STEP, detourPasses, detourProgress, detourStep, shooting, startWait, tryDetour } from './detour';
+import { STEP, detourPasses, detourProgress, detourStep, prowlGap, prowlPivot, prowlProgress, prowlStep, shooting, startWait, tryDetour } from './detour';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE, chaseWay, findAround, keepWay } from './around';
 
 function arrive(w: World, i: number, atSlot: boolean): void {
@@ -97,7 +97,7 @@ export function updateUnits(w: World): void {
     let wx = 0, wy = 0;
     let spd = d.speed * terrainSpeedMul(tt, d) * rainMul;
     const run = spd;
-    let eng = 0, usePath = false, chasing = false, blockedByTerrain = false, detouring = false, overRank = false;
+    let eng = 0, usePath = false, chasing = false, blockedByTerrain = false, detouring = false, prowling = false, overRank = false;
     let aim = w.dir[i];
 
     if (st & S_ROUT) {
@@ -185,6 +185,7 @@ export function updateUnits(w: World): void {
         const near = SCAN.near;
         if (near !== NONE) {
           w.combatT[i] = C.linger;
+          if (w.prowl[i] !== 0 && w.waitT[i] > 0) prowlPivot(w, i, near, SCAN.nearD2);
           const nd = defs[type[near]];
           if (ab.shield && !nd.melee && !(melee && w.engaged[i] === ENG_CLOSE)) w.shieldT[i] = C.shieldHold;
           const cg = ab.charge;
@@ -378,8 +379,13 @@ export function updateUnits(w: World): void {
           if (tgt < 0 ? ord === O_ATTACK || (ord !== O_IDLE && w.lineBlocked(ux, uy, tx - (dx / dist) * 24, ty - (dy / dist) * 24, tm))
             : ord === O_ATTACK && dist > 240) usePath = true;
           else if (w.waitT[i] > 0) {
-            // 挤不进战线：在原地面朝敌人列队，等前面空出位置
+            // 挤不进战线：等前面空出位置。等的是敌兵时不站着，沿敌群外缘来回游走；其余在原地面朝目标列队
             aim = Math.atan2(dy, dx);
+            if (w.prowl[i] !== 0 && tgt >= 0 && prowlStep(w, i, tgt, spd, cell)) {
+              wx = STEP.wx;
+              wy = STEP.wy;
+              prowling = true;
+            }
           } else {
             // 与目标之间直线不通（隔着民房这类小障碍）：朝局部路线上看得见的最远一点走（远程也一样，绕过房子凑进射程）
             const way = tgt >= 0 ? chaseWay(w, i, tgt, tx, ty) : WAY_DIRECT;
@@ -785,8 +791,12 @@ export function updateUnits(w: World): void {
     }
     if (detouring) {
       w.stuck[i] = 0;
-      // 绕行走不动（被正在交手的自己人堵在人堆里）就尽早放弃，改列队等
+      // 绕行走不动（被正在交手的自己人堵在人堆里）就尽早放弃，改为等一会儿再挤
       detourProgress(w, i, ux, uy, nx, ny, want);
+    }
+    if (prowling) {
+      w.stuck[i] = 0;
+      prowlProgress(w, i, moved, want);
     }
     if (chasing && d.melee && w.stuck[i] > C.blockedAfter) {
       w.stuck[i] = 0;
@@ -804,24 +814,17 @@ export function updateUnits(w: World): void {
         w.bldSkipT[i] = C.bldSkipFor + (i & 7) * (C.bldSkipSpread / 8);
         target[i] = NONE;
       } else {
-        // 被自己人挡在后面：先找一个还有空位的敌人，没有就原地列队等，不再来回乱跑
+        // 被自己人挡在后面：先找一个还有空位的敌人，再找敌群外缘的空位；都没有就等一会儿再挤，
+        // 等的是敌兵时沿敌群外缘游走，是建筑时原地列队
         w.avoidUid[i] = w.targetUid[i];
         w.avoidT[i] = C.avoidFor;
-        let alt = NONE;
-        if (ord !== O_ATTACK && tgt >= 0) {
-          scan(w, i, tm, ux, uy, d.acq, d.acq, d, NONE, ord === O_IDLE ? C.leash : 0, guardPick(w, i, d, ord));
-          alt = SCAN.pick;
-          // 换过去的目标得真有空位，否则只是在两个围满的敌人之间来回跑
-          if (alt !== NONE && (alt === tgt || crowded(w, d, alt, Math.hypot(x[alt] - ux, y[alt] - uy)) || w.lineBlocked(ux, uy, x[alt], y[alt], tm))) alt = NONE;
-        }
-        if (alt !== NONE) {
-          target[i] = alt;
-          w.targetUid[i] = w.uid[alt];
-        } else if (!(tgt >= 0 && tryDetour(w, i, tgt, st, ord, spd, ord === O_IDLE ? idleLeash2(w, i, d, tgt) : 0, guardKeep(w, i, d, ord)))) {
-          // 没有别的敌人可换、也绕不成：原地列队等
-          startWait(w, i);
-        }
+        if (!wayIn(w, i, d, tgt, st, ord, spd, true)) startWait(w, i, tgt >= 0 && !(st & S_CHARGE));
       }
+    } else if (d.melee && tgt >= 0 && w.waitT[i] > 0 && ((i + tick) % WAIT_RECHECK) === 0
+      && (gapAhead(w, i, tgt, ord) || wayIn(w, i, d, tgt, st, ord, spd, false))) {
+      // 等的途中有了去处（游走路过空出来的位置、有别的敌人可换）：不等了。
+      // 这里不找敌群外缘的空位：找一次要把敌群挨个试一遍，成片的人等着时太贵，留到等完再挤的那一次
+      w.waitT[i] = 0;
     }
     if (!eng) {
       if (nvx > 6) w.facing[i] = 1;
@@ -846,6 +849,44 @@ export function updateUnits(w: World): void {
 }
 
 const ONE = [0];
+
+/** 等前面空出位置的近战单位每隔几帧看一次有没有去处：游走路过的空位、另一个有空位的敌人 */
+const WAIT_RECHECK = 8;
+
+/**
+ * 游走中的 i 正对着的位置空出来了（见 prowlGap），那个敌兵又是它可以打的：改打它，返回 true。
+ * 玩家指定了攻击目标的只认那个目标；待命的不打离岗位超过追击距离的
+ */
+function gapAhead(w: World, i: number, tgt: number, ord: number): boolean {
+  const p = prowlGap(w, i);
+  if (p === NONE || (ord === O_ATTACK && p !== tgt)) return false;
+  if (ord === O_IDLE && p !== tgt && (w.x[p] - w.homeX[i]) ** 2 + (w.y[p] - w.homeY[i]) ** 2 > RULES.combat.leash ** 2) return false;
+  w.target[i] = p;
+  w.targetUid[i] = w.uid[p];
+  return true;
+}
+
+/**
+ * 近战单位 i 挤不到目标 tgt 跟前时找别的去处：换一个确实还有空位的敌人（玩家指定了攻击目标的不换），
+ * 没有就试着绕到敌群外缘的空位（目标是敌兵时）。找到了就已经改好目标或起绕，返回 true。
+ * @param st、ord、spd i 的状态位、命令、速度
+ * @param opening 为 false 时只看有没有敌人可换，不找空位
+ */
+function wayIn(w: World, i: number, d: UnitDef, tgt: number, st: number, ord: number, spd: number, opening: boolean): boolean {
+  if (tgt < 0) return false;
+  const C = RULES.combat, tm = w.team[i], ux = w.x[i], uy = w.y[i];
+  if (ord !== O_ATTACK) {
+    scan(w, i, tm, ux, uy, d.acq, d.acq, d, NONE, ord === O_IDLE ? C.leash : 0, guardPick(w, i, d, ord));
+    const alt = SCAN.pick;
+    // 换过去的目标得真有空位，否则只是在两个围满的敌人之间来回跑
+    if (alt !== NONE && alt !== tgt && !crowded(w, d, alt, Math.hypot(w.x[alt] - ux, w.y[alt] - uy)) && !w.lineBlocked(ux, uy, w.x[alt], w.y[alt], tm)) {
+      w.target[i] = alt;
+      w.targetUid[i] = w.uid[alt];
+      return true;
+    }
+  }
+  return opening && tryDetour(w, i, tgt, st, ord, spd, ord === O_IDLE ? idleLeash2(w, i, d, tgt) : 0, guardKeep(w, i, d, ord));
+}
 
 /**
  * 待命的单位追敌：敌人离岗位超过这个距离（的平方）就不追。据点里的守军按据点警戒距离算（近战守军追出据点的由 guardDrops 放手）；

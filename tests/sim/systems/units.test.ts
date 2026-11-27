@@ -716,29 +716,34 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
 
   /**
    * 一个人追后排的敌人，被前排站定的自己人堵着够不着：逐帧记下横移速度、面朝与目标方向的夹角、「追不上」计时的增速。
-   * 横挪的一段 = 贴着自己人、没交手、在挪动的连续帧（中间断开不超过 6 帧的算同一段）；走近人墙的路上不算。
-   * segs 按时间顺序给出每一段的时长，以及这一段结束之后到下一段开始之前（观察结束时止）有没有进入过列队等。
+   * 一次追击 = 没在等待也没在绕行（waitT、detourT 都不大于 0）的连续帧，等待或绕行把它切开。
+   * pursuits 按时间顺序给出每次追击里「贴着自己人、没交手、在挪动、且没在朝目标靠近」的时长（朝目标的速度分量小于奔跑速度的 30%），
+   * 以及这次追击是不是以进入等待或绕行结束的（观察结束时还没结束的为假）。
+   * 走回目标正前方的那一段是在靠近目标，源码不累计「追不上」计时，不算在内。
    */
   const flankAlongWall = (secs: number, key = 'legion'): {
     maxDev: number; stuckRate: number; lateralFrames: number; engagedFrames: number;
-    segs: { secs: number; waitedAfter: boolean }[];
+    pursuits: { secs: number; ended: boolean }[];
   } => {
     const w = flatWorld();
     const { ps, back } = lineWall(w, 31);
     const mid = back[15];
     const a = w.spawnUnit(idx(key), 1, C - 60, C + 3);
     w.orderAttackUnit([a], mid);
-    let maxDev = 0, spell = 0, gap = 0, lateralFrames = 0, prevStuck = 0, engagedFrames = 0;
+    let maxDev = 0, lateralFrames = 0, prevStuck = 0, engagedFrames = 0;
     const rates: number[] = [];
-    const segs: { secs: number; waitedAfter: boolean }[] = [];
+    const pursuits: { secs: number; ended: boolean }[] = [];
+    let cur: { frames: number; ended: boolean } | null = null;
+    const frames: { frames: number; ended: boolean }[] = [];
+    const run = w.defs[w.type[a]].speed;
     for (let t = 0; t < secs * 30; t++) {
       const x0 = w.x[a], y0 = w.y[a];
+      const tx = w.x[mid] - x0, ty = w.y[mid] - y0, tl = Math.hypot(tx, ty) || 1;
       w.tick();
       w.fxN = 0;
       const vx = (w.x[a] - x0) * 30, vy = (w.y[a] - y0) * 30;
-      if (w.waitT[a] > 0 && segs.length > 0) segs[segs.length - 1].waitedAfter = true;
       if (w.engaged[a]) engagedFrames++;
-      if (Math.abs(vy) > 20 && Math.abs(vy) > 2 * Math.abs(vx)) {
+      if (w.waitT[a] <= 0 && Math.abs(vy) > 20 && Math.abs(vy) > 2 * Math.abs(vx)) {
         lateralFrames++;
         let dv = w.dir[a] - Math.atan2(w.y[mid] - w.y[a], w.x[mid] - w.x[a]);
         while (dv > Math.PI) dv -= 2 * Math.PI;
@@ -749,16 +754,18 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       }
       prevStuck = w.stuck[a];
       const touching = ps.some(p => Math.hypot(w.x[a] - w.x[p], w.y[a] - w.y[p]) < w.rad[a] + w.rad[p] + RULES.combat.contactSkin + 1);
-      if (touching && !w.engaged[a] && Math.hypot(vx, vy) > 9) {
-        if (spell === 0) segs.push({ secs: 0, waitedAfter: false });
-        spell++;
-        segs[segs.length - 1].secs = spell / 30;
-        gap = 0;
-      } else if (++gap > 6) spell = 0;
+      if (w.waitT[a] > 0 || w.detourT[a] > 0) {
+        if (cur) cur.ended = true;
+        cur = null;
+      } else {
+        if (!cur) frames.push(cur = { frames: 0, ended: false });
+        if (touching && !w.engaged[a] && Math.hypot(vx, vy) > 9 && (vx * tx + vy * ty) / tl < run * 0.3) cur.frames++;
+      }
     }
+    for (const f of frames) pursuits.push({ secs: f.frames / 30, ended: f.ended });
     rates.sort((p, q) => p - q);
     return {
-      maxDev, stuckRate: rates.length ? rates[rates.length >> 1] : 1, lateralFrames, engagedFrames, segs,
+      maxDev, stuckRate: rates.length ? rates[rates.length >> 1] : 1, lateralFrames, engagedFrames, pursuits,
     };
   };
 
@@ -776,21 +783,16 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
     expect(r.stuckRate).toBeLessThan(RULES.combat.flankStuck * 2);
   });
 
-  it.each(['legion', 'dao', 'auxilia', 'elephant'])('绕不过去就停下排队：每一段横挪都有上限，横挪攒满之后列队等、等完再试（%s）', key => {
-    // 理论上限 blockedAfter ÷ flankStuck；统计时把走近人墙与刚开始列队等时减速的几帧也算进一段，余 1 秒
+  it.each(['legion', 'dao', 'auxilia', 'elephant'])('绕不过去就停下排队：每次追击里「贴着人墙挪、又没在靠近目标」的时间有上限，到点进入等待或绕行、等完再试（%s）', key => {
+    // 理论上限 blockedAfter ÷ flankStuck；统计时把刚进入等待时减速的几帧也算进去，余 1 秒
     const full = RULES.combat.blockedAfter / RULES.combat.flankStuck;
     const r = flankAlongWall(30, key);
+    const desc = `各次追击（秒）${r.pursuits.map(g => `${g.secs.toFixed(2)}${g.ended ? '' : '*'}`).join(' ')}`;
     // 够不着目标：整个过程没有交上手
     expect(r.engagedFrames).toBe(0);
-    const longest = Math.max(...r.segs.map(g => g.secs));
-    expect(longest, `各段横挪（秒）${r.segs.map(g => g.secs.toFixed(2)).join(' ')}`).toBeLessThanOrEqual(full + 1);
-    // 横挪被打断（顿一下抛标枪、收尾的抖动）会把一段切成几截，短的几截后面不一定接着列队等；攒到上限附近的段后面一定进入原地排队。
-    // 最后一段可能还没来得及等，不查
-    const spent = r.segs.filter(g => g.secs >= full - 0.5);
-    const unwaited = r.segs.slice(0, -1).map((g, k) => (g.secs >= full - 0.5 && !g.waitedAfter ? k : -1)).filter(k => k >= 0);
-    expect(unwaited, '攒满之后没进列队等的段号').toEqual([]);
+    expect(Math.max(...r.pursuits.map(g => g.secs)), desc).toBeLessThanOrEqual(full + 1);
     // 等完之后还会再试：不是挪一次就彻底停了
-    expect(spent.length, '攒满的横挪段数').toBeGreaterThanOrEqual(3);
+    expect(r.pursuits.filter(g => g.ended).length, desc).toBeGreaterThanOrEqual(3);
   });
 
   /**
@@ -843,6 +845,177 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
     const left = (RULES.combat.blockedAfter - r.trigStuck) / RULES.combat.flankStuck;
     // 触发时刻起剩下的横挪时间 = 剩下的计时 ÷ flankStuck，再加抛掷停顿本身；余 0.3 秒给帧取整与收尾减速
     expect(r.elapsed - r.pauseFrames / 30, `扣掉停顿的横挪时长（秒），上限 ${left.toFixed(2)}`).toBeLessThanOrEqual(left + 0.3);
+  });
+
+  describe('挤不进战线时等待：等的是敌兵就沿敌群外缘游走，不站着', () => {
+    /** 人墙前的追击者 a 追后排正中的敌人，一直跑到它第一次进入等待（waitT 大于 0）；预设连续等待的次数，让第一次等待很长，免得自己到点结束 */
+    const waiting = (waits = 10) => {
+      const w = flatWorld();
+      const { ps, back } = lineWall(w, 31);
+      const mid = back[15];
+      // 刀盾兵：没有副武器，不会为抛掷停下来（抛掷时脚下是站定的）
+      const a = w.spawnUnit(idx('dao'), 1, C - 60, C + 3);
+      w.orderAttackUnit([a], mid);
+      w.waits[a] = waits;
+      for (let t = 0; t < 12 * 30 && w.waitT[a] <= 0; t++) {
+        w.tick();
+        w.fxN = 0;
+      }
+      expect(w.waitT[a], '场景前提：进入了等待').toBeGreaterThan(0);
+      return { w, a, mid, ps, back };
+    };
+
+    it('等待的人沿着人墙在走（不是站着）；面朝行走方向而不是敌人；不算站定；「追不上」计时清零；绕着走的敌兵随走随换', () => {
+      const { w, a, mid } = waiting();
+      let frames = 0, walking = 0, planted = 0, stuck = 0;
+      const dvs: number[] = [], dts: number[] = [];
+      const pivots = new Set<number>();
+      const norm = (d: number): number => Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
+      for (let t = 0; t < 3 * 30 && w.waitT[a] > 0; t++) {
+        const x0 = w.x[a], y0 = w.y[a];
+        w.tick();
+        w.fxN = 0;
+        if (w.waitT[a] <= 0) break;
+        frames++;
+        const vx = w.x[a] - x0, vy = w.y[a] - y0;
+        if (Math.hypot(vx, vy) * 30 < 15) continue;
+        walking++;
+        if (w.planted[a] !== 0) planted++;
+        if (w.stuck[a] !== 0) stuck++;
+        dvs.push(norm(w.dir[a] - Math.atan2(vy, vx)));
+        dts.push(norm(w.dir[a] - Math.atan2(w.y[mid] - w.y[a], w.x[mid] - w.x[a])));
+        pivots.add(w.prowlPivot[a]);
+      }
+      expect(frames, '观察到的等待帧数').toBeGreaterThan(30);
+      expect(walking / frames, '等待的帧里在走的占比').toBeGreaterThan(0.7);
+      expect(planted, '游走的帧不算站定').toBe(0);
+      expect(stuck, '游走期间「追不上」计时清零').toBe(0);
+      dvs.sort((p, q) => p - q);
+      dts.sort((p, q) => p - q);
+      expect(dvs[dvs.length >> 1], '面朝行走方向（中位数夹角）').toBeLessThan(0.6);
+      expect(dts[dts.length >> 1], '不是面朝敌人（中位数夹角）').toBeGreaterThan(0.9);
+      expect(pivots.size, '绕着走的敌兵随走随换').toBeGreaterThanOrEqual(3);
+    });
+
+    it('等待的人沿着敌群走出一段路，并保持离敌兵的距离，不贴上去也不走远', () => {
+      const { w, a } = waiting();
+      const near = (): number => {
+        let m = Infinity;
+        for (let e = 0; e < w.n; e++) if (w.alive[e] && w.team[e] === 2) m = Math.min(m, Math.hypot(w.x[e] - w.x[a], w.y[e] - w.y[a]) - w.rad[e]);
+        return m;
+      };
+      const d0 = near(), y0 = w.y[a];
+      let lo = d0, hi = d0;
+      for (let t = 0; t < 2 * 30 && w.waitT[a] > 0; t++) {
+        w.tick();
+        w.fxN = 0;
+        lo = Math.min(lo, near());
+        hi = Math.max(hi, near());
+      }
+      // 进入游走时量下的距离是一排人的距离：整段里离最近的敌兵（边到边）都在它的上下，没有走远一排人以上
+      expect(hi, '没有走远').toBeLessThan(d0 + 2 * w.rad[a] + 5);
+      expect(lo, '没有走丢到敌人身上').toBeGreaterThan(0);
+      expect(Math.abs(w.y[a] - y0), '沿着人墙走出了一段路').toBeGreaterThan(30);
+    });
+
+    it('等待途中旁边出现一个没人围、直线可达的敌兵（攻击移动）：约半秒内改打它，结束等待，不等完这段等待', () => {
+      // 一个血量无限的敌兵被 6 个己方兵贴满一圈；攻击移动的 a（等待预设 4 秒）够不着它，绕不进去，进入等待并绕着它游走
+      const w = flatWorld();
+      const e = w.spawnUnit(idx('dao'), 2, C + 60, C);
+      w.hp[e] = w.maxHp[e] = 1e9;
+      w.orderStop([e], true);
+      const r = 2 * w.rad[e];
+      for (let k = 0; k < 6; k++) {
+        const t = k * Math.PI / 3;
+        w.orderAttackUnit([w.spawnUnit(idx('dao'), 1, C + 60 + Math.cos(t) * (r + 1), C + Math.sin(t) * (r + 1))], e);
+      }
+      const a = w.spawnUnit(idx('dao'), 1, C - 60, C + 10);
+      w.orderMove([a], C + 300, C + 10, true);
+      w.waits[a] = 10;
+      for (let t = 0; t < 12 * 30 && w.waitT[a] <= 0; t++) {
+        w.tick();
+        w.fxN = 0;
+      }
+      expect(w.waitT[a], '场景前提：进入了等待').toBeGreaterThan(3);
+      expect(w.target[a], '场景前提：等的是那个被围满的敌兵').toBe(e);
+      expect(w.prowl[a], '场景前提：在游走').not.toBe(0);
+      // 在 a 旁边放一个没人围的敌兵（不挨着那一圈己方兵）
+      const e2 = w.spawnUnit(idx('dao'), 2, w.x[a] + 35, w.y[a] - 30);
+      w.hp[e2] = w.maxHp[e2] = 1e9;
+      w.orderStop([e2], true);
+      let at = -1;
+      for (let t = 0; t < 3 * 30 && at < 0; t++) {
+        w.tick();
+        w.fxN = 0;
+        if (w.waitT[a] <= 0) at = t + 1;
+      }
+      expect(at, '结束了等待').toBeGreaterThan(0);
+      expect(at / 30, '结束得很快（秒）').toBeLessThanOrEqual(0.8);
+      expect(w.target[a], '换成的正是新出现的敌兵').toBe(e2);
+    });
+
+    it('玩家右键指定了攻击目标：旁边出现有空位的敌人也不换，继续等', () => {
+      const { w, a, mid } = waiting();
+      const e2 = w.spawnUnit(idx('legion'), 2, w.x[a] - 30, w.y[a] + 30);
+      w.hp[e2] = w.maxHp[e2] = 1e9;
+      w.orderStop([e2], true);
+      expect(w.order[a]).toBe(O_ATTACK);
+      for (let t = 0; t < 2 * 30 && w.waitT[a] > 0; t++) {
+        w.tick();
+        w.fxN = 0;
+        expect(w.target[a], `第 ${t} 帧`).toBe(mid);
+      }
+    });
+
+    /**
+     * 人墙前的追击者 a（刀盾兵，指定打 target 为 'front' 时前排第 k 个敌人、为 'back' 时后排正中的敌人）进入等待、游走；
+     * 等它朝着前排第 k 个敌人的那一排走到离它 20 到 32 像素处（正走近），把贴着这个敌人的己方兵撤掉，腾出一个位置。
+     * 返回此时的世界、a、前排第 k 个敌人 hole，和等它走到之前有没有走到（armed）。
+     */
+    const holeAhead = (target: 'front' | 'back', k: number) => {
+      const w = flatWorld();
+      const { ps, back } = lineWall(w, 31);
+      const hole = w.target[ps[k]];
+      const a = w.spawnUnit(idx('dao'), 1, C - 60, C + 3);
+      w.orderAttackUnit([a], target === 'front' ? hole : back[15]);
+      w.waits[a] = 10;
+      let armed = false;
+      for (let t = 0; t < 360 && !armed; t++) {
+        const y0 = w.y[a];
+        w.tick();
+        w.fxN = 0;
+        const dy = w.y[hole] - w.y[a];
+        if (w.waitT[a] > 0 && Math.abs(dy) > 20 && Math.abs(dy) < 32 && (w.y[a] - y0) * dy > 0) armed = true;
+      }
+      expect(armed, '场景前提：等待中游走着朝那一排走近').toBe(true);
+      expect(w.waitT[a], '场景前提：这段等待还很长').toBeGreaterThan(1.5);
+      w.removeUnit(ps[k]);
+      return { w, a, hole, back };
+    };
+
+    it.each([11, 13])('游走路过自己要打的敌人身前空出来的位置（前排第 %d 个）：就钻进去，约两秒内交上手，远不到这段等待结束', k => {
+      const { w, a, hole } = holeAhead('front', k);
+      const left = w.waitT[a];
+      let at = -1;
+      for (let t = 0; t < 4 * 30 && at < 0; t++) {
+        w.tick();
+        w.fxN = 0;
+        if (w.engaged[a]) at = t + 1;
+      }
+      expect(at, '交上了手').toBeGreaterThan(0);
+      expect(at / 30, '交手用时（秒）').toBeLessThanOrEqual(2);
+      expect(w.target[a]).toBe(hole);
+      expect(at / 30, '远不到这段等待结束').toBeLessThan(left - 1);
+    });
+
+    it('玩家右键指定了别的目标：游走路过另一个敌人身前空出来的位置，也不改打它，继续等', () => {
+      const { w, a, back } = holeAhead('back', 11);
+      for (let t = 0; t < 30 && w.waitT[a] > 0; t++) {
+        w.tick();
+        w.fxN = 0;
+        expect(w.target[a], `第 ${t} 帧`).toBe(back[15]);
+      }
+    });
   });
 
   it('围攻时非交手单位逐帧反向的比例仍然很低', () => {
@@ -935,7 +1108,7 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       return { firstDetour, firstWait, firstEngaged, maxXEngaged, backX, rad: w.rad[a] };
     };
 
-    it('先起绕、空位被占着走不到：到点（时限用尽）结束绕行，改为列队等', () => {
+    it('先起绕、空位被占着走不到：到点（时限用尽）结束绕行，改为等待并沿敌群外缘游走', () => {
       // 17 宽的人墙，追击者在人墙北端外侧：绕到南端的空位走得通，起绕条件满足；起绕那一刻有人站到了空位上
       const w = flatWorld();
       const { back } = lineWall(w, 17);
@@ -952,7 +1125,7 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       // 剩下的时限只够走不到一半的路程：到点时还远没到位
       const left = RULES.combat.detourFor / 4;
       w.detourT[a] = left;
-      let end = -1, waitAtEnd = false, engaged = false;
+      let end = -1, waitAtEnd = false, prowlAtEnd = false, engaged = false;
       for (let t = 0; t < 15 * 30 && end < 0; t++) {
         w.tick();
         w.fxN = 0;
@@ -960,19 +1133,21 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
         if (w.detourT[a] <= 0) {
           end = t;
           waitAtEnd = w.waitT[a] > 0;
+          prowlAtEnd = w.prowl[a] !== 0;
         }
       }
       expect(end, '绕行结束了').toBeGreaterThanOrEqual(0);
       expect((end + 1) / 30, '不晚于时限').toBeLessThanOrEqual(left + 0.1);
-      expect(waitAtEnd, '结束的这一刻改为列队等').toBe(true);
+      expect(waitAtEnd, '结束的这一刻改为等待').toBe(true);
+      expect(prowlAtEnd, '等的是敌兵：不站着，游走').toBe(true);
       expect(engaged, '没到位接敌').toBe(false);
     });
 
-    it('绕过去的路程超过 速度 × detourFor：不起绕，照旧横挪与列队等', () => {
+    it('绕过去的路程超过 速度 × detourFor：不起绕，照旧横挪与等待', () => {
       // 31 宽的人墙：绕一圈要走的路超过时限内走得到的
       const r = chaseBehindWall(31, 12);
       expect(r.firstDetour, '没有起绕').toBe(-1);
-      expect(r.firstWait, '照旧列队等').toBeGreaterThan(0);
+      expect(r.firstWait, '照旧等待').toBeGreaterThan(0);
       expect(r.firstEngaged, '够不着').toBe(-1);
     });
 
@@ -984,7 +1159,7 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       expect(r.maxXEngaged).toBeGreaterThan(r.backX + r.rad);
     });
 
-    it('起步时正前方贴着正在交手的自己人：不绕，直接列队等', () => {
+    it('起步时正前方贴着正在交手的自己人：不绕，直接等待并游走', () => {
       const w = flatWorld();
       const probe = w.spawnUnit(idx('legion'), 2, 0, 0);
       const S = 2 * w.rad[probe] + 2;
@@ -1001,17 +1176,19 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       w.orderAttackUnit([w.spawnUnit(idx('legion'), 1, ex - 2 * S, ey + S - 1)], f2);
       const a = w.spawnUnit(idx('legion'), 1, ex - 2 * S, ey);
       w.orderAttackUnit([a], e);
-      let waited = false, detoured = false, engaged = false;
+      let waited = false, prowled = false, detoured = false, engaged = false;
       for (let t = 0; t < 20 * 30; t++) {
         w.tick();
         w.fxN = 0;
         if (w.waitT[a] > 0) waited = true;
+        if (w.waitT[a] > 0 && w.prowl[a] !== 0) prowled = true;
         if (w.detourT[a] > 0) detoured = true;
         if (w.engaged[a]) engaged = true;
       }
       expect(engaged, '被围在里面够不着').toBe(false);
       expect(detoured, '没有起绕').toBe(false);
-      expect(waited, '直接列队等').toBe(true);
+      expect(waited, '直接等待').toBe(true);
+      expect(prowled, '等的是敌兵：游走').toBe(true);
     });
 
     const SEEDS = [7, 11, 23];
@@ -1366,6 +1543,38 @@ describe('单位分离：挤不进战线的人沿自己人背后绕到侧面', (
       }
       expect(detoured, '确实有人在绕').toBeGreaterThan(1000);
       expect(bad).toBe(0);
+    }, 60000);
+
+    it('据点里待命的近战守军挤不进战线时站着等，不游走（免得被带出据点）', () => {
+      const w = createGame({
+        seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false, supply: false,
+      }).world;
+      for (let i = 0; i < w.n; i++) if (w.alive[i]) w.removeUnit(i);
+      const hq = w.sites.find(s => s.type === SITE_CITY && s.owner === 1)!;
+      let R = 0;
+      while (siteContains(hq, hq.x + R + 1, hq.y)) R++;
+      // 敌方 5×4 方阵在据点内（离边缘 160 起）；150 个守军在据点里往边缘列阵待命，外圈的挤不进去
+      const foes: number[] = [];
+      for (let a = 0; a < 5; a++) {
+        for (let b = 0; b < 4; b++) foes.push(w.spawnUnit(idx('dao'), 2, hq.x + R - 160 + 22 * a, hq.y + 22 * (b - 1.5)));
+      }
+      for (const e of foes) w.hp[e] = w.maxHp[e] = 1e7;
+      w.orderStop(foes, true);
+      const mine = w.spawnGroup(1, Array(150).fill(idx('dao')), hq.x + R - 340, hq.y, 1, 0);
+      w.orderStop(mine, false);
+      let waiting = 0, prowled = 0;
+      for (let t = 0; t < 30 * 30; t++) {
+        for (const e of foes) w.morale[e] = 100;
+        w.tick();
+        w.fxN = 0;
+        for (const q of mine) {
+          if (!w.alive[q] || w.order[q] !== O_IDLE || w.sheltered[q] !== 1 || w.waitT[q] <= 0) continue;
+          waiting++;
+          if (w.prowl[q] !== 0) prowled++;
+        }
+      }
+      expect(waiting, '场景前提：有守军挤不进去、等着').toBeGreaterThan(100);
+      expect(prowled).toBe(0);
     }, 60000);
 
     /**
@@ -2973,6 +3182,25 @@ describe('近战挤不到自己挑中的建筑跟前：放下它接着执行原�
       expect(onGate, '场景前提：有人去打挡路的营门').toBe(true);
       expect(waiting, '场景前提：有人挤不到营门跟前、列队等').toBeGreaterThan(0);
       expect(drops).toHaveLength(0);
+    });
+
+    it('等的是建筑时不游走：挡在路线上的营门，攻击移动的人挤不到跟前时原地等', () => {
+      const w = flatWorld(120, 7);
+      for (let tx = 0; tx < 120; tx++) if (tx < 59 || tx > 60) w.addBuilding(BUILDINGS.palisade, tx, 70, 2, -1);
+      const gate = w.addBuilding(BUILDINGS.wgate_h, 59, 70, 2, -1);
+      const us: number[] = [];
+      for (let k = 0; k < 100; k++) us.push(mine(w, mid(54 + (k % 12) * 0.9), mid(50 + Math.floor(k / 12))));
+      w.orderMove(us, mid(60), mid(100), true);
+      let waiting = 0, prowled = 0;
+      crowd(w, us, 40, () => {
+        for (const s of us) {
+          if (w.waitT[s] <= 0 || w.target[s] !== -gate.id - 2) continue;
+          waiting++;
+          if (w.prowl[s] !== 0) prowled++;
+        }
+      });
+      expect(waiting, '场景前提：有人挤不到营门跟前、等着').toBeGreaterThan(0);
+      expect(prowled).toBe(0);
     });
   });
 

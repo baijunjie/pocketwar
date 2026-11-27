@@ -2,9 +2,12 @@
  * 近战绕行：被自己人挡在战线后面又没有别的敌人可换时，绕到目标所在敌群外缘的一个空位去接敌，而不是原地干等。
  * 找空位（findOpening）、起绕（tryDetour）、绕行中每帧的期望速度（detourStep）、移动之后判断走没走动（detourProgress）。
  * 绕行的状态存在 World 的 detour* 字段里；空位与圆心按相对空位所属敌兵的位置存，敌人被人群推着走时它们跟着走。
+ *
+ * 连空位也没有时的等待（startWait）与等待期间的游走（prowlPivot、prowlStep、prowlProgress）也在这里：
+ * 人不站着，沿敌群外缘来回走，位置一直在变，哪里空出来了离得近的人就能补上。游走的状态存在 World 的 prowl* 字段里。
  */
 import { DT, RULES, TILE } from '../content';
-import { ENG_CLOSE, GRID, NONE, O_ATTACK, S_CHARGE, S_ROUT } from '../state';
+import { ENG_CLOSE, GRID, NONE, O_ATTACK, O_IDLE, S_CHARGE, S_ROUT } from '../state';
 import type { World } from '../world';
 
 /** findOpening() 的结果：空位坐标、空位所属的敌兵，以及绕过去用的圆（敌群重心与半径） */
@@ -18,16 +21,20 @@ const OPENING_FOES = 128;
 const DETOUR_RECHECK = 8;
 /** 往前看几帧的位移，前面走不通就结束绕行 */
 const DETOUR_LOOK = 3;
+/** 某个目标所在的敌群整圈都没有空位之后，这么多帧内别人再为它找空位直接算没有：成片的人等在同一群敌人外面时，不必各自把敌群试一遍 */
+const OPENING_MEMO = 16;
 
 const foeBuf = new Int32Array(OPENING_FOES);
 const foeD2 = new Float64Array(OPENING_FOES);
 /** 绕行的期望速度（detourStep 写入，调用方读 wx、wy），以及它是不是直奔空位（相对绕圈） */
 export const STEP = { wx: 0, wy: 0, direct: false };
 
-/** (px, py) 这个点上有没有人（敌我都算，i 自己除外）能让半径 ri 的 i 站进去：按实际占位查，不看 crowd 计数 */
-export function spotFree(w: World, i: number, px: number, py: number, ri: number): boolean {
+/**
+ * (px, py) 这个点上有没有人（敌我都算，i 自己除外）能让半径 ri 的 i 站进去：按实际占位查，不看 crowd 计数
+ * @param ov 与别人重叠不超过这么多（像素）仍算站得进去
+ */
+export function spotFree(w: World, i: number, px: number, py: number, ri: number, ov = RULES.combat.detourOverlap): boolean {
   const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
-  const ov = RULES.combat.detourOverlap;
   const gx = (px / GRID) | 0, gy = (py / GRID) | 0;
   for (let cy = gy - 1; cy <= gy + 1; cy++) {
     if (cy < 0 || cy >= gh) continue;
@@ -62,6 +69,10 @@ export function spotFree(w: World, i: number, px: number, py: number, ri: number
 export function findOpening(w: World, i: number, tgt: number, only = NONE, speed = Infinity, leash2 = 0,
   keep?: (foe: number) => boolean): boolean {
   const C = RULES.combat;
+  // 不限定空位属于谁的搜索，「整圈没有空位」的结论对同一队的人都成立（各人半径的差别、墙顶与地面的差别忽略：
+  // 近战上了墙顶还在找空位的极少）。敌群大到试不全时各人试的是各自身边的那些，结论不通用，不记
+  const shared = only === NONE && leash2 <= 0 && !keep;
+  if (shared && w.tickCount - w.noOpening[tgt] < OPENING_MEMO) return false;
   const tm = w.team[i], ri = w.rad[i], bit = 1 << tm;
   const x = w.x, y = w.y, rad = w.rad;
   const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
@@ -94,7 +105,7 @@ export function findOpening(w: World, i: number, tgt: number, only = NONE, speed
   cx /= nAll;
   cy /= nAll;
   // 敌群的半径，同时挑出试空位的敌兵：离自己最近的 OPENING_FOES 个（满了就换掉最远的）
-  let cr = 0, n = 0, far = 0;
+  let cr = 0, n = 0, far = 0, cut = false;
   for (let gy = gy0; gy <= gy1; gy++) {
     for (let k = cs[gy * gw + gx0], e = cs[gy * gw + gx1 + 1]; k < e; k++) {
       const j = items[k];
@@ -109,11 +120,14 @@ export function findOpening(w: World, i: number, tgt: number, only = NONE, speed
         foeD2[n] = d2;
         if (d2 > foeD2[far]) far = n;
         n++;
-      } else if (d2 < foeD2[far]) {
-        foeBuf[far] = j;
-        foeD2[far] = d2;
-        far = 0;
-        for (let m = 1; m < n; m++) if (foeD2[m] > foeD2[far]) far = m;
+      } else {
+        cut = true;
+        if (d2 < foeD2[far]) {
+          foeBuf[far] = j;
+          foeD2[far] = d2;
+          far = 0;
+          for (let m = 1; m < n; m++) if (foeD2[m] > foeD2[far]) far = m;
+        }
       }
     }
   }
@@ -127,7 +141,7 @@ export function findOpening(w: World, i: number, tgt: number, only = NONE, speed
   const myDeck = dk[w.cellAt(ux, uy)];
   const mw = w.map.w, maxX = w.W - 6, maxY = w.H - 6;
   const radial = Math.max(0, orbit - ad);
-  let best = Math.min(C.detourMaxCost, speed * C.detourFor), found = false;
+  let best = Math.min(C.detourMaxCost, speed * C.detourFor), found = false, tooFar = false;
   for (let k = 0; k < n; k++) {
     const e = foeBuf[k];
     const ex = x[e], ey = y[e];
@@ -146,7 +160,10 @@ export function findOpening(w: World, i: number, tgt: number, only = NONE, speed
       if (da > Math.PI) da -= Math.PI * 2;
       else if (da < -Math.PI) da += Math.PI * 2;
       const cost = Math.abs(da) * orbit + radial + C.detourDepth * Math.max(0, orbit - sd);
-      if (cost >= best) continue;
+      if (cost >= best) {
+        tooFar = true;
+        continue;
+      }
       if (!spotFree(w, i, sx, sy, ri) || w.lineBlocked(ex, ey, sx, sy, tm)) continue;
       best = cost;
       found = true;
@@ -155,21 +172,149 @@ export function findOpening(w: World, i: number, tgt: number, only = NONE, speed
       OPENING.foe = e;
     }
   }
+  // 没找到、也没有哪个位置是嫌远没看的：整圈确实没有空位
+  if (!found && !tooFar && !cut && shared) w.noOpening[tgt] = w.tickCount;
   return found;
 }
 
-/** 挤不进战线：原地列队等一会儿，连续等的次数越多等得越久 */
-export function startWait(w: World, i: number): void {
+/**
+ * 挤不进战线：等一会儿再往上挤，连续等的次数越多等得越久。
+ * @param prowl 等的时候不站着，沿敌群外缘来回游走（等的是敌兵时）；据点里待命的守军不游走，免得被带出据点
+ */
+export function startWait(w: World, i: number, prowl = false): void {
   const C = RULES.combat;
   w.waitT[i] = Math.min(C.waitMax, C.waitBase + w.waits[i] * 0.8);
   if (w.waits[i] < 200) w.waits[i]++;
+  if (prowl && !(w.order[i] === O_IDLE && w.sheltered[i] === 1)) {
+    // 跟着身边正在游走的自己人往同一边走（迎面走会互相堵住）；身边没有或两边一样多时，上一轮往哪边这一轮接着往哪边，
+    // 头一回按编号一半往左、一半往右
+    const flow = prowlFlow(w, i);
+    w.prowl[i] = flow > 0 ? 1 : flow < 0 ? -1 : w.prowl[i] > 0 ? 1 : w.prowl[i] < 0 ? -1 : i & 1 ? 1 : -1;
+    w.prowlPivot[i] = NONE;
+    w.prowlD[i] = w.prowlStall[i] = 0;
+  } else w.prowl[i] = 0;
 }
 
-/** 结束绕行；wait 为真时改为原地列队等 */
+/** i 身边（所在格与相邻格）正在游走的自己人往哪边走的多：正负同 World.prowl 的方向，0 是没有或一样多 */
+function prowlFlow(w: World, i: number): number {
+  const tm = w.team[i];
+  const gw = w.gw, gh = w.gh, cs = w.cellStart, items = w.items;
+  const gx = (w.x[i] / GRID) | 0, gy = (w.y[i] / GRID) | 0;
+  let sum = 0;
+  for (let cy = gy - 1; cy <= gy + 1; cy++) {
+    if (cy < 0 || cy >= gh) continue;
+    for (let cx = gx - 1; cx <= gx + 1; cx++) {
+      if (cx < 0 || cx >= gw) continue;
+      const c = cy * gw + cx;
+      for (let k = cs[c], e = cs[c + 1]; k < e; k++) {
+        const j = items[k];
+        if (j === i || !w.alive[j] || w.team[j] !== tm || w.waitT[j] <= 0) continue;
+        sum += w.prowl[j] > 0 ? 1 : w.prowl[j] < 0 ? -1 : 0;
+      }
+    }
+  }
+  return sum;
+}
+
+/** 游走的人看见了最近的敌兵 near（距离平方 d2）：绕着它走；头一次看见时量下此后保持的距离，至少隔开一排人 */
+export function prowlPivot(w: World, i: number, near: number, d2: number): void {
+  w.prowlPivot[i] = near;
+  w.prowlUid[i] = w.uid[near];
+  if (w.prowlD[i] <= 0) w.prowlD[i] = Math.max(Math.sqrt(d2), w.rad[near] + w.rad[i] * 3 + RULES.combat.meleeContact);
+}
+
+/** 游走的人找正对着的空位时，在正对方向两侧各多试几个方向，相邻两个差这么多弧度 */
+const GAP_STEP = 0.35;
+const GAP_SIDE = 2;
+
+/**
+ * 游走的人正对着的位置是不是空出来了：绕着走的那个敌兵身边、朝着自己这一侧（正对方向及两侧各 GAP_SIDE 个方向）有贴着它的位置没人站，
+ * 自己又只隔着一排的距离，直线也走得通。是就返回那个敌兵（调用方改打它、不等了），否则 NONE。
+ * 隔着两排以上的不算：前面还有自己人，冲上去也是被挡住。
+ * 占位按 prowlFit 放宽：前排腾出一个人的位置时两边的人并没有挪开，刚好一人宽，路过的人很少正对着它的正中
+ */
+export function prowlGap(w: World, i: number): number {
+  const C = RULES.combat, tm = w.team[i];
+  const p = w.prowlPivot[i];
+  if (w.prowl[i] === 0 || p < 0 || !w.alive[p] || w.uid[p] !== w.prowlUid[i] || !(w.seen[p] & (1 << tm))) return NONE;
+  const ux = w.x[i], uy = w.y[i], ri = w.rad[i];
+  const blk = w.nav.block[tm], dk = w.nav.deck[tm];
+  const myDeck = dk[w.cellAt(ux, uy)];
+  const maxX = w.W - 6, maxY = w.H - 6;
+  const ax = ux - w.x[p], ay = uy - w.y[p], ad = Math.hypot(ax, ay) || 1;
+  const reach = w.rad[p] + ri + C.detourGap;
+  if (ad - reach > ri * 2 + C.prowlReach) return NONE;
+  const base = Math.atan2(ay, ax);
+  for (let k = -GAP_SIDE; k <= GAP_SIDE; k++) {
+    const a = base + k * GAP_STEP;
+    const sx = w.x[p] + Math.cos(a) * reach, sy = w.y[p] + Math.sin(a) * reach;
+    // 落在走不通的地形或建筑里、自己上不去（墙顶与地面）的位置没人站也不算空位：敌兵贴着墙、房子站时那一侧永远没人
+    if (sx < 6 || sy < 6 || sx > maxX || sy > maxY) continue;
+    const c = w.cellAt(sx, sy);
+    if (blk[c] || dk[c] !== myDeck) continue;
+    if (spotFree(w, i, sx, sy, ri, C.prowlFit)) return w.lineBlocked(ux, uy, w.x[p], w.y[p], tm) ? NONE : p;
+  }
+  return NONE;
+}
+
+/** 游走掉头；掉头后还没走动过就又要掉头的（两边都走不通），改成站着等 */
+function prowlTurn(w: World, i: number): void {
+  const p = w.prowl[i];
+  w.prowl[i] = p === 1 ? -2 : p === -1 ? 2 : 0;
+  w.prowlStall[i] = 0;
+}
+
+/**
+ * 游走的一帧：期望速度写进 STEP（wx、wy），返回 false 表示这一帧站着（还没量好距离、前面走不通刚掉头）。
+ * 走法是绕着最近的敌兵转、与它保持 prowlD 的距离：最近的敌兵随走随换，走出来的就是敌群外缘的等距线，
+ * 敌群是一团就绕着转圈，是一条线就沿着线走。
+ * @param cell i 当前所在的格
+ */
+export function prowlStep(w: World, i: number, tgt: number, spd: number, cell: number): boolean {
+  const C = RULES.combat, tm = w.team[i];
+  const D = w.prowlD[i];
+  if (D <= 0) return false;
+  let p = w.prowlPivot[i];
+  if (p < 0 || !w.alive[p] || w.uid[p] !== w.prowlUid[i]) p = tgt;
+  const ux = w.x[i], uy = w.y[i];
+  const ax = ux - w.x[p], ay = uy - w.y[p], ad = Math.hypot(ax, ay) || 1;
+  const sg = w.prowl[i] > 0 ? 1 : -1;
+  // 切向走，再带一点把距离拉回 D 的分量（不超过切向分量，免得掉头就跑）
+  let pull = (D - ad) / C.detourPull;
+  if (pull > 1) pull = 1;
+  else if (pull < -1) pull = -1;
+  const tx = (-ay / ad) * sg + (ax / ad) * pull, ty = (ax / ad) * sg + (ay / ad) * pull;
+  const tl = Math.hypot(tx, ty) || 1;
+  const v = spd * C.prowlSpeed;
+  STEP.wx = (tx / tl) * v;
+  STEP.wy = (ty / tl) * v;
+  // 往前看一小段：走不通（地形、别人的建筑、墙顶与墙下）就掉头
+  const look = DT * DETOUR_LOOK;
+  const px = Math.min(w.W - 6, Math.max(6, ux + STEP.wx * look)), py = Math.min(w.H - 6, Math.max(6, uy + STEP.wy * look));
+  const c1 = w.cellAt(px, py);
+  if (c1 !== cell && (w.nav.block[tm][c1] || !w.nav.canStep(tm, cell, c1))) {
+    prowlTurn(w, i);
+    return false;
+  }
+  return true;
+}
+
+/** 游走的人移动之后调用：这一帧实际走了 moved，想走的速度是 want。连着走不动（被站定的自己人或迎面的人堵着）就掉头 */
+export function prowlProgress(w: World, i: number, moved: number, want: number): void {
+  const C = RULES.combat;
+  if (moved < want * DT * C.detourStall) {
+    if ((w.prowlStall[i] += DT) > C.prowlStallAfter) prowlTurn(w, i);
+  } else {
+    w.prowlStall[i] = 0;
+    w.prowl[i] = w.prowl[i] > 0 ? 1 : -1;
+  }
+}
+
+/** 结束绕行；wait 为真时改为等一会儿再挤（见 startWait） */
 function endDetour(w: World, i: number, wait: boolean): void {
   w.detourT[i] = w.detourStall[i] = 0;
   if (wait) {
-    startWait(w, i);
+    startWait(w, i, true);
     w.detourLoose[i] = RULES.combat.detourLoose;
   }
 }
@@ -242,7 +387,7 @@ function blockedAhead(w: World, i: number): boolean {
 
 /**
  * 追不上、又没有别的敌人可换时试着起绕：找空位，起步方向不堵就把目标换成空位所属的敌兵并开始绕行。
- * 返回 false 表示没绕成（冲锋中、没有空位、起步就被正在交手的自己人堵着），调用方照旧列队等。
+ * 返回 false 表示没绕成（冲锋中、没有空位、起步就被正在交手的自己人堵着），调用方改为等一会儿再挤。
  * @param st i 的状态位
  * @param ord i 的命令；玩家指定了攻击目标时空位只能属于那个目标
  * @param spd i 的速度
@@ -260,7 +405,7 @@ export function tryDetour(w: World, i: number, tgt: number, st: number, ord: num
 /**
  * 绕行的一帧：算这一帧的期望速度写进 STEP（wx、wy）。
  * 返回 false 表示绕行结束（目标溃逃或看不见、到点、空位没了又找不到、前面走不通、已到位），这一帧交回普通追击逻辑；
- * 空位没了、前面走不通、到点这三种另外让他原地列队等。
+ * 空位没了、前面走不通、到点这三种另外让他等一会儿再挤。
  * @param cell i 当前所在的格
  * @param leash2、keep 同 tryDetour
  */
@@ -306,7 +451,7 @@ export function detourStep(w: World, i: number, tgt: number, ord: number, spd: n
 
 /**
  * 绕行的人移动之后调用：这一帧从 (ux, uy) 走到 (nx, ny)，想走的速度是 want。
- * 实际进展远小于想走的（被正在交手的自己人堵在人堆里）连续超过 detourStallAfter 秒就放弃绕行、改列队等。
+ * 实际进展远小于想走的（被正在交手的自己人堵在人堆里）连续超过 detourStallAfter 秒就放弃绕行、改为等一会儿再挤。
  * 直奔空位时看离空位近了多少（空位被别人占着、在旁边顶着不算走动），绕圈时看挪动了多少。
  */
 export function detourProgress(w: World, i: number, ux: number, uy: number, nx: number, ny: number, want: number): void {

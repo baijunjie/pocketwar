@@ -26,7 +26,7 @@
 | `src/sim/systems/` | 只放算法：每个文件一个系统，由 `index.ts` 的管线顺序调用；系统里不写死数字、不认具体兵种 |
 | `src/sim/systems/sites.ts`、`economy.ts`、`targeting.ts` | 据点逻辑所在：`sites.ts` 管占领（军事建筑拆光才能读秒）、休整、按据点的援军（营寨按占领方所选兵种出）与集结点、丢光城池与营寨判负；`economy.ts` 管据点三级升级、资源点哨塔与临时据点；`targeting.ts` 的 `canAttackBuilding` 判定建筑能否被攻击、`crowded()` 判定目标是否已被围满 |
 | `src/sim/systems/combat.ts` | 战斗结算：单位出手统一走 `strike()`（按武器表出手），以及伤害、阵亡、经验升级、投射物与防御建筑的放箭 |
-| `src/sim/systems/units.ts`、`detour.ts`、`around.ts` | 单位每帧行为（`units.ts`）及它调用的两块接敌辅助：`detour.ts` 近战被挡时绕到敌群外缘的空位，`around.ts` 追击时绕开小障碍的局部寻路；索敌（含远程去打墙顶敌兵）在 `targeting.ts` |
+| `src/sim/systems/units.ts`、`detour.ts`、`around.ts` | 单位每帧行为（`units.ts`）及它调用的两块接敌辅助：`detour.ts` 近战被挡时绕到敌群外缘的空位，连空位也没有时的等待与沿敌群外缘的游走，`around.ts` 追击时绕开小障碍的局部寻路；索敌（含远程去打墙顶敌兵）在 `targeting.ts` |
 | `src/sim/systems/orders.ts`、`formation.ts`、`march.ts`、`marchTrail.ts`、`marchChoke.ts`、`marchSlots.ts` | 移动命令与编队行军：`orders.ts` 落实玩家指令（含行军途中改道能否沿用原编队的判断）；`formation.ts` 把一批人排成横队，给出每人的排与排内序号、各排的宽、深、最大半径、最慢奔跑速度；编队行军（弹性队列：过窄处按通道宽度收窄、折排，过后展开）拆在四个 `march*.ts`。一道命令里的部队共用两个看不见的点：**探路点**走在队列前方，照单个单位的最短路线沿流场前瞻，每隔一小段记一个行迹点；**最前排**是行迹上落后探路点一段路程的那一点，队列各排沿行迹往后排。`march.ts` 管编队对象、建立与重新整队、行军途中改道、探路点怎么走与每帧最前排走多快；`marchTrail.ts` 管行迹缓冲，以及每个行迹点上记的通道宽度（含按坡度的包络）；`marchChoke.ts` 在行迹点上认窄处、量宽度；`marchSlots.ts` 管各排占行迹的哪一段、成员的队列位置，以及成员跟着哪一点走、到达后何时离队。成员的排与排内序号存在 `World.marchRow`、`World.marchCol` |
 | `src/sim/systems/aura.ts` | 光环：定期重新判定，由带光环特性的存活单位给半径内的其他己方单位写入加成（`World.aura`），伤害结算读它 |
 | `src/sim/systems/effects.ts` | 单位身上增减益的查询（不在系统管线里，不是每帧运行的系统）：`unitEffects(w, i)` 只读世界状态，列出此刻城墙、地形、雨雪、顺逆风、光环的倍率（来源、影响的数值、是否有利），供详情面板显示；`terrainSpeedMul`、`weatherSpeedMul` 是地形、雨雪对移动速度的倍率，`units.ts`、`march.ts` 共用 |
