@@ -9,7 +9,7 @@ import { MAX_UNITS, S_ROUT, Site, World } from './sim/world';
 import { Minimap } from './render/minimap';
 import { Renderer } from './render/renderer';
 import { CardKind, allCardPicked } from './ui/cardBar';
-import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
+import { Hud, UpgradeAction, UpgradeChoice, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 import { BackGuard, blocksEdgeSwipe } from './backGuard';
 import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection, fracToZoom, zoomToFrac } from './camInput';
@@ -26,6 +26,9 @@ const STICK_GAIN = 0.8;
 const WHEEL_LINE = 33;
 const WHEEL_PAGE = 800;
 
+/** 速度按钮与 + / − 依次切换的速度 */
+const SPEEDS = [1, 2, 4];
+
 export class GameApp {
   readonly world: World;
   readonly renderer: Renderer;
@@ -38,6 +41,10 @@ export class GameApp {
   private selList: number[] = [];
   /** 全选卡片处于选中态：它代表的是选中的人，不再是屏幕内的（见 setSelection） */
   private selAll = false;
+  /** 正在下令或编队而顺带换选择（拖卡片、Shift+数字）：不重新打开用关闭按钮收起的详情 */
+  private quietSelect = false;
+  /** 焦点是用键盘（Tab）移到当前元素上的：这时空格 / Enter 交给获得焦点的按钮 */
+  private keyNav = false;
   private selUid: number[] = [];
   /** 没选部队时选中的据点（-1 = 没有） */
   private selSite = -1;
@@ -109,10 +116,14 @@ export class GameApp {
       pickTypes: (types, mode) => this.pickTypes(types, mode),
       pickAll: mode => this.pickAll(mode),
       selectGroup: (g, jump) => this.selectGroup(g, jump),
+      unpickCard: (kind, id) => this.unpickCard(kind, id),
+      cardCount: (kind, id) => this.cardUnits(kind, id).length,
+      upgradeChoices: (kind, id) => this.upgradeChoices(kind, id),
       groupSlot: g => this.groupSlot(g),
       zoomTo: f => this.zoomAt(this.renderer.viewW / 2, this.renderer.viewH / 2, fracToZoom(f) / this.renderer.cam.zoom),
       dropCard: (kind, id, x, y, target) => this.dropCard(kind, id, x, y, target),
-      setSpeed: s => this.setSpeed(s),
+      togglePause: () => this.togglePause(),
+      cycleSpeed: () => this.setSpeed(SPEEDS[(SPEEDS.indexOf(this.lastSpeed) + 1) % SPEEDS.length]),
       focus: (x, y) => this.focus(x, y),
       exit: () => this.onExit(),
       toggleSound: () => this.sound.toggle(),
@@ -377,8 +388,19 @@ export class GameApp {
       mmDown = false;
     });
 
+    // 焦点是怎么来的：按 Tab 移过来的算键盘，之后任何一次指针按下都算回指针（焦点元素没变也一样）
+    this.on(window, 'pointerdown', () => {
+      this.keyNav = false;
+    }, { capture: true });
     this.on(window, 'keydown', e => {
       if (e.target instanceof HTMLInputElement) return;
+      if (e.key === 'Tab') this.keyNav = true;
+      // 用键盘把焦点移到按钮上时，空格 / Enter 交给按钮自己激活（读屏与键盘用户）；鼠标点过的按钮不算（不抢走空格暂停的习惯）
+      if ((e.key === ' ' || e.key === 'Enter') && e.target instanceof HTMLButtonElement) {
+        if (this.keyNav) return;
+        // 鼠标点过、焦点还留着的按钮：Enter 不去激活它（空格在下面另作暂停）
+        e.preventDefault();
+      }
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       // 带 Ctrl / Cmd 的组合键不记入「按住的键」：Mac 上按着 Cmd 时字母键收不到松开事件，会一直卷屏
       if (!e.ctrlKey && !e.metaKey) this.keys.add(k);
@@ -399,9 +421,9 @@ export class GameApp {
       } else if (k === 'F1' || k === '?') {
         e.preventDefault();
         this.hud.toggleHelp();
-      } else if (k === ' ' || k === 'p') this.setSpeed(this.speed ? 0 : this.lastSpeed);
-      else if (k === '=' || k === '+') this.setSpeed(Math.min(4, Math.max(1, this.speed * 2)));
-      else if (k === '-') this.setSpeed(Math.max(1, this.speed / 2));
+      } else if (k === ' ' || k === 'p') this.togglePause();
+      else if (k === '=' || k === '+') this.setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, SPEEDS.indexOf(this.lastSpeed) + (this.speed ? 1 : 0))]);
+      else if (k === '-') this.setSpeed(SPEEDS[Math.max(0, SPEEDS.indexOf(this.lastSpeed) - (this.speed ? 1 : 0))]);
       else if (k === 'm') this.hud.setSound(this.sound.toggle());
       else if (k === 'l') this.hud.toggleSites();
       else if (!human) return;
@@ -439,7 +461,10 @@ export class GameApp {
           }
           this.groups[g] = { slots, uids: slots.map(s => w.uid[s]) };
           this.pushGroups();
+          this.quietSelect = true;
+          this.hud.detailQuiet = !this.hud.detailShown;
           this.setSelection(slots.slice());
+          this.quietSelect = this.hud.detailQuiet = false;
           this.hud.message(`第 ${g} 队追加 ${added} 人，共 ${slots.length} 人`, 'info');
         } else {
           if (!this.groups[g]) return;
@@ -544,6 +569,11 @@ export class GameApp {
     this.setMode(this.rallyTargets() ? 'rally' : '');
   }
 
+  /** 暂停 / 继续（继续用暂停前的速度） */
+  private togglePause(): void {
+    this.setSpeed(this.speed ? 0 : this.lastSpeed);
+  }
+
   private setSpeed(s: number): void {
     if (s > 0) this.lastSpeed = s;
     this.speed = s;
@@ -565,6 +595,9 @@ export class GameApp {
     this.selUid = list.map(s => this.world.uid[s]);
     for (const s of list) this.sel[s] = 1;
     this.selAll = list.length > 0 && (all ?? allCardPicked(list, this.screenUnits()));
+    // 玩家重新选了人：收起的详情可以再弹出来；拖卡片下令、追加编队顺带换的选择不算
+    if (!this.quietSelect) this.hud.reopenDetail();
+    this.hud.selectionChanged();
     // 选了部队就不再选着据点
     if (list.length) this.selSite = this.renderer.selSite = -1;
     this.refreshRallyMode();
@@ -584,6 +617,7 @@ export class GameApp {
   private selectSite(id: number): void {
     if (id >= 0 && this.selList.length) this.setSelection([]);
     this.selSite = this.renderer.selSite = id;
+    this.hud.reopenDetail();
     this.refreshRallyMode();
     this.syncSelection();
   }
@@ -615,18 +649,20 @@ export class GameApp {
   }
 
   /** 按升级的先后次序往下数，看黄金够升几个 */
-  private affordUnits(units: number[]): { count: number; cost: number; total: number } | null {
+  private affordUnits(units: number[]): { count: number; cost: number; total: number; need: number; picks: number[] } {
     const w = this.world;
-    let left = w.stock.gold[w.humanTeam], count = 0, cost = 0;
-    const q = upgradeQueue(w, units);
+    let left = w.stock.gold[w.humanTeam], count = 0, cost = 0, need = Infinity;
+    const q = upgradeQueue(w, units), picks: number[] = [];
     for (const s of q) {
       const c = unitUpgradeCost(w.defs[w.type[s]]);
+      need = Math.min(need, c);
       if (c > left + 1e-6) continue;
       left -= c;
       cost += c;
       count++;
+      picks.push(s);
     }
-    return count ? { count, cost, total: q.length } : null;
+    return { count, cost, total: q.length, need: Number.isFinite(need) ? need : 0, picks };
   }
 
   /** 此刻该出现哪些升级按钮：「全部升级」针对全图，资源不够全升时能升几个就升几个 */
@@ -635,8 +671,9 @@ export class GameApp {
     const o: UpgradeOffers = { sel: null, all: null, cities: null, camps: null };
     if (!human) return o;
     if (w.stock.gold[human] >= RULES.economy.unitGold) {
-      if (this.selList.length) o.sel = this.affordUnits(this.selList);
-      o.all = this.affordUnits(this.myUnits());
+      const sel = this.selList.length ? this.affordUnits(this.selList) : null, all = this.affordUnits(this.myUnits());
+      if (sel?.count) o.sel = sel;
+      if (all.count) o.all = all;
     }
     for (const cat of ['city', 'camp'] as const) {
       const list = this.mySites(cat);
@@ -657,19 +694,72 @@ export class GameApp {
     const w = this.world;
     if (!w.humanTeam) return;
     if (act === 'sel' || act === 'all') {
-      const r = w.upgradeUnits(act === 'sel' ? this.selList : this.myUnits());
-      if (r.count) {
-        this.hud.message(`${r.count} 人升为高级形态，花费黄金 ${Math.round(r.cost)}`, 'good');
-        this.sound.ui('order');
-      } else this.sound.ui('deny');
-    } else {
-      const list = this.mySites(act === 'cities' ? 'city' : 'camp').filter(s => w.upgradeSite(s));
-      if (list.length) {
-        this.hud.message(list.map(s => `${s.name} 升到 ${s.level} 级`).join('、'), 'good');
-        this.sound.ui('order');
-      } else this.sound.ui('deny');
+      this.upgradeList(act === 'sel' ? this.selList : this.myUnits());
+      return;
     }
+    const list = this.mySites(act === 'cities' ? 'city' : 'camp').filter(s => w.upgradeSite(s));
+    if (list.length) {
+      this.hud.message(list.map(s => `${s.name} 升到 ${s.level} 级`).join('、'), 'good');
+      this.sound.ui('order');
+    } else this.sound.ui('deny');
     this.refreshUi();
+  }
+
+  /** 把这批人升为高级形态（等级高的优先，黄金用尽为止），出战报；返回升了几人 */
+  private upgradeList(units: number[]): number {
+    const r = this.world.upgradeUnits(units);
+    if (r.count) {
+      this.hud.message(`${r.count} 人升为高级形态，花费黄金 ${Math.round(r.cost)}`, 'good');
+      this.sound.ui('order');
+    } else this.sound.ui('deny');
+    this.refreshUi();
+    return r.count;
+  }
+
+  /**
+   * 长按卡片时的升级选择：兵种卡片是这张卡代表的人与全图的这个兵种，编队卡片是这一队，全选卡片是它代表的人；
+   * 有选中时再加「当前选中的部队」（可能混编）；与前面某一项是同一批人的不重复列
+   */
+  private upgradeChoices(kind: CardKind, id: number): UpgradeChoice[] {
+    const w = this.world;
+    if (!w.humanTeam) return [];
+    return this.upgradeSets(kind, id).map(({ label, units }) => {
+      const { count, cost, total, need, picks } = this.affordUnits(units), size = units.length;
+      // 点下去只升报价上的这几个人（玩家看到的人数与金额是上限）：弹出框开着时游戏照常跑，
+      // 阵亡的人的槽位会被新兵（甚至敌军）复用，所以按 uid 核对，仍是己方、还能升的才升
+      const uids = picks.map(s => w.uid[s]);
+      return { label, offer: count ? { count, cost } : null, total, need, size, run: () => {
+        // 报价开着期间可能已经变了：人不在了、被别处（指令面板）先升了、黄金被别处花掉了；各给各的说明，都没花黄金
+        const alive = picks.filter((s, i) => w.uid[s] === uids[i] && w.controllable(s) && w.team[s] === w.humanTeam);
+        const valid = new Set(upgradeQueue(w, alive));
+        const list = picks.filter(s => valid.has(s));
+        const why = !alive.length ? '升级的人已不在（阵亡或溃逃）'
+          : !list.length ? '这些人已是高级形态'
+          : this.upgradeList(list) ? '' : '黄金不足';
+        if (why) {
+          this.hud.message(`${why}，没有花黄金`, 'info');
+          if (!list.length) this.sound.ui('deny');
+        }
+      } };
+    });
+  }
+
+  /** upgradeChoices 的各项与各自的人 */
+  private upgradeSets(kind: CardKind, id: number): { label: string; units: number[] }[] {
+    const w = this.world;
+    const sets: { label: string; units: number[] }[] = [];
+    if (kind === 'type') {
+      sets.push({ label: '升级这些人', units: this.typeUnits([id]) });
+      sets.push({ label: `升级全图的${UNITS[id].name}`, units: this.myUnits().filter(s => w.type[s] === id) });
+    } else if (kind === 'group') sets.push({ label: '升级这一队', units: this.groupAlive(id) });
+    else sets.push({ label: '升级这些人', units: this.allCardUnits() });
+    if (this.selList.length) sets.push({ label: '升级当前选中的部队', units: this.selList.slice() });
+    // 与前面某一项是同一批人的不再列（如这个兵种全在屏幕内、选中的正是这张卡的人）
+    const same = (a: number[], b: number[]): boolean => {
+      const set = new Set(a);
+      return a.length === b.length && b.every(s => set.has(s));
+    };
+    return sets.filter((s, i) => !sets.slice(0, i).some(p => same(p.units, s.units)));
   }
 
   private siteAction(act: 'upgrade' | 'tower' | 'pick', id: number, unit?: number): void {
@@ -836,6 +926,11 @@ export class GameApp {
     return list;
   }
 
+  /** 卡片此刻代表的人（拖它下令会出动的人） */
+  private cardUnits(kind: CardKind, id: number): number[] {
+    return kind === 'all' ? this.allCardUnits() : kind === 'group' ? this.groupAlive(id) : this.typeUnits([id]);
+  }
+
   /** 全选卡片代表的人：选中态时是选中的人，否则是屏幕内的全部己方部队 */
   private allCardUnits(): number[] {
     return this.allPicked ? this.selList.slice() : this.screenUnits();
@@ -872,6 +967,14 @@ export class GameApp {
     this.assignGroup(g);
   }
 
+  /** 单击亮着的卡片：兵种卡片去掉选中的这个兵种，编队卡片去掉这一队，全选卡片清空选择 */
+  private unpickCard(kind: CardKind, id: number): void {
+    const w = this.world;
+    if (kind === 'all') return this.setSelection([]);
+    const drop = kind === 'group' ? new Set(this.groupAlive(id)) : null;
+    this.setSelection(this.selList.filter(s => (drop ? !drop.has(s) : w.type[s] !== id)));
+  }
+
   /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键、双击编队卡片） */
   private selectGroup(g: number, jump: boolean): void {
     const w = this.world, alive = this.groupAlive(g);
@@ -891,9 +994,15 @@ export class GameApp {
    */
   private dropCard(kind: CardKind, id: number, x: number, y: number, target: 'view' | 'mini'): void {
     if (!this.world.humanTeam) return;
+    // 这张卡片此刻代表的人已经没了（卡片随后会消失、或拖拽中镜头移走了）：不改选择、不下令
+    if (!this.cardUnits(kind, id).length) return;
+    // 下令顺带换的选择不打开详情：原来没显示，换成单个单位后也不显示（不在下令时盖住操控区、打断正推着的摇杆）
+    this.quietSelect = true;
+    this.hud.detailQuiet = !this.hud.detailShown;
     if (kind === 'all') this.pickAll('replace');
     else if (kind === 'group') this.selectGroup(id, false);
     else this.pickTypes([id], 'replace');
+    this.quietSelect = this.hud.detailQuiet = false;
     if (this.mode) this.setMode('');
     if (!this.selList.length) return;
     let p: { x: number; y: number };

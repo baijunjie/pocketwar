@@ -24,11 +24,14 @@ export class FakeEl extends EventTarget {
   readonly children: FakeEl[] = [];
   parent: FakeEl | null = null;
   hidden = false;
+  /** 是否还在页面里（真 DOM 里被重建换掉的旧节点是 false）；假 DOM 不自动维护，测试里模拟重建时手动设 */
+  isConnected = true;
   /** 按钮之类的 disabled（假 DOM 不做原生的禁用语义，只是个可读写的标志） */
   disabled = false;
   private html = '';
   textContent = '';
   scrollLeft = 0;
+  scrollTop = 0;
   offsetWidth = 0;
   offsetHeight = 0;
   /** 直接赋值的点击处理（`el.onclick = ...`）；假 DOM 不自动触发，测试里手动调 */
@@ -94,6 +97,11 @@ export class FakeEl extends EventTarget {
   }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
   removeAttribute(k: string): void { delete this.attrs[k]; }
+  /** 自己或子孙节点 */
+  contains(n: unknown): boolean {
+    for (let x = n as FakeEl | null; x; x = x.parent) if (x === this) return true;
+    return false;
+  }
   getBoundingClientRect(): FakeRect { return this.rect; }
   setPointerCapture(id: number): void { this.captured = id; this.captureCalls.push(id); }
   hasPointerCapture(id: number): boolean { return this.captured === id; }
@@ -106,15 +114,34 @@ export class FakeEl extends EventTarget {
     for (let n: FakeEl | null = this; n; n = n.parent) if (match(n)) return n;
     return null;
   }
-  /** 只认 `.类名`，深度优先 */
+  /** 认 `.类名`、标签名，以及用空格连起来的后代选择（如 `.ab b`），深度优先、先序 */
   querySelector(sel: string): FakeEl | null {
+    const toks = sel.trim().split(/\s+/);
+    const is = (n: FakeEl, t: string): boolean => (t.startsWith('.') ? n.classList.contains(t.slice(1)) : n.tagName === t);
+    const walk = (n: FakeEl, chain: FakeEl[]): FakeEl | null => {
+      for (const c of n.children) {
+        const path = [...chain, c];
+        if (is(c, toks[toks.length - 1])) {
+          let i = toks.length - 2;
+          for (let k = path.length - 2; k >= 0 && i >= 0; k--) if (is(path[k], toks[i])) i--;
+          if (i < 0) return c;
+        }
+        const r = walk(c, path);
+        if (r) return r;
+      }
+      return null;
+    };
+    return walk(this, []);
+  }
+  /** 只认 `.类名`，深度优先，返回所有匹配的子孙 */
+  querySelectorAll(sel: string): FakeEl[] {
     const cls = sel.replace(/^\./, '');
+    const out: FakeEl[] = [];
     for (const c of this.children) {
-      if (c.classList.contains(cls)) return c;
-      const r = c.querySelector(sel);
-      if (r) return r;
+      if (c.classList.contains(cls)) out.push(c);
+      out.push(...c.querySelectorAll(sel));
     }
-    return null;
+    return out;
   }
   cloneNode(deep = false): FakeEl {
     const c = new (this.constructor as new (tag: string) => FakeEl)(this.tagName);
@@ -153,7 +180,7 @@ export function installFakeDom(vi: { stubGlobal(name: string, v: unknown): unkno
 
 /** 造一个指针事件并派发到 target：事件的 target 就是 target 自己（假 DOM 不冒泡，需要冒泡的在测试里直接派发到按下的那个子节点，由监听方向上找） */
 export function firePointer(
-  on: FakeEl, type: string, init: { clientX?: number; clientY?: number; pointerId?: number; button?: number; buttons?: number; shiftKey?: boolean } = {},
+  on: FakeEl, type: string, init: { clientX?: number; clientY?: number; pointerId?: number; button?: number; buttons?: number; shiftKey?: boolean; pointerType?: string } = {},
   /** 事件监听挂在 on 上，但 e.target 是这个子节点（模拟冒泡） */
   target: FakeEl = on,
 ): Event {

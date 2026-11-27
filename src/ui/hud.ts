@@ -12,7 +12,7 @@ import { unitPortrait } from '../render/portrait';
 import { WheelMode } from '../camInput';
 import { TAP_SLOP, UiMode, swipeDir } from '../touchInput';
 import { loadPref, savePref } from '../prefs';
-import { CardBar, CardBarCallbacks } from './cardBar';
+import { CardBar, CardBarCallbacks, CardKind } from './cardBar';
 import { Joystick } from './joystick';
 import { GroupSlots, GROUP_SLOTS } from './groupSlots';
 import { ZoomSlider } from './zoomSlider';
@@ -60,7 +60,24 @@ export interface UpgradeOffers {
 }
 export type UpgradeAction = 'sel' | 'all' | 'cities' | 'camps';
 
-export interface HudCallbacks extends CardBarCallbacks {
+/**
+ * 长按卡片弹出的一项升级：label 是按钮上的字，offer 是黄金够升几人、花多少（null = 一个也升不了），
+ * total 是这批人里还能升的总数，need 是升其中最便宜的一人要多少金（黄金不足时告诉玩家差多少）
+ */
+export interface UpgradeChoice {
+  label: string;
+  offer: { count: number; cost: number } | null;
+  total: number;
+  need: number;
+  /** 这一项一共代表多少人（含已是高级形态的）：0 是此刻没有人（如镜头里没有），与「都已升级」区分 */
+  size: number;
+  run(): void;
+}
+
+/** 长按卡片的升级选择由 Hud 弹出，不交给 game：game 只提供 upgradeChoices */
+export interface HudCallbacks extends Omit<CardBarCallbacks, 'holdCard' | 'tapButton'> {
+  /** 长按卡片时可选的升级（见 UpgradeChoice） */
+  upgradeChoices(kind: CardKind, id: number): UpgradeChoice[];
   command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow' | 'deselect'): void;
   /** 移动版的编队按钮：把所选部队编为第 g 队 */
   groupSlot(g: number): void;
@@ -72,7 +89,10 @@ export interface HudCallbacks extends CardBarCallbacks {
   selectSite(id: number): void;
   /** 对选中的据点：升级 / 建一座哨塔 / 营寨改选援军兵种（unit 是兵种下标） */
   siteAction(act: 'upgrade' | 'tower' | 'pick', id: number, unit?: number): void;
-  setSpeed(s: number): void;
+  /** 暂停 / 继续（继续用暂停前的速度） */
+  togglePause(): void;
+  /** 速度切到下一档（循环） */
+  cycleSpeed(): void;
   focus(x: number, y: number): void;
   exit(): void;
   toggleSound(): boolean;
@@ -89,6 +109,11 @@ export interface HudCallbacks extends CardBarCallbacks {
   uiMode(): UiMode;
   setUiMode(m: UiMode): void;
 }
+
+/** 升级框限高滚动时按一下 ↑ / ↓ 滚动的距离（约一项的高度） */
+const UP_ARROW_STEP = 40;
+/** 把升级框里的一项滚出来时多留的边距：键盘焦点环画在按钮外沿，贴着框的滚动边缘会被裁掉一半 */
+const UP_REVEAL_PAD = 3;
 
 /** 设置面板里「滚轮 / 双指」的选项 */
 const WHEEL_MODES: { mode: WheelMode; label: string; tip: string }[] = [
@@ -142,6 +167,46 @@ export class Hud {
   private readonly settings: HTMLDivElement;
   /** 选中单个单位 / 据点时的详情（兵种栏上方） */
   private readonly selBox: HTMLDivElement;
+  /** 小地图那一块（编队按钮、缩放条、摇杆、小地图）：移动版详情盖住它时设 inert，键盘与读屏也够不着 */
+  private readonly miniBox: HTMLDivElement;
+  /** 详情的内容（定时重建），与关闭按钮分开放 */
+  private readonly selBody: HTMLDivElement;
+  /** 当前详情是谁（u + 单位 uid / s + 据点号，没有详情时空串），与用关闭按钮收起的那一个（再选一次才重新打开） */
+  private detailKey = '';
+  /** 上一次显示的详情是谁：换了对象时把内容滚回顶部 */
+  private shownKey = '';
+  /** 详情里营寨选兵那一排属于哪个据点（同一据点重建时保留横向滚动位置） */
+  private picksFor = -1;
+  private detailClosed = '';
+  /** 长按卡片弹出的升级选择与它的各项 */
+  private readonly upMenu: HTMLDivElement;
+  /** 卡片带（移动版的升级选择以它的上沿为底） */
+  private readonly cardwrap: HTMLDivElement;
+  private readonly topbar: HTMLDivElement;
+  private upChoices: UpgradeChoice[] = [];
+  /** 升级选择是为哪张卡片弹的（开着时刷新用）与上次写入的内容 */
+  /**
+   * 长按的是哪张卡；dx / dy / w 是弹出时那张卡相对卡片带（cardwrap）的位置与宽度。
+   * 摆位时先取那张卡此刻的位置（视口变了、卡片带重新排版了都跟着走），卡片已不在了才按卡片带的实时位置加这份偏移还原
+   */
+  private upFor: { kind: CardKind; id: number; dx: number; dy: number; w: number } | null = null;
+  private upHtml = '';
+  /** 键盘与指针各自按着升级框里的按钮（任一按着就不刷新报价）：分开记，一种输入的松开不解另一种的锁 */
+  private upKeyHeld = false;
+  private upPointerHeld = false;
+  /** 按着确认期间选择变了：这一按结束时没成交就收起 */
+  private upStale = false;
+  /** 升级框限高滚动时的阅读位置（同一个框里跨过不限高也留着） */
+  private upScroll = 0;
+  /** 键盘（空格）按着确认的是哪一项：按下时定下，松开时按它成交 */
+  private upKeyBtn: HTMLButtonElement | null = null;
+  /** 启动这次键盘确认的是哪个键（空格 / Enter） */
+  private upKeyName = '';
+  /** 按着升级框的那个指针（只认它的抬起、取消、离开）；离开过升级框的这一按作废，随后的 click 不成交 */
+  private upPointer: { pid: number; voided: boolean } | null = null;
+
+  /** 升级选择上次重建时的各项（标题、有没有可升级的、各项的字）：没变就原地刷新 */
+  private upShape = '';
   /** 兵种栏：屏幕内每个己方兵种一张卡片 */
   /** 底部的兵种卡片与编队卡片 */
   readonly cards: CardBar;
@@ -163,7 +228,10 @@ export class Hud {
   private readonly help: HTMLDivElement;
   private readonly helpContent: HTMLDivElement;
   private readonly over: HTMLDivElement;
-  private readonly speedBtns: HTMLButtonElement[] = [];
+  private readonly pauseBtn: HTMLButtonElement;
+  private readonly speedBtn: HTMLButtonElement;
+  /** 最近一次的运行速度：暂停时速度按钮写它 */
+  private runSpeed = 1;
   private soundBtn!: HTMLButtonElement;
   private settingsBtn!: HTMLButtonElement;
   private readonly portraits = new Map<number, string>();
@@ -191,7 +259,7 @@ export class Hud {
     const human = world.humanTeam;
 
     // ---- 顶栏 ----
-    const top = el('div', 'panel topbar');
+    const top = (this.topbar = el('div', 'panel topbar'));
     this.counts = el('div', 'counts');
     this.clock = el('span', 'clock', '00:00');
     this.dbg = el('span', 'dbg');
@@ -208,9 +276,10 @@ export class Hud {
 
     const ctl = (this.ctl = el('div', 'panel ctl'));
     this.menuBtn.onclick = () => this.setMenu(!ctl.classList.contains('open'));
-    // 点菜单里的按钮后收起；点菜单与「菜单」按钮以外的地方也收起
+    // 点菜单里的按钮后收起（速度按钮除外：要连点几下切到想要的速度）；点菜单与「菜单」按钮以外的地方也收起
     ctl.addEventListener('click', e => {
-      if ((e.target as HTMLElement).closest('button')) this.setMenu(false);
+      const b = (e.target as HTMLElement).closest('button');
+      if (b && b !== this.speedBtn) this.setMenu(false);
     });
     const closeMenu = (e: PointerEvent): void => {
       if (!ctl.classList.contains('open') || ctl.contains(e.target as Node) || this.menuBtn.contains(e.target as Node)) return;
@@ -218,20 +287,21 @@ export class Hud {
     };
     window.addEventListener('pointerdown', closeMenu, true);
     this.disposers.push(() => window.removeEventListener('pointerdown', closeMenu, true));
-    for (const [label, sp] of [['暂停', 0], ['1×', 1], ['2×', 2], ['4×', 4]] as [string, number][]) {
-      const b = el('button', sp === 1 ? 'on' : '', label);
-      b.onclick = () => cb.setSpeed(sp);
-      b.dataset.sp = String(sp);
-      this.speedBtns.push(b);
-      ctl.appendChild(b);
-    }
+    // 暂停是开关；速度是一个按钮，每点一下切到下一档（暂停中点它也接着走，用切到的速度）
+    this.pauseBtn = el('button', '', '暂停');
+    this.pauseBtn.title = '暂停 / 继续（空格）';
+    this.pauseBtn.onclick = () => cb.togglePause();
+    this.speedBtn = el('button', 'speed', '1×');
+    this.speedBtn.title = '切换速度：1× → 2× → 4×（+ / − 也可调）';
+    this.speedBtn.onclick = () => cb.cycleSpeed();
+    ctl.append(this.pauseBtn, this.speedBtn);
     const fs = el('button', '', '全屏');
     fs.onclick = () => {
       if (document.fullscreenElement) void document.exitFullscreen();
       else void document.documentElement.requestFullscreen();
     };
-    // iPhone 的 Safari 没有全屏接口
-    if (!document.documentElement.requestFullscreen) fs.hidden = true;
+    // iPhone 的 Safari 没有全屏接口：不放这个按钮（不用 hidden 占着位置，移动版菜单按网格排，靠子元素个数让「退出」铺满末行）
+    const canFullscreen = !!document.documentElement.requestFullscreen;
     this.soundBtn = el('button', '', '');
     this.soundBtn.title = '开 / 关音效（M）';
     this.soundBtn.onclick = () => this.setSound(cb.toggleSound());
@@ -241,7 +311,7 @@ export class Hud {
     const sb = (this.settingsBtn = el('button', '', '设置'));
     const xb = el('button', '', '退出');
     xb.onclick = () => cb.exit();
-    ctl.append(fs, this.soundBtn, sb, hb, xb);
+    ctl.append(...(canFullscreen ? [fs] : []), this.soundBtn, sb, hb, xb);
     root.appendChild(ctl);
 
     // ---- 设置面板 ----
@@ -307,7 +377,7 @@ export class Hud {
     root.appendChild(right);
 
     // ---- 小地图 ----
-    const mm = el('div', 'panel mini');
+    const mm = (this.miniBox = el('div', 'panel mini'));
     this.minimap = el('canvas');
     // 移动版：最上面一排编队按钮，下面一边是缩放条叠在摇杆上方、一边是小地图
     if (human) {
@@ -330,6 +400,14 @@ export class Hud {
     const bottom = el('div', 'bottom');
     this.selBox = el('div', 'panel detail');
     this.selBox.hidden = true;
+    // 移动版里详情占掉卡片带以下的操控区，右上角的关闭只收起详情、不改选择（再点那个单位 / 据点重新打开）
+    const close = el('button', 'dclose mobile-only', '✕');
+    close.setAttribute('aria-label', '关闭详情');
+    this.disposers.push(bindPress(close, {
+      tap: () => this.suppressDetail(),
+    }));
+    this.selBody = el('div', 'dbody');
+    this.selBox.append(close, this.selBody);
     // 面板内容会被定时重建，按钮用事件委托。
     // 注意防连击：点一下升级，面板同步重建，同一位置立刻换成「升到下一级」的按钮，双击就会连升两级；e.detail > 1 是连续的第二下起，一律不响应
     this.selBox.addEventListener('click', e => {
@@ -337,20 +415,178 @@ export class Hud {
       if (b && !b.disabled && (e.detail <= 1 || b.dataset.act === 'pick')) cb.siteAction(b.dataset.act as 'upgrade' | 'tower' | 'pick', Number(b.dataset.site), b.dataset.unit === undefined ? undefined : Number(b.dataset.unit));
     });
     // 两排卡片包在一个容器里：移动版里它是横向滚动的卡片带，编队卡片与兵种卡片排成一行
-    const cardwrap = el('div', 'cardwrap');
-    this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root, cb, cardwrap, top);
+    const cardwrap = (this.cardwrap = el('div', 'cardwrap'));
+    this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root,
+      { ...cb, holdCard: (kind, id, rect) => this.showUpgradeMenu(kind, id, rect), tapButton: () => cb.command('deselect') }, cardwrap, top);
+    // 长按卡片弹出的升级选择：点它以外的地方收起
+    this.upMenu = el('div', 'panel upmenu');
+    this.upMenu.hidden = true;
+    // 焦点停在弹出框本身时能接键盘（tabIndex -1：不进 Tab 次序，只作项目失效时焦点的落脚处）
+    this.upMenu.tabIndex = -1;
+    // 键盘按着空格 / Enter 期间同样锁住报价（空格在抬起时才点下去）；焦点在弹出框里时这两个键不交给游戏
+    // 键盘确认：按下时就定下是哪一项（upKeyBtn，按下时的报价也就锁住了），松开在 window 上收（不论焦点此时在哪）——
+    // 焦点被别的指针抢走不影响这一按；按着期间按了 Tab 是玩家主动移开，取消这一按。
+    // 空格的激活由这里自己做（松开时成交），不交给浏览器；Enter 照旧原生（按下即激活，click 的 detail 为 0）
+    this.upMenu.addEventListener('keydown', e => {
+      // 限高滚动时 ↑ / ↓ 滚框里的选项，不交给游戏挪镜头；没限高时框不滚，照旧挪镜头
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && this.upMenu.style.maxHeight) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.upMenu.scrollTop += e.key === 'ArrowDown' ? UP_ARROW_STEP : -UP_ARROW_STEP;
+        this.upScroll = this.upMenu.scrollTop;
+        return;
+      }
+      if (e.key !== ' ' && e.key !== 'Enter') return;
+      const b = e.target instanceof HTMLButtonElement ? e.target.closest<HTMLButtonElement>('button[data-i]') : null;
+      // 限高滚动时焦点所在的那一项被滚出了视野：这一按只把它滚出来、不确认，看清报价再按一次（免得对着看不见的项成交）
+      // 没开启确认的那一按（如上面只滚出了项）按住不放：自动重复的按下也不激活
+      if (b && e.repeat && !this.upKeyHeld) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (b && !e.repeat && !this.upKeyHeld && this.revealUpItem(b)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (b) {
+        const busy = this.upKeyHeld;
+        if (!e.repeat && !busy) {
+          this.upKeyHeld = true;
+          this.upKeyName = e.key;
+          this.upKeyBtn = e.key === ' ' ? b : null;
+        }
+        // 已有一次键盘确认在进行（如按着空格）时再按别的确认键：不激活（Enter 的原生激活会绕过上面的可见检查，直接成交），
+        // 这次确认仍归原来那个键、原来那一项
+        if (e.key === ' ' || busy) e.preventDefault();
+      } else e.preventDefault();
+      e.stopPropagation();
+    });
+    const keyDownAnywhere = (e: KeyboardEvent): void => {
+      if (e.key === 'Tab' && this.upKeyHeld) {
+        this.upKeyHeld = false;
+        this.upKeyBtn = null;
+        // 选择早变过、又没有指针在按：同步收起，不让过期的那几项在下一次刷新前还能点成交
+        if (this.upStale && !this.upPointerLive()) this.closeUpgradeMenu();
+      }
+    };
+    const keyUpAnywhere = (e: KeyboardEvent): void => {
+      // 只有启动这次确认的那个键松开才结束它（先按住别的键、后来松开的不算）
+      if (!this.upKeyHeld || e.key !== this.upKeyName) return;
+      const b = this.upKeyBtn;
+      this.upKeyHeld = false;
+      this.upKeyBtn = null;
+      if (e.key === ' ' && b && !b.disabled && !this.upMenu.hidden && this.upMenu.contains(b)) {
+        this.upChoices[Number(b.dataset.i)]?.run();
+        this.closeUpgradeMenu();
+        return;
+      }
+      // 按着期间选择变过、这一按没成交：指针也没在按就收起
+      if (this.upStale && !this.upPointerLive()) this.closeUpgradeMenu();
+    };
+    window.addEventListener('keydown', keyDownAnywhere, true);
+    window.addEventListener('keyup', keyUpAnywhere, true);
+    this.disposers.push(() => {
+      window.removeEventListener('keydown', keyDownAnywhere, true);
+      window.removeEventListener('keyup', keyUpAnywhere, true);
+    });
+    const releaseUp = (): void => {
+      this.upKeyHeld = this.upPointerHeld = false;
+      this.upKeyBtn = null;
+      this.upPointer = null;
+      if (this.upStale) this.closeUpgradeMenu();
+    };
+    window.addEventListener('blur', releaseUp);
+    this.disposers.push(() => window.removeEventListener('blur', releaseUp));
+    // 手指按在弹出框上期间不刷新它：刷新会重建按钮，按下与抬起之间换掉按钮就丢了这一下
+    this.upMenu.addEventListener('pointerdown', e => {
+      if (this.upPointer) return;
+      const pid = e.pointerId;
+      // 只有按在能点的那一项上、可能成交的这一按才登记并锁住报价；按在标题、空白处或不能点的项上什么也不锁，
+      // 免得它撑着报价不刷新（选择变了也不收起），让人改用键盘买到过期的那批
+      const pressed = e.button === 0 ? (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-i]') : null;
+      if (!pressed || pressed.disabled) return;
+      this.upPointer = { pid, voided: false };
+      this.upPointerHeld = true;
+      // 松开、取消可能落在升级框外（按着移出去再松手）：在 window 上等这个指针的结束，不论落在哪都收尾
+      // 按着时按实际坐标看是否出了升级框（触屏有隐式捕获，pointerleave 要到松手才来），或补按了别的鼠标键：都作废这一按并放开报价锁
+      const move = (ev: PointerEvent): void => {
+        const p = this.upPointer;
+        if (ev.pointerId !== pid || p?.pid !== pid || p.voided) return;
+        const r = this.upMenu.getBoundingClientRect();
+        const out = ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+        if (out || ev.buttons & ~1) this.voidUpPointer();
+      };
+      const end = (ev: PointerEvent): void => {
+        if (ev.pointerId !== pid) return;
+        window.removeEventListener('pointermove', move, true);
+        window.removeEventListener('pointerup', end, true);
+        window.removeEventListener('pointercancel', end, true);
+        const p = this.upPointer;
+        if (p?.pid !== pid) return;
+        this.upPointer = null;
+        this.upPointerHeld = false;
+        // 指针点按在松开这一刻直接成交，不等 click（触屏的 click 由点按手势异步合成，时序靠不住）：
+        // 没离开过升级框、松开处还是按下的那一项（触屏有隐式捕获，target 总是按中的元素，所以按坐标取）、那一项还能点
+        // 只认左键的松开（组合按键时最后松开的可能是中键 / 右键）
+        const at = !p.voided && ev.type === 'pointerup' && ev.button === 0 && pressed
+          ? document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLButtonElement>('button[data-i]') : null;
+        if (pressed && at === pressed && !pressed.disabled && this.upMenu.contains(pressed)) {
+          this.upChoices[Number(pressed.dataset.i)]?.run();
+          this.closeUpgradeMenu();
+        } else if (this.upStale && !this.upKeyHeld) this.closeUpgradeMenu(); // 键盘还按着确认：等它结束再定
+      };
+      window.addEventListener('pointermove', move, true);
+      window.addEventListener('pointerup', end, true);
+      window.addEventListener('pointercancel', end, true);
+    });
+    // 按着时移出升级框：这一按作废（放开报价锁，移回再松手也不成交，免得同一按悄悄按新价成交）
+    this.upMenu.addEventListener('pointerleave', e => {
+      if (this.upPointer?.pid !== e.pointerId) return;
+      this.voidUpPointer();
+    });
+    // click 只处理键盘与读屏的激活（detail 为 0）；指针点按在上面的松开收尾里成交，指针产生的 click 一律不理（也挡掉没拿到报价锁的其它触点）
+    this.upMenu.addEventListener('click', e => {
+      if (e.detail !== 0) return;
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-i]');
+      if (!b || b.disabled) return;
+      this.upChoices[Number(b.dataset.i)]?.run();
+      this.closeUpgradeMenu();
+    });
+    // 点在画面或小地图上收起时，这一下只收起、不落到画面上下令（同遮罩）；点在别的卡片上照常开始新的一按
+    const closeUp = (e: PointerEvent): void => {
+      if (this.upMenu.hidden || this.upMenu.contains(e.target as Node)) return;
+      // 有一根手指正按着升级框里的报价确认：别的手指按到框外不收起、也不拦（照常落到画面上），确认归按着的那根手指
+      // （移出过、已作废的那一按不算，它已不能成交）
+      if (this.upPointerLive() && this.upPointer!.pid !== e.pointerId) return;
+      // 键盘正按着确认：同样不收起、不拦（这一按抢走焦点也不影响键盘确认，松开在 window 上收）
+      if (this.upKeyHeld) return;
+      this.closeUpgradeMenu();
+      const t = e.target as HTMLElement;
+      if (t === this.minimap || (t instanceof HTMLCanvasElement && t.classList.contains('view'))) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('pointerdown', closeUp, true);
+    this.disposers.push(() => window.removeEventListener('pointerdown', closeUp, true));
     this.disposers.push(() => this.cards.destroy());
     if (human) {
       // 移动版里点空地是下令移动，取消选择靠按钮：常用，所以在指令面板之外，卡片带最前面再放一个伸手就到的
       const b = (this.deselBtn = el('button', 'desel mobile-only', '<b>✕</b>取消<br>选择'));
       b.setAttribute('aria-label', '取消选择');
-      const unbind = bindPress(b, { tap: () => cb.command('deselect') });
-      this.disposers.push(unbind);
+      // 手指由卡片带受理（与卡片共用「一次只认一根手指」：拖卡片时另一指按它不响应，先按住它时也拖不了卡片），见 CardBar 的 tapButton；
+      // 键盘（Enter / 空格）与读屏软件的激活只发 click（detail 为 0）
+      b.addEventListener('click', e => {
+        if (e.detail === 0 && !b.disabled && !this.cards.busy) cb.command('deselect');
+      });
+      b.addEventListener('contextmenu', e => e.preventDefault());
       cardwrap.appendChild(b);
     }
     cardwrap.append(this.cards.groupRow, this.cards.roster);
     bottom.append(this.selBox, cardwrap);
-    root.appendChild(bottom);
+    root.append(bottom, this.upMenu);
 
     // ---- 右下：指令面板，分「部队」「援军」「升级」三栏 ----
     const cmds = el('div', 'panel cmds');
@@ -433,8 +669,13 @@ export class Hud {
     root.append(this.feed, this.modeTip);
     // 战报接在提示条下面：提示条换行（屏宽变了、文字变了）时跟着更新它的高度
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => this.syncTipHeight());
+      const ro = new ResizeObserver(() => {
+        this.syncTipHeight();
+        // 桌面版底部（详情与卡片）上边不越过顶栏
+        this.root.style.setProperty('--topbar', `${this.topbar.offsetHeight + 8}px`);
+      });
       ro.observe(this.modeTip);
+      ro.observe(this.topbar);
       this.disposers.push(() => ro.disconnect());
     }
 
@@ -453,6 +694,7 @@ export class Hud {
             <tr><th scope="row">推摇杆 / 拖动或点小地图</th><td>移动镜头</td></tr>
             <tr><th scope="row">摇杆上方的缩放条</th><td>拖动滑块或点在条上缩放镜头（往右拉近）；点两端的 − / + 缩放一档</td></tr>
             <tr><th scope="row">卡片拖到地图上</th><td>剑尖指着的地方是落点：这批人攻击移动过去，松在敌军身上则攻击它</td></tr>
+            <tr><th scope="row">点亮着的卡片 / 长按卡片</th><td>取消选中它代表的人 / 弹出升级选择（花黄金升为高级形态）</td></tr>
             <tr><th scope="row">编队按钮 1～${GROUP_SLOTS}</th><td>把所选部队编为这一队（原来的这一队作废）；选中一队点卡片带里的编队卡片</td></tr>
             <tr><th scope="row">两侧边缘的把手</th><td>拉出据点列表 / 指令面板</td></tr>
           </table>
@@ -466,8 +708,8 @@ export class Hud {
             <summary>详细操作与规则</summary>
             <table class="desktop-only">
               <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
-              <tr><td>底部兵种卡片</td><td>没选中的卡片写屏幕内的人数，选中后改写选中的人数、不再随镜头变化。点击：选中屏幕内这个兵种（已选中的卡片则只留下选中的这个兵种）；Shift 加选 / 去掉；双击：选中全图的这个兵种；按住拖到地面或小地图上松开：这个兵种攻击移动过去，松在敌军身上则攻击它（右键或 Esc 取消）。从画面上拉框扫过卡片：一并选中这些兵种。选中的兵种卡片会上前一步</td></tr>
-              <tr><td>全选卡片</td><td>兵种栏最左一张，写屏幕内的总人数；屏幕内的人全都选着时上前一步，改写选中的人数、不再随镜头变化。点击：选中屏幕内的全部部队（已选中时保持选中的这些人）；Shift 加选；双击：选中全图的部队；拖动、框扫同兵种卡片</td></tr>
+              <tr><td>底部兵种卡片</td><td>没选中的卡片写屏幕内的人数，选中后改写选中的人数、不再随镜头变化。点击：选中屏幕内这个兵种（已选中的卡片则取消选中）；Shift 加选 / 去掉；双击：选中全图的这个兵种；按住不动：弹出升级选择；按住拖到地面或小地图上松开：这个兵种攻击移动过去，松在敌军身上则攻击它（右键或 Esc 取消）。从画面上拉框扫过卡片：一并选中这些兵种。选中的兵种卡片会上前一步</td></tr>
+              <tr><td>全选卡片</td><td>兵种栏最左一张，写屏幕内的总人数；屏幕内的人全都选着时上前一步，改写选中的人数、不再随镜头变化。点击：选中屏幕内的全部部队（已选中时取消选择）；Shift 加选；按住不动：弹出升级选择；双击：选中全图的部队；拖动、框扫同兵种卡片</td></tr>
               <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
               <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
               <tr><td>右键敌军 / 敌方建筑</td><td>攻击（中立的军事建筑会放箭，也直接右键就打；Ctrl+右键可强攻中立的城墙、门楼、木栅、营门；带着器械或战象时，中立的城墙、门楼直接右键就砸；普通建筑不可攻击）</td></tr>
@@ -479,7 +721,7 @@ export class Hud {
               <tr><td>B + 左键</td><td>扎营：派所选部队去搭一座临时据点（耗木材）</td></tr>
               <tr><td>左键点据点</td><td>选中据点：升级城池、营寨，或给资源点建哨塔；己方营寨还可以选出哪个兵种</td></tr>
               <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
-              <tr><td>编队卡片</td><td>兵种卡片上方一排，每个编队一张。点击选中这一队，双击镜头跳过去；拖到地面或小地图上松开：整队攻击移动过去，松在敌军身上则攻击它</td></tr>
+              <tr><td>编队卡片</td><td>兵种卡片上方一排，每个编队一张。点击选中这一队（已选中时取消选中），双击镜头跳过去；按住不动：弹出升级选择；拖到地面或小地图上松开：整队攻击移动过去，松在敌军身上则攻击它</td></tr>
               <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
               <tr><td>鼠标顶到屏幕最外沿、W A S D / 方向键、小地图</td><td>移动镜头（压在界面上也卷；鼠标冲出网页会接着往那边卷，回来即停）</td></tr>
               <tr><td>滚轮、捏合、PageUp / PageDown</td><td>缩放（Mac 上 PageUp / PageDown 是 fn + ↑ / ↓）</td></tr>
@@ -697,6 +939,10 @@ export class Hud {
     this.stick.reset();
     this.openDrawer(null);
     this.setMenu(false);
+    this.closeUpgradeMenu();
+    // 关闭按钮只在移动版有：桌面版没有收起详情的说法
+    this.detailClosed = '';
+    this.syncInert();
     this.feedMax = on ? 3 : 5;
     while (this.feed.children.length > this.feedMax) this.feed.lastChild!.remove();
   }
@@ -707,7 +953,10 @@ export class Hud {
   }
 
   setSpeed(s: number): void {
-    for (const b of this.speedBtns) b.classList.toggle('on', Number(b.dataset.sp) === s);
+    if (s > 0) this.runSpeed = s;
+    this.pauseBtn.classList.toggle('on', s === 0);
+    this.pauseBtn.textContent = s === 0 ? '继续' : '暂停';
+    this.speedBtn.textContent = `${this.runSpeed}×`;
   }
 
   setMode(text: string): void {
@@ -750,6 +999,205 @@ export class Hud {
     this.root.style.setProperty('--tip', this.modeTip.style.display === 'block' ? `${this.modeTip.offsetHeight + 2}px` : '0px');
   }
 
+  /** game 在下令顺带换选择期间设为 true：这期间的 updateSelection 不打开原本没显示的详情 */
+  detailQuiet = false;
+
+  /** 收起当前的详情，直到玩家重新选单位或据点（关闭按钮） */
+  suppressDetail(): void {
+    this.detailClosed = this.detailKey;
+    this.selBox.hidden = true;
+    this.syncInert();
+  }
+
+  /** 详情此刻是否显示着 */
+  get detailShown(): boolean {
+    return !this.selBox.hidden;
+  }
+
+  /** 移动版详情盖住小地图那一块时把它设为 inert */
+  private syncInert(): void {
+    const off = this.mobile && !this.selBox.hidden;
+    if (this.miniBox.inert === off) return;
+    this.miniBox.inert = off;
+    // 盖住时正推着摇杆、按着缩放条的手指可能收不到抬起：先放掉，免得镜头一直卷
+    if (off) {
+      this.stick.reset();
+      this.zoom.release();
+    }
+  }
+
+  /** 玩家重新选了单位或据点（哪怕还是同一个）：用关闭按钮收起的详情可以再弹出来 */
+  reopenDetail(): void {
+    this.detailClosed = '';
+  }
+
+  /** 长按卡片：在卡片上方弹出升级选择（各项由 game 给出），左右不伸出画面、让开两侧把手 */
+  private showUpgradeMenu(kind: CardKind, id: number, rect: DOMRect): void {
+    // 正有手指 / 键盘按着报价确认：别的手指长按卡片不重开（不改写按着的那份报价）
+    if (this.upPointerLive() || this.upKeyHeld) return;
+    // 只剩作废的那一按：丢掉它的记录（它松开时不再收尾），新弹出的是新报价，不过期
+    this.upPointer = null;
+    this.upPointerHeld = false;
+    this.upStale = false;
+    const cw = this.cardwrap.getBoundingClientRect();
+    this.upFor = { kind, id, dx: rect.left - cw.left, dy: rect.top - cw.top, w: rect.width };
+    if (!this.renderUpgradeMenu()) return;
+    this.upMenu.hidden = false;
+    // 新弹出的从顶上开始（限高滚动时不接着上一个框滚到的位置；同一个框刷新、重摆时才保留）
+    this.upMenu.scrollTop = this.upScroll = 0;
+    this.placeUpgradeMenu();
+    navigator.vibrate?.(15);
+  }
+
+  /** 按此刻的局面重写升级选择的各项（开着时随低频刷新更新人数与金额）；没有可选的项返回 false */
+  private renderUpgradeMenu(): boolean {
+    const f = this.upFor;
+    if (!f) return false;
+    const choices = this.cb.upgradeChoices(f.kind, f.id);
+    if (!choices.length) return false;
+    this.upChoices = choices;
+    const title = f.kind === 'type' ? UNITS[f.id].name : f.kind === 'group' ? `第 ${f.id} 队` : '全选';
+    const none = choices.every(c => !c.total && c.size > 0);
+    const sub = (c: UpgradeChoice): string => (!c.size ? '当前没有人' : !c.total ? '已是高级形态'
+      : c.offer ? `${c.offer.count}${c.offer.count < c.total ? ` / ${c.total}` : ''} 人 · 金 ${Math.round(c.offer.cost)}`
+      : `${c.total} 人 · 黄金不足，升 1 人需 ${Math.round(c.need)}`);
+    // 只是人数、金额变了（各项还是那几项）：原地改按钮上的字与可用状态，不重建按钮——重建会丢掉键盘焦点，按下与抬起之间换掉按钮也会丢掉这一下
+    const shape = `${title}|${none}|${choices.map(c => c.label).join('|')}`;
+    const btns = [...this.upMenu.querySelectorAll<HTMLButtonElement>('button[data-i]')];
+    if (shape === this.upShape && btns.length === choices.length) {
+      choices.forEach((c, i) => {
+        const i2 = btns[i].querySelector('i'), text = sub(c);
+        if (i2 && i2.textContent !== text) i2.textContent = text;
+        if (btns[i].disabled === !!c.offer) {
+          // 正有键盘焦点的这一项变得不能点：焦点先留在弹出框上，不掉回页面（否则下一下空格成了游戏的暂停 / 继续）
+          if (!c.offer && btns[i] === document.activeElement) this.upMenu.focus();
+          btns[i].disabled = !c.offer;
+        }
+      });
+      return true;
+    }
+    const html = `<h3>${title} · 升级</h3>${none ? '<p>没有可升级的人（都已是高级形态）</p>' : choices.map((c, i) =>
+      `<button data-i="${i}"${c.offer ? '' : ' disabled'}><b>${c.label}</b><i>${sub(c)}</i></button>`).join('')}`;
+    if (html === this.upHtml) return true;
+    // 各项变了要重建：焦点原在哪一项（按这一项是什么，不按第几行——去重后行号会挪），重建后放回那一项；
+    // 那一项没了或不能点，焦点留在弹出框上，不交给别的项（不能把确认转给另一批人）
+    const focusedBtn = btns.find(b => b === document.activeElement);
+    const focusedLabel = focusedBtn?.querySelector('b')?.textContent ?? null;
+    const hadFocus = this.upMenu.contains(document.activeElement);
+    this.upMenu.innerHTML = this.upHtml = html;
+    this.upShape = shape;
+    if (hadFocus) {
+      const at = focusedLabel === null ? -1 : choices.findIndex(c => c.label === focusedLabel && c.offer);
+      const target = at >= 0 ? this.upMenu.querySelector<HTMLButtonElement>(`button[data-i="${at}"]`) : null;
+      (target ?? this.upMenu).focus();
+    }
+    return true;
+  }
+
+  private placeUpgradeMenu(): void {
+    const f = this.upFor!, cw = this.cardwrap.getBoundingClientRect();
+    const rect = this.cards.cardRect(f.kind, f.id) ?? { left: cw.left + f.dx, top: cw.top + f.dy, width: f.w };
+    // 层级在把手与战报之上（见 style.css 的 .upmenu）；仍让开把手，免得盖住它。
+    // 移动版：左右让开把手连同它向内伸的命中范围（量把手的实际宽度，加上 style.css 里 .handle::after 向内伸的 20 × --u，那边改了这里同步），
+    // 底边落在卡片带的金边上方（卡片选没选中、上没上移都一样）
+    const host = this.root.getBoundingClientRect();
+    const handle = this.root.querySelector<HTMLElement>('.handle.left');
+    const hw = handle ? handle.getBoundingClientRect().width : 0;
+    const edge = this.mobile ? Math.ceil(hw * (42 / 22)) : 8;
+    // 宽度也限在两侧让位之间：先限宽再量尺寸，否则夹完左边右边就越界、盖住右侧把手
+    this.upMenu.style.maxWidth = this.mobile ? `${host.width - 2 * edge}px` : '';
+    // 先去掉限高量出完整高度；限高时框里滚到的位置会被这一量夹回顶部，量完还原（摆位随 update 反复调，不能每次都把人滚回去）
+    // 记下的阅读位置跨过「不限高」（视口变大又变回）也留着：不限高时框不滚动，读到的 scrollTop 恒为 0，不覆盖它
+    const prevMax = this.upMenu.style.maxHeight;
+    if (prevMax) this.upScroll = this.upMenu.scrollTop;
+    this.upMenu.style.maxHeight = '';
+    const w = this.upMenu.offsetWidth;
+    let h = this.upMenu.offsetHeight;
+    const x = Math.max(edge, Math.min(host.width - edge - w, rect.left - host.left + rect.width / 2 - w / 2));
+    let base = this.mobile ? this.cardwrap.getBoundingClientRect().top : rect.top;
+    // 桌面版：卡片会换行，横向对着长按的那张卡，纵向让开所有卡片（落在最上一排之上），也让开叠在卡片上方的详情；
+    // 上边不盖顶栏。矮屏上多排卡片加详情放不下时，让详情在升级框开着期间先隐去（只是不可见、不改布局，收起升级框就回来）
+    let top = edge;
+    if (!this.mobile) {
+      top = Math.max(edge, this.topbar.getBoundingClientRect().bottom - host.top + 8);
+      base = Math.min(base, this.cards.cardsTop());
+      const detail = this.detailShown ? this.selBox.getBoundingClientRect().top : Infinity;
+      const fits = Math.min(base, detail) - host.top - h - 8 >= top;
+      this.selBox.classList.toggle('yield', !fits && detail < Infinity);
+      if (fits) base = Math.min(base, detail);
+      // 详情让开了还放不下（卡片排得太多）：压低升级框，里面滚动，不盖卡片（矮到连几十像素都没有才只好盖上）
+      const room = base - host.top - 8 - top;
+      if (h > room) {
+        const max = `${Math.max(room, 64)}px`;
+        this.upMenu.style.maxHeight = max;
+        h = this.upMenu.offsetHeight;
+        this.upMenu.scrollTop = this.upScroll;
+        // 刚变成限高、或限高的高度变了（视口变了）：键盘正按着、或焦点所在的那一项可能被裁掉，让它露出来（免得对着看不见的项成交）；
+        // 限高没变的常规刷新不动，玩家自己滚到哪就是哪（焦点停在某项时照样能滚着读别的项）
+        const act = document.activeElement as HTMLElement | null;
+        const keep = max === prevMax ? null : this.upKeyBtn ?? (act && act !== this.upMenu && this.upMenu.contains(act) ? act : null);
+        if (keep) this.revealUpItem(keep);
+        this.upScroll = this.upMenu.scrollTop;
+      }
+    }
+    const y = Math.max(top, base - host.top - h - 8);
+    this.upMenu.style.transform = `translate(${x}px, ${y}px)`;
+  }
+
+  /**
+   * 选择变了：升级选择上的人数与金额不准了，收起它。但若正有手指 / 键盘按着报价确认（另一根手指点画面改了选择），
+   * 不打断这一按：记下「过期」，等这一按结束——成交就按按下时的报价成交，没成交再收起
+   */
+  selectionChanged(): void {
+    if (this.upMenu.hidden) return;
+    if (this.upPointerLive() || this.upKeyHeld) this.upStale = true;
+    else this.closeUpgradeMenu();
+  }
+
+  /** 指针这一按作废：放开报价锁；选择早变过、键盘也没在按着确认的，过期的报价没人再撑着，当下收起 */
+  private voidUpPointer(): void {
+    if (!this.upPointer) return;
+    this.upPointer.voided = true;
+    this.upPointerHeld = false;
+    if (this.upStale && !this.upKeyHeld) this.closeUpgradeMenu();
+  }
+
+  /** 升级框里这一项没有整个露在框的可视范围里就把它滚出来，返回是否滚了 */
+  private revealUpItem(b: HTMLElement): boolean {
+    const m = this.upMenu;
+    // 没限高时框不滚动，每一项都露着
+    if (!m.style.maxHeight) return false;
+    // 「整个露着」连同外沿的焦点环一起算（上下各多要 UP_REVEAL_PAD）：贴着滚动边缘时焦点环已被裁掉一截。
+    // offsetTop 是取整的，差不到 1px 的贴边靠这几像素的余量兜住
+    const top = b.offsetTop - UP_REVEAL_PAD, bottom = b.offsetTop + b.offsetHeight + UP_REVEAL_PAD;
+    const max = m.scrollHeight ? m.scrollHeight - m.clientHeight : Infinity;
+    // 滚到头了也露不全（第一项上面、最后一项下面没那么多空）就不再要求
+    const want = top < m.scrollTop ? Math.max(0, top) : bottom > m.scrollTop + m.clientHeight ? Math.min(max, bottom - m.clientHeight) : m.scrollTop;
+    if (Math.abs(want - m.scrollTop) < 0.5) return false;
+    m.scrollTop = want;
+    this.upScroll = m.scrollTop;
+    return true;
+  }
+
+  /** 有指针还按着升级框里的报价、这一按仍可能成交（移出过的已作废，不算：它不该再替过期的报价撑着） */
+  private upPointerLive(): boolean {
+    return !!this.upPointer && !this.upPointer.voided;
+  }
+
+  /** 收起长按卡片弹出的升级选择 */
+  closeUpgradeMenu(): void {
+    this.upMenu.hidden = true;
+    this.selBox.classList.remove('yield');
+    this.upChoices = [];
+    this.upFor = null;
+    this.upHtml = '';
+    this.upShape = '';
+    this.upKeyHeld = this.upPointerHeld = false;
+    this.upKeyBtn = null;
+    this.upPointer = null;
+    this.upStale = false;
+  }
+
   /** 两个「取消选择」（指令面板里与卡片带最前面）：有可取消的选择、或处于指令模式时可按 */
   private syncDeselect(): void {
     const off = !this.hasSel && !this.inMode;
@@ -759,6 +1207,17 @@ export class Hud {
   /** 低频刷新（约 4 次/秒） */
   update(): void {
     const w = this.world;
+    // 升级选择开着时跟着黄金与人数刷新，宽高变了重新摆位置；没有可选的项了就收起
+    // 按着确认期间选择变过、现在已没人按着（如键盘按着时焦点移走）：照「选择变了就收起」收起
+    if (this.upStale && !this.upKeyHeld && !this.upPointerLive()) this.closeUpgradeMenu();
+    if (this.upFor && !this.upKeyHeld && !this.upPointerHeld) {
+      if (this.renderUpgradeMenu()) this.placeUpgradeMenu();
+      else this.closeUpgradeMenu();
+    } else if (this.upFor && !this.upPointerHeld && !this.upMenu.hidden) {
+      // 只有键盘按着：内容锁住不刷新，但位置照常跟着摆（如期间详情出现了，让开它）；
+      // 指针按着时不挪：按着的那一项从手指下挪走，松开就落空了（选择变了导致的遮挡，松开后过期的框随即收起）
+      this.placeUpgradeMenu();
+    }
     const f = w.factions as FactionDef[];
     const human = w.humanTeam || 1;
     const other = 3 - human;
@@ -955,7 +1414,20 @@ export class Hud {
       </div>`;
     if (html === this.selKey) return;
     this.selKey = html;
-    this.selBox.innerHTML = html;
+    // 营寨选兵那一排横向滚动：同一据点重建（如刚点了一个兵种）时留在原处，换了据点把选中的兵种滚到中间
+    const prev = this.selBody.querySelector<HTMLElement>('.picks');
+    const keepX = prev && this.picksFor === s.id ? prev.scrollLeft : null;
+    this.selBody.innerHTML = html;
+    this.picksFor = s.id;
+    const picks = this.selBody.querySelector<HTMLElement>('.picks');
+    if (picks && keepX !== null) picks.scrollLeft = keepX;
+    else if (picks) {
+      const on = picks.querySelector<HTMLElement>('button.on');
+      if (on) {
+        const pr = picks.getBoundingClientRect(), br = on.getBoundingClientRect();
+        picks.scrollLeft += br.left - pr.left - (pr.width - br.width) / 2;
+      }
+    }
   }
 
   /** 据点出什么援军：营寨是所选的兵种名，其余是据点类型的说明 */
@@ -1003,7 +1475,7 @@ export class Hud {
     const d = UNITS[w.type[s]];
     const lv = w.level[s], max = LEVELS.thresholds.length;
     const st = w.state[s];
-    const key = `one:${s}:${w.uid[s]}:${lv}:${Math.round(w.hp[s])}:${Math.round(w.xp[s])}:${Math.round(w.morale[s])}:${st}`;
+    const key = `one:${s}:${w.uid[s]}:${w.type[s]}:${lv}:${Math.round(w.hp[s])}:${Math.round(w.maxHp[s])}:${Math.round(w.xp[s])}:${Math.round(w.morale[s])}:${st}`;
     if (key === this.selKey) return;
     this.selKey = key;
     const pct = (v: number): string => (lv > 0 && v ? ` <i>+${Math.round(v * lv * 100)}%</i>` : '');
@@ -1027,13 +1499,13 @@ export class Hud {
     if (d.siege) perks.push('可破城墙');
     if (d.aux) perks.push(`副武器 ${d.aux.lvDmg[0]}/${d.aux.range}`);
     for (const a of d.auras) perks.push(`${a.name} ${auraPct(a)}`);
-    this.selBox.innerHTML = `
+    this.selBody.innerHTML = `
       <div class="udetail" title="${unitTip(d).replace(/"/g, '&quot;')}">
         <div class="who">
           <img src="${this.portrait(d.idx, w.humanTeam)}" draggable="false">
           <b>${d.name}</b>
-          <span>${unitKind(d)} · ${SIZES[d.size].name}</span>
-          <span class="${d.tier ? 'elite' : ''}">${d.tier ? '高级形态' : `初级 · 升级需 ${unitUpgradeCost(d)} 金`}</span>
+          <span>${unitKind(d)}<i class="sep"> · </i><em>${SIZES[d.size].name}</em></span>
+          <span class="${d.tier ? 'elite' : ''}">${d.tier ? '高级形态' : `初级<i class="sep"> · </i><em>升级需 ${unitUpgradeCost(d)} 金</em>`}</span>
         </div>
         <div class="rows">
           <div class="lvrow"><b>等级 ${lv + 1} / ${max}</b> ${LEVELS.names[lv]}
@@ -1076,17 +1548,24 @@ export class Hud {
    */
   updateSelection(sel: number[], site = -1, screen: number[] = [], allPicked = false): void {
     const w = this.world;
-    // ---- 详情：选中单个单位，或没选部队而选着据点 ----
-    if (!sel.length && site >= 0 && !w.sites[site].gone) {
+    // ---- 详情：选中单个单位，或没选部队而选着据点；用关闭按钮收起的那一个不再弹出，直到重新选它 ----
+    const siteShown = !sel.length && site >= 0 && !w.sites[site].gone, unitShown = sel.length === 1 && w.alive[sel[0]];
+    this.detailKey = siteShown ? `s${site}` : unitShown ? `u${w.uid[sel[0]]}` : '';
+    // 下令顺带换的选择（detailQuiet）：没显示着的详情不打开，记成收起，直到玩家重新选
+    if (this.detailQuiet && this.selBox.hidden) this.detailClosed = this.detailKey;
+    if (this.detailKey && this.detailKey !== this.detailClosed) {
+      // 换了对象或重新打开：从头看起，不留着上一个详情滚到的位置（隐藏着的元素设 scrollTop 无效，要先显示出来）
+      const fresh = this.selBox.hidden || this.detailKey !== this.shownKey;
+      this.shownKey = this.detailKey;
       this.selBox.hidden = false;
-      this.siteDetail(w.sites[site]);
-    } else if (sel.length === 1 && w.alive[sel[0]]) {
-      this.selBox.hidden = false;
-      this.unitDetail(sel[0]);
+      if (siteShown) this.siteDetail(w.sites[site]);
+      else this.unitDetail(sel[0]);
+      if (fresh) this.selBody.scrollTop = 0;
     } else if (!this.selBox.hidden) {
       this.selBox.hidden = true;
       this.selKey = '?';
     }
+    this.syncInert();
     // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
     this.hasSel = sel.length > 0 || site >= 0;
     for (const [cmd, b] of this.cmdBtns) {

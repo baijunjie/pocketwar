@@ -385,6 +385,62 @@ describe('ZoomSlider 横向缩放条', () => {
     });
   });
 
+  describe('release：放掉正按着的手指', () => {
+    const lit = (): { on: boolean; minus: boolean; plus: boolean } => ({
+      on: root.classList.contains('on'), minus: root.children[0].classList.contains('down'), plus: root.children[2].classList.contains('down'),
+    });
+
+    it('拖长条中途 release：去掉 on；之后的 move / up 不再改值、不回调', () => {
+      down(xOf(0.5));
+      onChange.mockClear();
+      const before = fVar();
+      zs.release();
+      expect(lit()).toEqual({ on: false, minus: false, plus: false });
+      move(xOf(0.9));
+      up();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(fVar()).toBe(before);
+    });
+
+    it('按着 − / + 时 release：去掉 down；抬起也不再点一档', () => {
+      down(20);
+      zs.release();
+      expect(lit()).toEqual({ on: false, minus: false, plus: false });
+      up();
+      expect(onChange).not.toHaveBeenCalled();
+      down(220);
+      zs.release();
+      expect(lit()).toEqual({ on: false, minus: false, plus: false });
+      up();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it('release 本身不回调 onChange、不改位置', () => {
+      down(xOf(0.5));
+      onChange.mockClear();
+      const before = fVar();
+      zs.release();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(fVar()).toBe(before);
+    });
+
+    it('没按着时 release 什么也不做：不回调、不改位置、不改状态', () => {
+      const before = fVar();
+      zs.release();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(fVar()).toBe(before);
+      expect(lit()).toEqual({ on: false, minus: false, plus: false });
+    });
+
+    it('release 之后可以重新按下并正常拖', () => {
+      down(xOf(0.5));
+      zs.release();
+      down(xOf(0.25), 20, 2);
+      expect(last()).toBeCloseTo(0.25);
+      expect(lit().on).toBe(true);
+    });
+  });
+
   describe('键盘（事件挂在 .zoom 上）', () => {
     it('ArrowUp / ArrowRight +0.125，ArrowDown / ArrowLeft −0.125，并回调', () => {
       zs.sync(0.5);
