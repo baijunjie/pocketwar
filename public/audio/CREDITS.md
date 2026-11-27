@@ -7,7 +7,7 @@
 | 场景声部 | 音轨与来源 |
 |---|---|
 | 天气与木屋 | rain-grass-loop、wind-open-field-loop、timber-fire-loop、timber-building-collapse、distant-thunder，见[环境录音署名](environment/CREDITS.md) |
-| 骑队与交锋 | horse-gallop-loop、cavalry-column-loop、melee-distant-loop、bow-release-1、arrow-pass-1、shield-impact-1/2、blade-clash-1/2/3，见[战场录音署名](field/CREDITS.md) |
+| 骑队与交锋 | 单骑和六马掠过（取自战场录音署名中的两份马蹄原录音，试听场景保留掠过的声像）、melee-distant-loop、bow-release-1、arrow-pass-1、shield-impact-1/2、blade-clash-1/2/3，见[战场录音署名](field/CREDITS.md) |
 | 远号 | rally-horn，见[号令与火把署名](signals/CREDITS.md) |
 | 战吼 | joelcarrsound 在黑斯廷斯战役重演现场收录的 [Middle Ages War Cry 3.wav](https://freesound.org/people/joelcarrsound/sounds/521831/)，[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 

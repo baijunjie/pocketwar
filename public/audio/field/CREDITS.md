@@ -6,8 +6,8 @@ Still North Media 素材由 Ben Jaszczak 与 Brian Nelson 创作、录制，取�
 
 | 游戏文件 | 作者与原文件 | 许可 | 取材与剪辑 |
 |---|---|---|---|
-| `horse-gallop-loop.mp3` | Max_Headroom · [Horse Galloping.wav](https://freesound.org/people/Max_Headroom/sounds/175356/) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 真马在硬土上绕麦克风奔跑。截取 0.51–5.13 秒并交叉淡化循环。 |
-| `cavalry-column-loop.mp3` | bruno.auzet · [6 horses gallop.wav](https://freesound.org/people/bruno.auzet/sounds/527430/) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 六匹马从远处掠过地面立体声麦克风。截取 2.80–13.75 秒并交叉淡化循环。 |
+| `horse-gallop-loop.mp3` | Max_Headroom · [Horse Galloping.wav](https://freesound.org/people/Max_Headroom/sounds/175356/) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 截取硬土奔跑的连续步态（0.62–5.02 秒），滤除次低频，合为单声道、校平长时响度并交叉拼接。 |
+| `cavalry-column-loop.mp3` | bruno.auzet · [6 horses gallop.wav](https://freesound.org/people/bruno.auzet/sounds/527430/)；Max_Headroom · [Horse Galloping.wav](https://freesound.org/people/Max_Headroom/sounds/175356/) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 取六马经过麦克风时的近段（6.98–9.43 秒），叠入单骑，滤除次低频、错开步点、校平长时响度并制成单声道循环。 |
 | `infantry-march-loop.mp3` | Yap_Audio_Production · [MedievalArmyMarchingLoop.mp3](https://freesound.org/people/Yap_Audio_Production/sounds/218998/) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 原作者将碎石上的脚步与金属、链条录音叠制。剪辑并交叉淡化循环。 |
 | `melee-distant-loop.mp3` | Yap_Audio_Production · [MedievalCombatLoop.mp3](https://freesound.org/people/Yap_Audio_Production/sounds/218522/) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 历史战斗重演的器械碰撞、人声及表演喊声。轻度低通处理并交叉淡化循环。 |
 | `cannon-report-1.mp3` | alienistcog · [reenactment2.aif](https://freesound.org/people/alienistcog/sounds/125932/) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 历史重演现场炮火，截取 8.35–10.25 秒的单次轰响与回声。 |
