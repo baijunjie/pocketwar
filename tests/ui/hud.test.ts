@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AU_RANGED_TAKEN, ELITE, EXPAND_RULES, SIZES, SITE_CAMP, SITE_CITY, UNITS, UNIT_BY_KEY, expandUnit, isContentUnit, unitKind } from '../../src/sim/defs';
+import { AU_RANGED_TAKEN, ELITE, RULES, T_GRASS, EXPAND_RULES, SIZES, SITE_CAMP, SITE_CITY, UNITS, UNIT_BY_KEY, expandUnit, isContentUnit, unitKind } from '../../src/sim/defs';
 import { unitUpgradeCost } from '../../src/sim/systems/economy';
 import { createGame } from '../../src/sim/setup';
+import { S_WALL } from '../../src/sim/state';
 import { Hud, tier3Perks } from '../../src/ui/hud';
 import type { HudCallbacks, UpgradeChoice } from '../../src/ui/hud';
 import { FakeCanvas, FakeEl, firePointer, installFakeDom, rectOf } from './fakeDom';
-import { auraEffect, auraPct, unitTip } from '../../src/ui/unitText';
+import { auraEffect, auraPct, effectText, unitTip } from '../../src/ui/unitText';
 
 // 头像要 WebGL，测试里用不上
 vi.mock('../../src/render/portrait', () => ({ unitPortrait: () => ({ toDataURL: () => '' }) }));
@@ -408,6 +409,107 @@ describe('Hud 移动版新增的界面', () => {
     expect(effects.attrs['aria-checked']).toBe('true');
     expect(music.attrs['aria-checked']).toBe('true');
     expect(cb.toggleMusic).toHaveBeenCalledTimes(1);
+  });
+
+  describe('单个单位详情的增减益行', () => {
+    const fxWorld = createGame({
+      seed: 5, factions: ['china', 'japan'], armySize: 60, difficulty: 1, fog: false, spectate: false, environment: false, supply: false,
+    }).world;
+    const unit = ((): number => {
+      for (let i = 0; i < fxWorld.n; i++) if (fxWorld.alive[i] && fxWorld.team[i] === fxWorld.humanTeam) return i;
+      throw new Error('没有己方单位');
+    })();
+    const cell = fxWorld.cellAt(fxWorld.x[unit], fxWorld.y[unit]);
+    const terrain0 = fxWorld.map.terrain[cell];
+    const hp0 = fxWorld.hp[unit];
+    beforeEach(() => {
+      fxWorld.map.terrain[cell] = T_GRASS; // 脚下显式设成草地，不依赖种子地图
+    });
+    afterEach(() => {
+      fxWorld.map.terrain[cell] = terrain0;
+      fxWorld.env.raining = false;
+      fxWorld.env.wind = 0;
+      fxWorld.state[unit] &= ~S_WALL;
+      fxWorld.hp[unit] = hp0;
+    });
+    const RAIN = effectText({ source: '雨天', stat: '速度', mul: RULES.env.rainSpeed, good: false });
+    const dbody = (): FakeEl => find(x => x.classList.contains('dbody'))!;
+    const body = (): string => dbody().innerHTML;
+
+    /**
+     * 假 DOM 不解析 innerHTML，原地刷新用的 `.udetail .fx` 查不到真节点。这里给 dbody 装两样东西：
+     * innerHTML 的写入计数（整块重画一次记一次），以及按最近一次整块重画的 HTML 重建的 `.fx` 行（像真 DOM 里新生成的那个元素）
+     */
+    const watch = (): { writes: () => number; row: { innerHTML: string; hidden: boolean } } => {
+      const el = dbody();
+      const proto = Object.getPrototypeOf(el) as object;
+      const desc = Object.getOwnPropertyDescriptor(proto, 'innerHTML')!;
+      let writes = 0;
+      const row = { innerHTML: '', hidden: false };
+      Object.defineProperty(el, 'innerHTML', {
+        configurable: true,
+        get(this: FakeEl) { return desc.get!.call(this) as string; },
+        set(this: FakeEl, v: string) {
+          writes++;
+          desc.set!.call(this, v);
+          const m = /<div class="fx"( hidden)?>(.*?)<\/div>/.exec(v);
+          row.hidden = !!m?.[1];
+          row.innerHTML = m?.[2] ?? '';
+        },
+      });
+      const orig = el.querySelector.bind(el);
+      el.querySelector = ((sel: string) => (sel === '.udetail .fx' ? row : orig(sel))) as typeof el.querySelector;
+      return { writes: () => writes, row };
+    };
+
+    it('没有效果时 .fx 行仍在，带 hidden 属性、内容为空', () => {
+      mk(fxWorld).updateSelection([unit]);
+      expect(body()).toMatch(/<div class="fx" hidden><\/div>/);
+    });
+
+    it('有减益 / 增益：.fx 里每项一个 span，减益 down、增益 up，文字是 effectText，行不隐藏', () => {
+      fxWorld.env.raining = true;
+      fxWorld.state[unit] |= S_WALL;
+      mk(fxWorld).updateSelection([unit]);
+      const html = body();
+      expect(html).toContain('<div class="fx">');
+      expect(html).not.toMatch(/class="fx" hidden/);
+      expect(html).toContain(`<span class="down">${RAIN}</span>`);
+      expect(html).toContain(`<span class="up">${effectText({ source: '城墙', stat: '所受远程伤害', mul: RULES.siege.wallCover, good: true })}</span>`);
+    });
+
+    it('只有效果文字变：不整块重画（dbody 的 innerHTML 不再写），只更新 .fx 行的内容与 hidden', () => {
+      const h = mk(fxWorld);
+      const { writes, row } = watch();
+      h.updateSelection([unit]);
+      expect(writes()).toBe(1);
+      expect(row.hidden).toBe(true);
+      fxWorld.env.raining = true;
+      h.updateSelection([unit]);
+      expect(writes()).toBe(1);
+      expect(row.hidden).toBe(false);
+      expect(row.innerHTML).toBe(`<span class="down">${RAIN}</span>`);
+      fxWorld.env.raining = false;
+      h.updateSelection([unit]);
+      expect(writes()).toBe(1);
+      expect(row.hidden).toBe(true);
+      expect(row.innerHTML).toBe('');
+    });
+
+    it('什么都没变：.fx 行不动；其它数值（生命）变了仍整块重画，新画出来的 .fx 带着当前效果', () => {
+      const h = mk(fxWorld);
+      const { writes, row } = watch();
+      fxWorld.env.raining = true;
+      h.updateSelection([unit]);
+      expect(writes()).toBe(1);
+      h.updateSelection([unit]);
+      expect(writes()).toBe(1);
+      fxWorld.hp[unit] = Math.max(1, fxWorld.hp[unit] - 5);
+      h.updateSelection([unit]);
+      expect(writes()).toBe(2);
+      expect(row.innerHTML).toBe(`<span class="down">${RAIN}</span>`);
+      expect(row.hidden).toBe(false);
+    });
   });
 
   describe('取消选择按钮', () => {

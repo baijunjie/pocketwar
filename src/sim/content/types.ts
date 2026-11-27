@@ -16,6 +16,8 @@ export const T_DEEP = 0, T_SHALLOW = 1, T_GRASS = 2, T_FOREST = 3, T_HILL = 4, T
 /** 寻路代价 ×10，0 表示不可通行 */
 export const TERRAIN_COST = [0, 26, 10, 16, 13, 0, 8, 8, 10];
 export const TERRAIN_SPEED = [0, 0.5, 1, 0.7, 0.85, 0, 1.2, 1.1, 0.95];
+/** 地形的显示名（界面上写增减益的来源） */
+export const TERRAIN_NAMES = ['深水', '浅水', '草地', '林地', '丘陵', '山地', '道路', '桥', '农田'];
 
 // ---------- 攻击与投射物 ----------
 export const A_MELEE = 0, A_PIERCE = 1, A_SIEGE = 2, A_FIRE = 3;

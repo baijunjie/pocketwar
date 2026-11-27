@@ -29,7 +29,7 @@ export function strike(w: World, i: number, d: UnitDef, wp: Weapon, tgt: number,
   const tm = w.team[i];
   const base = wp.lvDmg[lv];
   if (!wp.melee) {
-    if (main && tt === T_HILL) dm *= 1.15;
+    if (main && tt === T_HILL) dm *= RULES.combat.hillDmg;
     let tx: number, ty: number;
     if (tgt >= 0) {
       tx = w.x[tgt];
@@ -87,7 +87,7 @@ export function damageUnit(w: World, j: number, raw: number, atk: number, pen: n
       // 挨了箭就把盾举起来（正在近战肉搏的腾不出手）
       if (w.engaged[j] !== ENG_CLOSE || !td.melee) w.shieldT[j] = RULES.combat.shieldHold;
     }
-    if (w.map.terrain[w.cellAt(w.x[j], w.y[j])] === T_FOREST) dmg *= 0.75;
+    if (w.map.terrain[w.cellAt(w.x[j], w.y[j])] === T_FOREST) dmg *= RULES.combat.forestCover;
     // 城墙上有垛口掩护
     if (w.state[j] & S_WALL) dmg *= RULES.siege.wallCover;
   }

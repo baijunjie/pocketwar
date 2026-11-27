@@ -2,7 +2,7 @@
  * 单位每帧的行为：校验目标 → 索敌与状态切换 → 行军 / 追击 / 攻击 / 溃逃 → 分离 → 位移。
  * 这是整个模拟里最热的循环，所以写成一个大函数；具体的规则（选谁、打多少、何时溃逃）都在别的系统里。
  */
-import { A_MELEE, DT, RULES, TERRAIN_SPEED, TICK_RATE, TILE, TR_FIREMOVE, T_FOREST, T_HILL, UnitDef } from '../content';
+import { A_MELEE, DT, RULES, TICK_RATE, TILE, TR_FIREMOVE, T_HILL, UnitDef } from '../content';
 import { DIRX, DIRY } from '../nav';
 import { siteContains } from '../siteArea';
 import { BLD_SKIP_ALL, ENG_CLOSE, ENG_REACH, FX_IMPACT, GRID, NONE, O_AMOVE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_BRACE, S_CHARGE, S_COMBAT, S_ROUT, S_SHIELD, S_TORCH, S_WALL } from '../state';
@@ -13,7 +13,8 @@ import { P_NONE, P_POSTED, stepPost } from './garrison';
 import { FOLLOW, FOLLOW_APART, FOLLOW_SLOT, SLOT, marchFollow, marchRelease, marchSlot } from './marchSlots';
 import { FLEE, fleeStep } from './morale';
 import { retarget } from './orders';
-import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from './targeting';
+import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul, windSpeedMul } from './targeting';
+import { terrainSpeedMul, weatherSpeedMul } from './effects';
 import { STEP, detourPasses, detourProgress, detourStep, shooting, startWait, tryDetour } from './detour';
 import { WAY_AROUND, WAY_DIRECT, WAY_NONE, chaseWay, findAround, keepWay } from './around';
 
@@ -37,11 +38,9 @@ export function updateUnits(w: World): void {
   const maxX = w.W - 6, maxY = w.H - 6;
   const bldAt = w.nav.bld, buildings = w.buildings;
   const C = RULES.combat, SG = RULES.siege, SITE = RULES.site;
-  const rainMul = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
-  // 风：顺风快、顶风慢，按行进方向在风向上的投影算
+  const rainMul = weatherSpeedMul(w.env);
   // 顺风时远程最远能射到射程的几倍（索敌按这个找，出手前再按实际方向核对）
   const windMax = 1 + RULES.env.windRange * w.env.wind;
-  const windK = w.env.wind * RULES.env.windSpeed, windX = Math.cos(w.env.windDir), windY = Math.sin(w.env.windDir);
   const canTorch = w.env.night && !w.env.raining && !w.env.snowing;
   const mc = RULES.morale.cell, mcw = w.mw, mch = w.mh;
   const nav = w.nav, marches = w.marches, planted = w.planted;
@@ -96,8 +95,7 @@ export function updateUnits(w: World): void {
     let ord = order[i];
     let tgt = target[i];
     let wx = 0, wy = 0;
-    let spd = d.speed * TERRAIN_SPEED[tt] * rainMul;
-    if (tt === T_FOREST) spd *= d.forestMul;
+    let spd = d.speed * terrainSpeedMul(tt, d) * rainMul;
     const run = spd;
     let eng = 0, usePath = false, chasing = false, blockedByTerrain = false, detouring = false, overRank = false;
     let aim = w.dir[i];
@@ -168,7 +166,7 @@ export function updateUnits(w: World): void {
           // 否则离冲锋两三百像素、排在后面的枪兵也跟着立枪，几乎走不动，还把身后的人堵住
           if (on && chargedAt(w, i, tm, ux, uy)) w.braceT[i] = C.braceHold;
         }
-        const hill = tt === T_HILL && !melee ? 1.12 : 1;
+        const hill = tt === T_HILL && !melee ? C.hillRange : 1;
         // 在自家据点里待命的守军：整个据点的视野范围内来了敌人都会警觉，远程的上前迎击（城池里的自动登城），
         // 近战的也一样上前，但只挑进了据点的敌人（不追出据点）；挨了敌方远程的打才出击追打那个射手
         const guard = ord === O_IDLE && w.sheltered[i] === 1;
@@ -332,7 +330,7 @@ export function updateUnits(w: World): void {
         const torch = tgt < 0 ? d.torch : null;
         const stance = torch ?? d.main;
         const reach = torch ? torch.range
-          : !d.melee ? d.main.range * (onWall ? SG.wallRange : tt === T_HILL ? 1.12 : 1) * windRangeMul(w, dx, dy)
+          : !d.melee ? d.main.range * (onWall ? SG.wallRange : tt === T_HILL ? C.hillRange : 1) * windRangeMul(w, dx, dy)
             : st & S_CHARGE && d.main.range > C.meleeContact ? C.meleeContact : d.main.range;
         // 近战武器隔着贴身距离够着敌兵（长兵器隔着自己人出手）：超出贴身的那一段要直线可通（建筑按贴边的点算距离，不看这一条）
         const far = d.melee && tgt >= 0 && edge > C.meleeContact;
@@ -715,8 +713,8 @@ export function updateUnits(w: World): void {
     }
 
     // ---- 积分与地形碰撞 ----
-    if (windK > 0 && (wx !== 0 || wy !== 0)) {
-      const f = 1 + windK * (wx * windX + wy * windY) / Math.sqrt(wx * wx + wy * wy);
+    if (wx !== 0 || wy !== 0) {
+      const f = windSpeedMul(w.env, wx, wy);
       wx *= f;
       wy *= f;
     }

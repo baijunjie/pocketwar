@@ -4,6 +4,7 @@ import {
 } from '../sim/defs';
 import { SITE_MAX_LEVEL, siteUpgradeCost, towerCount, unitUpgradeCost } from '../sim/systems/economy';
 import { teamMoraleFactors } from '../sim/systems/morale';
+import { unitEffects } from '../sim/systems/effects';
 import { canRally, rallySites } from '../sim/rally';
 import { fightState } from '../sim/siteArea';
 import { campBatch, factionUnits, militaryLeft, pickedUnit, reinfPaused } from '../sim/systems/sites';
@@ -17,7 +18,7 @@ import { Joystick } from './joystick';
 import { GroupSlots, GROUP_SLOTS } from './groupSlots';
 import { ZoomSlider } from './zoomSlider';
 import { bindPress } from './pressable';
-import { auraPct, compactNum, num, rangeText, unitTip } from './unitText';
+import { auraPct, compactNum, effectText, num, rangeText, unitTip } from './unitText';
 
 /** 城池、营寨名字后面的星数 = 据点等级；其他据点不能升级，不显示。compact：据点列表里写成「★3」省地方 */
 function starsHtml(s: Site, compact = false): string {
@@ -1497,8 +1498,17 @@ export class Hud {
     const d = UNITS[w.type[s]];
     const lv = w.level[s], max = LEVELS.thresholds.length;
     const st = w.state[s];
+    // 此刻身上的增减益（城墙、地形、天气、风、光环）：行军中随风向与朝向一直在变，只重写这一行，不整块重画（免得面板闪动、打断悬停提示）
+    const fx = unitEffects(w, s).map(e => `<span class="${e.good ? 'up' : 'down'}">${effectText(e)}</span>`).join('');
     const key = `one:${s}:${w.uid[s]}:${w.type[s]}:${lv}:${Math.round(w.hp[s])}:${Math.round(w.maxHp[s])}:${Math.round(w.xp[s])}:${Math.round(w.morale[s])}:${st}`;
-    if (key === this.selKey) return;
+    if (key === this.selKey) {
+      const row = this.selBody.querySelector<HTMLElement>('.udetail .fx');
+      if (row && row.innerHTML !== fx) {
+        row.innerHTML = fx;
+        row.hidden = !fx;
+      }
+      return;
+    }
     this.selKey = key;
     const pct = (v: number): string => (lv > 0 && v ? ` <i>+${Math.round(v * lv * 100)}%</i>` : '');
     const next = lv + 1 < max ? LEVELS.thresholds[lv + 1] : 0;
@@ -1546,6 +1556,7 @@ export class Hud {
             <span>状态</span><b>${flags.join(' · ')}</b>
           </div>
           ${perks.length ? `<div class="dim">${perks.join('　')}</div>` : ''}
+          <div class="fx"${fx ? '' : ' hidden'}>${fx}</div>
         </div>
       </div>`;
   }

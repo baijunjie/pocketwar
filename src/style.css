@@ -262,6 +262,12 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .udetail .grid i { font-style: normal; color: #8fd07a; font-size: 11px; }
 .udetail .bad { color: #ff7a6a; }
 .udetail .warn { color: #f0c64a; }
+/* 不参与算面板宽度（桌面版面板按内容定宽），只在其它行定下的宽度里换行，效果增减时面板不跟着变宽变窄 */
+.udetail .fx { display: flex; flex-wrap: wrap; gap: 0 10px; font-size: 11px; width: 0; min-width: 100%; }
+.udetail .fx[hidden] { display: none; }
+.udetail .fx span { white-space: nowrap; }
+.udetail .fx .up { color: #8fd07a; }
+.udetail .fx .down { color: #ff7a6a; }
 
 /* 资源、升级与据点面板 */
 .topbar .res { display: flex; gap: 10px; font-size: 12px; padding: 2px 8px; border-radius: 3px; background: rgba(255, 255, 255, 0.06); white-space: nowrap; }

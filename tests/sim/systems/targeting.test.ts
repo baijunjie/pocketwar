@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILDINGS, RULES, SIZES, SITE_CAMP, SITE_CITY, TILE, T_HILL, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { BLD_SKIP_ALL, S_ROUT, S_WALL } from '../../../src/sim/state';
-import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul } from '../../../src/sim/systems/targeting';
+import { SCAN, canAttackBuilding, crowded, findBuilding, findWallFoe, foeSiteFighting, foeTargets, scan, wallSpotBad, windRangeMul, windSpeedMul } from '../../../src/sim/systems/targeting';
 import { NONE } from '../../../src/sim/world';
 import type { Site, World } from '../../../src/sim/world';
 import { flatWorld, run } from '../../helpers';
@@ -699,5 +699,32 @@ describe('scan 的 keep：只在认可的敌兵里挑，不影响警戒的 near'
   it('keep 认可的敌兵在索敌距离之外：挑不到它，仍然 NONE', () => {
     const { A, F, run1 } = setup();
     expect(run1(j => j === F)).toEqual({ pick: NONE, near: A });
+  });
+});
+
+describe('windSpeedMul：风对沿某方向移动的速度倍率', () => {
+  const env = (wind: number, windDir: number): World['env'] => ({ ...flatWorld().env, wind, windDir });
+  const K = RULES.env.windSpeed;
+
+  it('没有风（wind ≤ 0）、方向是零向量：1', () => {
+    expect(windSpeedMul(env(0, 0), 100, 0)).toBe(1);
+    expect(windSpeedMul(env(-0.5, 0), 100, 0)).toBe(1);
+    expect(windSpeedMul(env(1, 0), 0, 0)).toBe(1);
+  });
+
+  it('顺风 1 + wind × windSpeed，顶风 1 − wind × windSpeed，侧风 1', () => {
+    expect(windSpeedMul(env(1, 0), 100, 0)).toBeCloseTo(1 + K, 9);
+    expect(windSpeedMul(env(1, 0), -100, 0)).toBeCloseTo(1 - K, 9);
+    expect(windSpeedMul(env(0.5, 0), 100, 0)).toBeCloseTo(1 + K * 0.5, 9);
+    expect(windSpeedMul(env(1, 0), 0, 100)).toBeCloseTo(1, 9);
+    expect(windSpeedMul(env(1, 0), 0, -100)).toBeCloseTo(1, 9);
+  });
+
+  it('只看方向不看长度；按夹角余弦折算；风向非 0 同样成立', () => {
+    expect(windSpeedMul(env(1, 0), 3, 0)).toBeCloseTo(1 + K, 9);
+    expect(windSpeedMul(env(1, 0), 50, 50)).toBeCloseTo(1 + K * Math.SQRT1_2, 9);
+    expect(windSpeedMul(env(1, Math.PI / 2), 0, 7)).toBeCloseTo(1 + K, 9);
+    expect(windSpeedMul(env(1, Math.PI / 2), 0, -7)).toBeCloseTo(1 - K, 9);
+    expect(windSpeedMul(env(0.6, Math.PI), 1, 0)).toBeCloseTo(1 - K * 0.6, 9);
   });
 });

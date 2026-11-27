@@ -83,13 +83,23 @@ export function scan(w: World, i: number, tm: number, ux: number, uy: number, sc
   SCAN.nearD2 = nearD2;
 }
 
-/** 风对射程的影响：沿 (dx, dy) 方向射击时的射程倍率 */
-export function windRangeMul(w: World, dx: number, dy: number): number {
-  const wind = w.env.wind;
+/** 沿 (dx, dy) 方向受风的倍率：1 + k × 风力 × 方向在风向上的投影（顺风为正、顶风为负、侧风为 0） */
+function windMul(env: World['env'], k: number, dx: number, dy: number): number {
+  const wind = env.wind;
   if (wind <= 0) return 1;
   const d = Math.sqrt(dx * dx + dy * dy);
   if (d < 1e-6) return 1;
-  return 1 + RULES.env.windRange * wind * (dx * Math.cos(w.env.windDir) + dy * Math.sin(w.env.windDir)) / d;
+  return 1 + k * wind * (dx * Math.cos(env.windDir) + dy * Math.sin(env.windDir)) / d;
+}
+
+/** 风对射程的影响：沿 (dx, dy) 方向射击时的射程倍率 */
+export function windRangeMul(w: World, dx: number, dy: number): number {
+  return windMul(w.env, RULES.env.windRange, dx, dy);
+}
+
+/** 风对沿 (dx, dy) 方向移动的速度倍率（只看方向，不看长度） */
+export function windSpeedMul(env: World['env'], dx: number, dy: number): number {
+  return windMul(env, RULES.env.windSpeed, dx, dy);
 }
 
 /**
@@ -165,7 +175,7 @@ export function wallSpotBad(w: World, tm: number, j: number, ux: number, uy: num
     const k = stop / dist;
     px = tx - dx * k;
     py = ty - dy * k;
-    hill = w.map.terrain[((py / TILE) | 0) * mw + ((px / TILE) | 0)] === T_HILL ? 1.12 : 1;
+    hill = w.map.terrain[((py / TILE) | 0) * mw + ((px / TILE) | 0)] === T_HILL ? RULES.combat.hillRange : 1;
   }
   if (w.lineBlocked(ux, uy, px, py, tm)) return true;
   for (const b of w.armed) {

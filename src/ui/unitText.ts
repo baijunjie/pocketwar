@@ -1,13 +1,22 @@
 /** 兵种的文字说明：悬停提示（兵种卡片、营寨选兵、主菜单、详情面板共用），以及面板与界面上数值的写法 */
 import { AURA_KINDS, ELITE, RULES, SIZES, UNITS, UnitAura, UnitDef, unitKind } from '../sim/defs';
 import { unitUpgradeCost } from '../sim/systems/economy';
+import type { UnitEffect } from '../sim/systems/effects';
 
 /** 光环加成相对无加成值的增减，如「−20%」：正负号按数值本身判断，取整成 0 的保留一位小数 */
 export function auraPct(a: UnitAura): string {
-  const k = AURA_KINDS[a.kind];
-  const r = a.value / k.neutral - 1;
-  const abs = Math.abs(r) * 100;
-  return `${r < 0 ? '−' : '+'}${Math.round(abs) || Math.round(abs * 10) / 10}%`;
+  return mulPct(a.value / AURA_KINDS[a.kind].neutral);
+}
+
+/** 倍率相对 1 的增减，如「+15%」「−50%」：取整成 0 的保留一位小数 */
+export function mulPct(mul: number): string {
+  const abs = Math.abs(mul - 1) * 100;
+  return `${mul < 1 ? '−' : '+'}${Math.round(abs) || Math.round(abs * 10) / 10}%`;
+}
+
+/** 单位身上的一项增减益写成「城墙 所受远程伤害 −50%」 */
+export function effectText(e: UnitEffect): string {
+  return `${e.source} ${e.stat} ${mulPct(e.mul)}`;
 }
 
 /** 光环的加成写成「所受远程伤害 −20%」 */

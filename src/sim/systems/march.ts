@@ -11,8 +11,10 @@ import { smooth } from '../ease';
 import { DIRX, DIRY, DIR_HERE, Field } from '../nav';
 import { NONE, S_COMBAT, S_ROUT } from '../state';
 import type { World } from '../world';
+import { weatherSpeedMul } from './effects';
 import type { Formation } from './formation';
 import { SLOT, marchSlot, rowsAt, standable } from './marchSlots';
+import { windSpeedMul } from './targeting';
 import { TP, TRAIL, TRAIL_MAX, addPoint, cutAhead, layTrail, nearCell, routeCut, trailAt } from './marchTrail';
 
 export interface March {
@@ -520,9 +522,7 @@ export function updateMarches(w: World): void {
   const M = RULES.march;
   if ((w.tickCount & 7) === 0) tally(w);
   // 与 units.ts 里成员的速度用同一个天气系数
-  const rain = w.env.raining ? RULES.env.rainSpeed : w.env.snowing ? RULES.env.snowSpeed : 1;
-  // 最前排也吃顺风 / 顶风，否则成员和队列位置对不上
-  const windK = w.env.wind * RULES.env.windSpeed, windX = Math.cos(w.env.windDir), windY = Math.sin(w.env.windDir);
+  const rain = weatherSpeedMul(w.env);
   for (const g of ms) {
     if (!g.alive || (g.arrived && !g.tail)) continue;
     if (g.tail && (g.tailT += DT) > M.tailMax) {
@@ -550,7 +550,8 @@ export function updateMarches(w: World): void {
         continue;
       }
     }
-    const wf = windK > 0 ? 1 + windK * (g.hx * windX + g.hy * windY) : 1;
+    // 最前排也吃顺风 / 顶风，否则成员和队列位置对不上；与成员一样只按方向算（弯道上插值出的航向不是单位向量，不能让它削弱风）
+    const wf = windSpeedMul(w.env, g.hx, g.hy);
     const full = step * wf;
     // 最前排沿行迹走，走到探路点跟前为止
     const df = full > g.lead ? g.lead : full;
