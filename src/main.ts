@@ -1,5 +1,6 @@
 import './style.css';
 import { GameApp } from './game';
+import { Sound } from './audio/sound';
 import { FACTION_IDS, FactionId } from './sim/defs';
 import { GameOptions } from './sim/setup';
 import { showMenu } from './ui/menu';
@@ -19,10 +20,13 @@ function toMenu(): void {
   canvas?.remove();
   canvas = null;
   closeMenu?.();
-  closeMenu = showMenu(app, start);
+  closeMenu = showMenu(app, opts => start(opts, true));
 }
 
-function start(opts: GameOptions): void {
+function start(opts: GameOptions, fromMenu = false): void {
+  const sound = new Sound();
+  // 菜单点击仍在用户手势内，等地图生成完再解锁会错过这次播放许可。
+  if (fromMenu) sound.unlock();
   closeMenu?.();
   closeMenu = null;
   const loading = document.createElement('div');
@@ -36,10 +40,11 @@ function start(opts: GameOptions): void {
       canvas.className = 'view';
       canvas.tabIndex = 0;
       app.appendChild(canvas);
-      game = new GameApp(app, canvas, opts, toMenu);
+      game = new GameApp(app, canvas, opts, toMenu, sound);
       if (import.meta.env.DEV) (window as unknown as { game: GameApp }).game = game;
       loading.remove();
     } catch (err) {
+      sound.dispose();
       loading.textContent = `启动失败：${(err as Error).message}`;
       console.error(err);
     }

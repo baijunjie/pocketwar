@@ -35,7 +35,6 @@ export class GameApp {
   private readonly game: Game;
   private readonly hud: Hud;
   private readonly minimap: Minimap;
-  private readonly sound = new Sound();
   private readonly box: HTMLDivElement;
   private readonly sel = new Uint8Array(MAX_UNITS);
   private selList: number[] = [];
@@ -96,7 +95,7 @@ export class GameApp {
   private readonly pointer: PointerLock;
 
   constructor(private readonly root: HTMLElement, private readonly canvas: HTMLCanvasElement, opts: GameOptions,
-    private readonly onExit: () => void) {
+    private readonly onExit: () => void, private readonly sound: Sound) {
     this.game = createGame(opts);
     const w = (this.world = this.game.world);
     this.renderer = new Renderer(canvas, w);
@@ -206,7 +205,11 @@ export class GameApp {
     }, { passive: false });
     this.on(cv, 'contextmenu', e => e.preventDefault());
     // 浏览器要有用户操作才允许出声
-    this.on(window, 'pointerdown', () => this.sound.unlock());
+    this.on(window, 'pointerdown', () => this.sound.unlock(), { capture: true });
+    this.on(window, 'pointerup', e => { if (e.pointerType === 'touch') this.sound.unlock(); }, { capture: true });
+    const syncAudio = (): void => this.syncAudioPause();
+    document.addEventListener('visibilitychange', syncAudio);
+    this.cleanup.push(() => document.removeEventListener('visibilitychange', syncAudio));
     this.on(cv, 'pointerdown', e => {
       cv.focus();
       if (this.hud.helpOpen) return;
@@ -1300,6 +1303,10 @@ export class GameApp {
     rd.clampCam();
   }
 
+  private syncAudioPause(): void {
+    this.sound.setPaused(document.hidden || this.speed === 0 || this.hud.helpOpen);
+  }
+
   // ------------------------------------------------------------------ 主循环
   private readonly frame = (now: number): void => {
     this.raf = requestAnimationFrame(this.frame);
@@ -1326,7 +1333,8 @@ export class GameApp {
     this.updateCamera(real);
     this.prune();
     // 音效要赶在渲染器取走特效事件之前读
-    if (running) {
+    this.syncAudioPause();
+    if (running && !document.hidden) {
       const rd = this.renderer, cam = rd.cam;
       this.sound.update(w, cam.x, cam.y, 900 / cam.zoom + 250, cam.zoom, (x, y) => {
         const p = rd.worldToScreen(x, y);
@@ -1434,7 +1442,9 @@ export class GameApp {
     for (const e of w.events) {
       if (e.kind === 'gameover') {
         this.over = true;
-        this.hud.showGameOver(human ? e.winner === human : null, () => this.onExit());
+        const won = human ? e.winner === human : null;
+        this.sound.finish(won);
+        this.hud.showGameOver(won, () => this.onExit());
         continue;
       }
       if (e.kind === 'rout') {
@@ -1464,6 +1474,8 @@ export class GameApp {
       }
       const s = w.sites[e.site];
       if (e.kind === 'captured') {
+        if (human && e.team === human) this.sound.oneShot('signals/rally-horn', 0.2);
+        else if (human && e.from === human) this.sound.oneShot('signals/watch-bell', 0.16);
         this.minimap.pings.push({ x: s.x, y: s.y, t: 0, color: colors[e.team] });
         if (!human) this.hud.message(`${f[e.team].name} 占领了 ${s.name}`, 'info', s.x, s.y);
         else if (e.team === human) {

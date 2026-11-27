@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { A_FIRE, A_MELEE, A_PIERCE, A_SIEGE, BUILDINGS, LEVELS, P_ARROW, P_BALL, P_TORCH, RULES, TILE, T_HILL, TowerDef, UNITS, UNIT_BY_KEY } from '../../../src/sim/defs';
 import { damageUnit, mitigate, spawnProj, strike, updateProjectiles, updateTowers } from '../../../src/sim/systems/combat';
 import { BASE, variant } from '../../../tools/measure/units';
-import { BLD_SKIP_ALL, NONE } from '../../../src/sim/state';
+import { BLD_SKIP_ALL, FX_HIT, FX_SHOT, NONE, S_SHIELD } from '../../../src/sim/state';
 import type { World } from '../../../src/sim/world';
 import { flatWorld, run } from '../../helpers';
 
@@ -150,6 +150,37 @@ describe('按武器出手：strike', () => {
     w.pn = 0;
     return { w, a, e };
   };
+
+  it('打在举起的盾牌上时，近战碰撞事件能与普通刀剑区分', () => {
+    const { w, a, e } = scene('legion');
+    const d = UNIT_BY_KEY.legion;
+    for (const shield of [false, true]) {
+      w.fxN = 0;
+      w.state[e] = shield ? S_SHIELD : 0;
+      for (let i = 0; i < 6; i++) {
+        w.tickCount++;
+        strike(w, a, d, d.main, e, 0);
+      }
+      const hits: number[] = [];
+      for (let i = 0; i < w.fxN; i++) {
+        if (w.fx[4 * i] === FX_HIT) hits.push(w.fx[4 * i + 3]);
+      }
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits.every(arg => Boolean(arg) === shield)).toBe(true);
+    }
+  });
+
+  it('副武器和火把各发出一个带有实际投射物种类的出手事件', () => {
+    const { w, a, e } = scene('legion');
+    const d = UNIT_BY_KEY.legion, b = w.addBuilding(BUILDINGS.outpost, 70, 58, 2, -1);
+    strike(w, a, d, d.aux!, e, 0);
+    strike(w, a, d, d.torch!, -b.id - 2, 0);
+    const launches: number[] = [];
+    for (let i = 0; i < w.fxN; i++) {
+      if (w.fx[4 * i] === FX_SHOT) launches.push(w.fx[4 * i + 3]);
+    }
+    expect(launches).toEqual([d.aux!.proj, P_TORCH]);
+  });
 
   it('副武器单独一个冷却：出手后 auxCd 重置为副武器的间隔（±10%），主武器的 cd 不动', () => {
     const { w, a, e } = scene('legion');

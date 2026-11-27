@@ -1,0 +1,87 @@
+#EXTM3U
+#EXTINF:10.03,远雷
+environment/distant-thunder.mp3
+#EXTINF:30.04,倾盆大雨
+environment/rain-downpour-loop.mp3
+#EXTINF:27.04,雨落草地
+environment/rain-grass-loop.mp3
+#EXTINF:4.70,石墙坍塌
+environment/stone-wall-collapse.mp3
+#EXTINF:7.81,木楼倒塌
+environment/timber-building-collapse.mp3
+#EXTINF:31.03,木屋燃烧
+environment/timber-fire-loop.mp3
+#EXTINF:34.04,旷野风声
+environment/wind-open-field-loop.mp3
+#EXTINF:1.31,箭矢命中 · 1
+field/arrow-impact-1.mp3
+#EXTINF:0.39,箭矢命中 · 2
+field/arrow-impact-2.mp3
+#EXTINF:0.63,箭矢掠过 · 1
+field/arrow-pass-1.mp3
+#EXTINF:0.60,箭矢掠过 · 2
+field/arrow-pass-2.mp3
+#EXTINF:0.71,刀剑碰撞 · 1
+field/blade-clash-1.mp3
+#EXTINF:0.78,刀剑碰撞 · 2
+field/blade-clash-2.mp3
+#EXTINF:0.73,刀剑碰撞 · 3
+field/blade-clash-3.mp3
+#EXTINF:2.98,巨石砸落 · 1
+field/boulder-impact-1.mp3
+#EXTINF:2.38,巨石砸落 · 2
+field/boulder-impact-2.mp3
+#EXTINF:0.68,弓弦发箭 · 1
+field/bow-release-1.mp3
+#EXTINF:0.65,弓弦发箭 · 2
+field/bow-release-2.mp3
+#EXTINF:1.93,火炮轰鸣 · 1
+field/cannon-report-1.mp3
+#EXTINF:2.06,火炮轰鸣 · 2
+field/cannon-report-2.mp3
+#EXTINF:9.80,骑队行军
+field/cavalry-column-loop.mp3
+#EXTINF:0.73,骑兵冲撞 · 1
+field/cavalry-impact-1.mp3
+#EXTINF:0.73,骑兵冲撞 · 2
+field/cavalry-impact-2.mp3
+#EXTINF:4.55,单骑奔跑
+field/horse-gallop-loop.mp3
+#EXTINF:26.25,步兵行军
+field/infantry-march-loop.mp3
+#EXTINF:17.14,远处交战
+field/melee-distant-loop.mp3
+#EXTINF:1.78,铁炮开火 · 1
+field/musket-report-1.mp3
+#EXTINF:1.78,铁炮开火 · 2
+field/musket-report-2.mp3
+#EXTINF:0.29,盾牌受击 · 1
+field/shield-impact-1.mp3
+#EXTINF:0.44,盾牌受击 · 2
+field/shield-impact-2.mp3
+#EXTINF:0.91,器械抛射 · 1
+field/siege-release-1.mp3
+#EXTINF:2.14,器械抛射 · 2
+field/siege-release-2.mp3
+#EXTINF:0.65,士兵倒地 · 1
+field/soldier-fall-1.mp3
+#EXTINF:0.63,士兵倒地 · 2
+field/soldier-fall-2.mp3
+#EXTINF:22.82,浅滩流水
+logistics/shallow-ford-loop.mp3
+#EXTINF:18.24,辎重车过木桥
+logistics/supply-cart-bridge-loop.mp3
+#EXTINF:78.99,战前部署
+music/deployment-loop.mp3
+#EXTINF:85.84,两军会战
+music/field-battle-loop.mp3
+#EXTINF:18.23,败退
+music/retreat.mp3
+#EXTINF:13.04,凯旋
+music/victory.mp3
+#EXTINF:4.58,集结号角
+signals/rally-horn.mp3
+#EXTINF:3.84,火把挥动
+signals/torch-swing.mp3
+#EXTINF:6.53,营地警钟
+signals/watch-bell.mp3

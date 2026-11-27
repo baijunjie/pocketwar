@@ -46,7 +46,8 @@
 | `src/ui/pressable.ts` | `bindPress`：让元素自己用 pointer 事件分辨点一下与长按（不靠手指触发的 click），给贴屏幕边的触屏按钮用 |
 | `src/ui/unitText.ts` | 兵种的文字说明（悬停提示 `unitTip`、光环加成与面板数值的写法、上千缩写的人数 / 资源 `compactNum`），`hud.ts`、`cardBar.ts`、`menu.ts` 共用，单独成文件以免 hud 与 cardBar 互相引用 |
 | `src/ui/sword.svg` | 游戏内的剑形鼠标指针，样式表（`src/style.css`）与锁定鼠标的自绘光标（`src/pointerLock.ts`）共用 |
-| `src/audio/sound.ts` | 音效：Web Audio 现场合成，战斗声取自模拟层的特效事件 |
+| `src/audio/sound.ts`、`src/audio/battlefield.ts` | `Sound` 按需加载、缓存和播放对局音频，管理暂停、静音和结算配乐。`Battlefield` 根据模拟事件、天气及镜头附近可见的战况选择音效、环境声和配乐，确定音量与左右声像 |
+| [`public/audio/`](../public/audio/) | 对局使用的实录、拟音与授权配乐剪辑，另含备用素材。[`sampler.mp3`](../public/audio/sampler.mp3) 可连续试听一段混音后的战场场景 |
 | `src/dev/viewer.ts` | 开发用预览页（兵种与动画、静态素材、glTF） |
 | [`tools/measure/`](../tools/measure/README.md) | 对战测量工具（开发用，游戏运行时不引用）：无头对战量出兵种与阵营的实战强弱，只作参考、不写文件；另有不跑对战的点数明细与补级命令（计算在 `content/budget.ts`，`--write` 写回 `content/factions.ts`） |
 | `tests/` | 无头测试（模拟层与测量工具；`tests/ui/` 是界面类测试，项目没有 jsdom，共用 `tests/ui/fakeDom.ts` 的极简假 DOM 在 node 环境里跑） |

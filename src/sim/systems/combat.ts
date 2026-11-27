@@ -1,6 +1,6 @@
 /** 战斗结算：出手、伤害、阵亡、经验与升级、投射物、防御建筑（角楼、哨塔、主堡等）放箭 */
 import {
-  AU_RANGED_TAKEN, A_FIRE, A_MELEE, A_PIERCE, BK_TOWER, DT, LEVELS, PROJ_SPEED, P_BALL, P_BULLET, P_ROCKET, RULES, SITE_INFO, TR_BUSHIDO, TR_TESTUDO,
+  AU_RANGED_TAKEN, A_FIRE, A_MELEE, A_PIERCE, BK_TOWER, DT, LEVELS, PROJ_SPEED, P_ARROW, P_BALL, P_BIGBOLT, P_BOLT, P_BULLET, P_ROCKET, RULES, SITE_INFO, TR_BUSHIDO, TR_TESTUDO,
   T_FOREST, T_HILL, UnitDef, WR_AUX, WR_BUILDING, WR_MAIN, Weapon,
 } from '../content';
 import { FX_ARROW_HIT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_HIT, FX_LEVEL, FX_SMOKE, ENG_CLOSE, GRID, MAX_CORPSE, MAX_PROJ, NONE, O_ATTACK, O_HOLD, O_IDLE, O_MOVE, S_ROUT, S_SHIELD, S_WALL, FX_FIRE, FX_SHOT } from '../state';
@@ -47,15 +47,15 @@ export function strike(w: World, i: number, d: UnitDef, wp: Weapon, tgt: number,
       }
     }
     spawnProj(w, w.x[i], w.y[i], tgt, tx, ty, wp.proj, base * dm, wp.atk, wp.splash, wp.pen, d.idx, tm, i);
+    w.addFx(FX_SHOT, w.x[i], w.y[i], wp.proj);
     if (main) {
-      w.addFx(FX_SHOT, w.x[i], w.y[i], wp.proj);
       const smoke = smokeSize(wp.proj);
       if (smoke > 0) w.addFx(FX_SMOKE, w.x[i] + w.facing[i] * 8, w.y[i] - 10, smoke);
     }
   } else {
     const dmg = base * dm;
     if (tgt >= 0) {
-      if ((w.uid[i] + w.tickCount) % 3 === 0) w.addFx(FX_HIT, (w.x[i] + w.x[tgt]) / 2, (w.y[i] + w.y[tgt]) / 2 - 8, 0);
+      if ((w.uid[i] + w.tickCount) % 3 === 0) w.addFx(FX_HIT, (w.x[i] + w.x[tgt]) / 2, (w.y[i] + w.y[tgt]) / 2 - 8, w.state[tgt] & S_SHIELD);
       if (wp.splash > 0) splashDamage(w, w.x[tgt], w.y[tgt], wp.splash, dmg, wp.atk, wp.pen, d, tm, i, false);
       else damageUnit(w, tgt, dmg, wp.atk, wp.pen, d.vs, tm, i);
     } else damageBuilding(w, w.buildings[-tgt - 2], dmg, wp.atk, d.vsBld, tm, d.siege);
@@ -325,6 +325,10 @@ export function updateProjectiles(w: World): void {
       splashDamage(w, ix, iy, splash, w.pDmg[p], w.pAtk[p], w.pPen[p], ad, tm, src, true);
       w.addFx(FX_EXPLODE, ix, iy, splash);
     } else if (live && !miss) {
+      const type = w.pType[p];
+      if (type === P_ARROW || type === P_BOLT || type === P_BIGBOLT) {
+        w.addFx(FX_ARROW_HIT, ix, iy, w.state[tgt] & S_SHIELD);
+      }
       damageUnit(w, tgt, w.pDmg[p], w.pAtk[p], w.pPen[p], ad.vs, tm, src);
     }
     // 删除：末尾元素补位
