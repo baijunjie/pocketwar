@@ -148,12 +148,12 @@ tests/            无头测试；VITE_BALANCE=1 npx vitest run -t 平衡 可跑�
 
 - **加兵种**：在 `src/sim/content/units.ts` 加一行 `U(阵营, key, 名称, 原型, { lv: { 维度: 级数 }, traits: [...], … }, 说明)`，
   面板由原型基准加级数算出（规则见 `docs/product/units.md`「点数机制」）；
-  再在 `src/render/models/catalog.ts` 里用同一个 key 登记模型，并把它写进 `factions.ts` 的编制（比重）与援军表（份数）。
+  再登记模型（美术素材登记进 `public/assets/units/manifest.json`，或在 `src/render/models/catalog.ts` 里代码建模，键都用同一个 key），并把它写进 `factions.ts` 的编制（比重）与援军表（份数）。
   配完用 `npm run measure -- breakdown` 看阵营点数是否在预算内，用兵员级数补齐。
-  高级形态（`key_e`）的数值和重甲模型会自动生成；想单独设计外观，就在 `catalog.ts` 里另外登记 `key_e`。
-- **换模型**：改 `catalog.ts` 里那一项。用现成的 glTF 模型时写成
-  `{ kind: 'gltf', src: '路径.glb', height: 1.8, clips: { idle: 'Idle', walk: 'Walk', run: 'Run', attack: 'Attack', die: 'Death' } }`，
-  文件放进 `public/assets/`。缺的动作会自动退到相近的；先用 `/?view=gltf&gltf=路径.glb` 看效果。
+  高级形态（`key_e`）的数值会自动生成；清单里没登记 `key_e` 时沿用初级形态的素材，代码建模则自动换上重甲。
+- **换模型**：把 GLB 放进 `public/assets/units/<阵营>/`，在 `manifest.json` 里登记或改那一项，不改代码。
+  格式、染色、骨架与动作要求见 [docs/unit-art-spec.md](docs/unit-art-spec.md)；先用 `/?view=units&f=<阵营>` 看效果，
+  未登记的 GLB 用 `/?view=units&gltf=路径.glb` 预览。罗马素材由 `tools/art/` 的 Blender 脚本生成（见其 README）。
 - **调规则**：数值都在 `src/sim/content/rules.ts`，改完同步改 `docs/product/` 下对应的文档。
 
 ## 素材
@@ -162,4 +162,4 @@ tests/            无头测试；VITE_BALANCE=1 npx vitest run -t 平衡 可跑�
 |---|---|---|
 | `public/assets/quaternius/horse.glb` | Quaternius「Horse」（Ultimate Animated Animals），取自 <https://poly.pizza/m/qvTrSG9pZF> | CC0 1.0 |
 
-其余模型与贴图均由本仓库代码生成。运行时依赖 [three.js](https://threejs.org/)（MIT）。
+`public/assets/units/` 下的兵种模型由本仓库 `tools/art/` 的 Blender 脚本生成；其余模型与贴图均由本仓库代码生成。运行时依赖 [three.js](https://threejs.org/)（MIT）。

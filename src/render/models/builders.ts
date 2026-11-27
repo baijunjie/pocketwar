@@ -4,7 +4,8 @@ import { asset } from '../assets';
 import { ball, box, cone, cyl, join, xf } from '../prims';
 import { Puppet, RigBuilder, UnitModel, skinnedBox } from '../rig';
 import { Human } from './human';
-import { DEFAULT_MOUNT, FootSpec, HorseSpec, TWIST_CLIPS } from './spec';
+import { TWIST_CLIPS } from './actions';
+import { DEFAULT_MOUNT, FootSpec, HorseSpec } from './spec';
 
 /** 每米对应的世界像素：士兵身高约 1.75 米 */
 export const M = 10;

@@ -1,8 +1,10 @@
 /** 兵种头像：用一个离屏的小渲染器把立体模型渲成图片（菜单与选中面板用） */
 import * as THREE from 'three';
 import { shared } from './materials';
+import { CLIP_FALLBACK } from './models/actions';
 import { buildUnitModel, portraitHeight } from './models/spec';
-import { UnitBatch } from './units';
+import { clipOf } from './rig';
+import { UnitBatch, clipRow } from './units';
 
 const PX = 128;
 let three: THREE.WebGLRenderer | null = null;
@@ -28,9 +30,10 @@ export function unitPortrait(key: string, teamRgb: [number, number, number], siz
     }
     const fogOn = shared.uFogOn.value;
     shared.uFogOn.value = 0;
-    const b = new UnitBatch(buildUnitModel(key, teamRgb), false);
+    const b = new UnitBatch(buildUnitModel(key), false);
+    const tint = new THREE.Color().setRGB(teamRgb[0] / 255, teamRgb[1] / 255, teamRgb[2] / 255, THREE.SRGBColorSpace);
     b.begin();
-    b.add(0, 0, 0, -0.6, b.clips.idle, 0);
+    b.add(0, 0, 0, -0.6, clipRow(clipOf(b.model, 'idle', CLIP_FALLBACK), 0), [tint.r, tint.g, tint.b]);
     b.end();
     scene!.add(b.mesh);
     // 取景高度：步兵、骑兵按人马的身高，不把长兵器算进去

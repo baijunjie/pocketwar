@@ -1,10 +1,10 @@
 /**
- * 模型登记表：兵种用哪个模型、长什么样，全在这里。换素材只改这个文件。
+ * 代码建模的登记表：素材清单（public/assets/units/manifest.json）没登记的兵种用这里的说明建模。
+ * 换成美术素材改清单，不改这里（见 docs/unit-art-spec.md）。
  *
  * 每一项是一份「模型说明」，kind 决定由哪个构建器来做：
  *   foot / horse      代码建模的士兵、骑兵（human 给出盔甲、武器等外观）
  *   elephant / onager / trebuchet / ballista / rocket / cannon   代码建模的战象与器械
- *   gltf              任意带骨骼动画的 glTF 模型（见 GltfSpec）
  * 键是 UnitDef.model（缺省等于兵种 key），所以多个兵种可以共用一个模型，也可以随时改指向。
  */
 import { FactionId, UNITS } from '../../sim/defs';
@@ -86,7 +86,7 @@ for (const d of UNITS) {
   const H = HEAVY[d.faction];
   MODELS[d.model] = base.kind === 'foot' ? { ...base, human: heavyLook(base.human, d.faction) }
     : base.kind === 'horse' ? { ...base, human: heavyLook(base.human, d.faction), barding: H.metal, bardingFull: true, size: (base.size ?? 1) * 1.04 }
-    : base.kind === 'gltf' ? base : { ...base, armored: true };
+    : { ...base, armored: true };
 }
 
 export type { HumanLook };

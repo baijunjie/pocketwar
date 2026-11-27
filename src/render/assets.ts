@@ -45,7 +45,10 @@ function imageData(img: unknown): ImageData {
 
 const tmpColor = new THREE.Color();
 
-/** 取出网格的几何体副本（未变换），附带线性空间顶点色；去掉贴图坐标等无关属性 */
+/**
+ * 取出网格的几何体副本（未变换），附带线性空间顶点色；去掉贴图坐标等无关属性。
+ * 名字以 team 开头的材质是染队伍色的部位：颜色换成按明度缩放的队伍色标记（rig.ts 的 TEAM_MARK，品红），由烘焙时识别。
+ */
 export function coloredGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
   const src = mesh.geometry;
   const g = new THREE.BufferGeometry();
@@ -67,6 +70,7 @@ export function coloredGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
   const paint = (mat: THREE.Material, from: number, to: number, index: THREE.BufferAttribute | null): void => {
     const m = mat as THREE.MeshStandardMaterial;
     const img = m.map ? imageData(m.map.image) : null;
+    const team = /^team/i.test(m.name);
     for (let k = from; k < to; k++) {
       const v = index ? index.getX(k) : k;
       if (img && uv) {
@@ -78,6 +82,10 @@ export function coloredGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
         tmpColor.setRGB(img.data[o] / 255, img.data[o + 1] / 255, img.data[o + 2] / 255, THREE.SRGBColorSpace);
         tmpColor.multiply(m.color);
       } else tmpColor.copy(m.color);
+      if (team) {
+        const l = Math.max(1e-4, luma(tmpColor));
+        tmpColor.setRGB(l, 0, l);
+      } else if (tmpColor.g === 0) tmpColor.g = 1e-6; // 不让真实颜色撞上队伍色标记（绿为 0、红蓝相等）
       col[v * 3] = tmpColor.r;
       col[v * 3 + 1] = tmpColor.g;
       col[v * 3 + 2] = tmpColor.b;
@@ -110,6 +118,11 @@ export function mergeGeometries(list: THREE.BufferGeometry[]): THREE.BufferGeome
     out.setAttribute(name, new THREE.BufferAttribute(arr, size));
   }
   return out;
+}
+
+/** 线性空间颜色的明度 */
+export function luma(c: THREE.Color): number {
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 }
 
 export type Recolor = (c: THREE.Color, x: number, y: number, z: number) => void;

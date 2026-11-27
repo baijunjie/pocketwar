@@ -10,10 +10,23 @@ import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Recolor, coloredGeometry, mergeGeometries, recolor } from './assets';
 
 export interface Clip {
+  /** 骨骼贴图里第一帧的行号 */
   start: number;
+  /** 帧数；贴图里另存了第 n 帧（循环动作等于第 0 帧，其余是末帧），帧间插值时取得到 */
   n: number;
+  /** 时长（秒） */
+  seconds: number;
 }
+/**
+ * 队伍色标记：要染队伍色的部位用这个颜色（乘上明度）建模，build() 把它们换成灰度并在 aTeam 里记 1，
+ * 绘制时按实例的队伍色上色。标记是「绿正好为 0、红蓝相等」的颜色；素材里碰巧是这种颜色的非队伍色部位，
+ * 读入时已把绿分量抬到一个极小的正数（assets.ts 的 coloredGeometry），不会被误认。
+ * 代码建模只能用 TEAM_MARK 乘一个系数（明度），不能与别的颜色混合。
+ */
+export const TEAM_MARK = new THREE.Color(1, 0, 1);
+
 export interface UnitModel {
+  /** 顶点属性：position、normal、color、aBone、aWeight、aTeam（1 = 染队伍色的部位） */
   geometry: THREE.BufferGeometry;
   bones: THREE.DataTexture;
   clips: Record<string, Clip>;
@@ -48,13 +61,14 @@ export class Puppet {
   private readonly tracks = new Map<string, { node: THREE.Object3D; name: string; prop: string; ip: THREE.Interpolant }[]>();
   readonly durations = new Map<string, number>();
 
-  constructor(src: GLTF) {
+  /** @param libs 动作库：按骨骼名把库里的动作套到这副骨架上；同名动作以 src 自带的为准 */
+  constructor(src: GLTF, libs: GLTF[] = []) {
     this.scene = cloneSkinned(src.scene);
     this.scene.traverse(o => {
       // 根节点留给调用方摆放，不参与复位
       if (o !== this.scene) this.rest.push({ o, p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() });
     });
-    for (const clip of src.animations) {
+    for (const clip of [...src.animations, ...libs.flatMap(l => l.animations)]) {
       // 名字带「|」的是带 AnimalArmature| 前缀的重复动画
       if (clip.name.includes('|') || this.tracks.has(clip.name)) continue;
       const list = [];
@@ -131,15 +145,26 @@ export class RigBuilder {
   private readonly clips: Record<string, Clip> = {};
   private influences = 1;
 
+  /** 骨骼（连同逆绑定矩阵）在骨骼贴图里的列，已有相同的就复用 */
+  private colFor(bone: THREE.Object3D, inv: THREE.Matrix4): number {
+    const k = this.cols.findIndex(c => c.bone === bone && c.inv !== null && c.inv.equals(inv));
+    if (k >= 0) return k;
+    this.cols.push({ bone, inv });
+    return this.cols.length - 1;
+  }
+
   /** 加入一个骨骼模型（须已挂到 root 之下） */
   addSkinned(scene: THREE.Object3D, paint?: (boneOf: () => string) => Recolor): void {
+    const rigid: THREE.Mesh[] = [];
     scene.traverse(o => {
       const m = o as THREE.SkinnedMesh;
+      // 不蒙皮的网格（挂在骨骼下的兵器、盾牌）整块跟着自己的节点走
+      if ((o as THREE.Mesh).isMesh && !m.isSkinnedMesh) rigid.push(o as THREE.Mesh);
       if (!m.isSkinnedMesh) return;
       const g = coloredGeometry(m);
       g.applyMatrix4(m.bindMatrix);
-      const base = this.cols.length;
-      m.skeleton.bones.forEach((bone, j) => this.cols.push({ bone, inv: m.skeleton.boneInverses[j] }));
+      // 同一副骨架拆成多个网格（每种材质一个）时，同一根骨骼与逆绑定矩阵只占一列，骨骼贴图不随网格数翻倍
+      const colOf = m.skeleton.bones.map((bone, j) => this.colFor(bone, m.skeleton.boneInverses[j]));
       const si = g.getAttribute('skinIndex'), sw = g.getAttribute('skinWeight');
       const n = si.count;
       const bone = new Float32Array(n * 4), weight = new Float32Array(n * 4);
@@ -151,11 +176,11 @@ export class RigBuilder {
         for (let k = 0; k < 4; k++) if (k !== a && (b < 0 || sw.getComponent(i, k) > sw.getComponent(i, b))) b = k;
         const wa = sw.getComponent(i, a), wb = sw.getComponent(i, b);
         names.push(m.skeleton.bones[si.getComponent(i, a)].name);
-        bone[i * 4] = base + si.getComponent(i, a);
+        bone[i * 4] = colOf[si.getComponent(i, a)];
         weight[i * 4] = wa + wb > 0 ? wa / (wa + wb) : 1;
         if (wb > 0.02) {
           this.influences = 2;
-          bone[i * 4 + 1] = base + si.getComponent(i, b);
+          bone[i * 4 + 1] = colOf[si.getComponent(i, b)];
           weight[i * 4 + 1] = wb / (wa + wb);
         } else weight[i * 4] = 1;
       }
@@ -174,6 +199,7 @@ export class RigBuilder {
       }
       this.parts.push(dropMarked(g));
     });
+    for (const m of rigid) this.addRigid(coloredGeometry(m), m);
   }
 
   /** 加入一个刚性部件：几何体位于 parent 的局部坐标系，随 parent 运动 */
@@ -195,9 +221,10 @@ export class RigBuilder {
   /** 录制一段动画：pose(t) 负责把各模型摆到第 t 秒的姿势 */
   clip(name: string, seconds: number, pose: (t: number, k: number) => void, fps = FPS): void {
     const n = Math.max(1, Math.round(seconds * fps));
-    this.clips[name] = { start: this.frames.length, n };
+    this.clips[name] = { start: this.frames.length, n, seconds };
     const m = new THREE.Matrix4();
-    for (let f = 0; f < n; f++) {
+    // 多录一帧（第 n 帧 = 第 seconds 秒）：循环动作回到第 0 帧，其余停在末帧，帧间插值不越界
+    for (let f = 0; f <= n; f++) {
       pose((f / n) * seconds, f / n);
       this.root.updateMatrixWorld(true);
       const row = new Float32Array(this.cols.length * 16);
@@ -210,6 +237,11 @@ export class RigBuilder {
     }
   }
 
+  /** 让另一个动作名直接用已录好的动作（不重复占骨骼贴图的行；渲染层见到同一段动作也不做过渡） */
+  alias(name: string, from: string): void {
+    this.clips[name] = this.clips[from];
+  }
+
   build(strides: Record<string, number> = {}): UnitModel {
     const w = this.cols.length * 4, h = this.frames.length;
     const data = new Float32Array(w * h * 4);
@@ -218,7 +250,9 @@ export class RigBuilder {
     bones.minFilter = bones.magFilter = THREE.NearestFilter;
     bones.generateMipmaps = false;
     bones.needsUpdate = true;
-    const geometry = mergeVertices(mergeGeometries(this.parts), 1e-3);
+    const merged = mergeGeometries(this.parts);
+    markTeam(merged);
+    const geometry = mergeVertices(merged, 1e-3);
     // 用第一帧估算高度
     let height = 0;
     const pos = geometry.getAttribute('position'), ab = geometry.getAttribute('aBone');
@@ -230,6 +264,20 @@ export class RigBuilder {
     }
     return { geometry, bones, clips: this.clips, influences: this.influences, height, strides };
   }
+}
+
+/** 把 TEAM_MARK 标出的顶点换成灰度（明度），并写出 aTeam 属性 */
+export function markTeam(g: THREE.BufferGeometry): void {
+  const col = g.getAttribute('color');
+  const team = new Float32Array(col.count);
+  for (let i = 0; i < col.count; i++) {
+    const r = col.getX(i), gg = col.getY(i), b = col.getZ(i);
+    if (gg === 0 && r > 0 && Math.abs(r - b) < 1e-5) {
+      team[i] = 1;
+      col.setXYZ(i, r, r, r);
+    }
+  }
+  g.setAttribute('aTeam', new THREE.BufferAttribute(team, 1));
 }
 
 /** 骨骼模型在当前姿势下的世界包围盒（按每个顶点的主骨骼估算）。马的 glTF 骨架与网格节点各带 100 倍缩放，直接取包围盒不可信 */
@@ -250,25 +298,47 @@ export function skinnedBox(scene: THREE.Object3D): THREE.Box3 {
   return bx;
 }
 
-/** 给材质打补丁的着色器片段：按实例属性取骨骼矩阵并摆放到世界中 */
+/**
+ * 给材质打补丁的着色器片段：按实例属性取骨骼矩阵并摆放到世界中。
+ * aAnim.x 是带小数的帧行号，在相邻两帧之间插值；aBlend 给出上一个动作冻结时的帧行与它的权重，换动作时淡出。
+ * 定义 UNIT_COARSE 时两样都不做（阴影深度那一遍用，省一半以上的取贴图）。
+ */
 export const UNIT_VERT_PARS = `
 attribute vec4 aBone;
 attribute vec4 aWeight;
+attribute float aTeam;
 attribute vec4 aInst; // x, y, z, 朝向角
-attribute vec4 aAnim; // 动画行, 闪白, 缩放, 明暗
+attribute vec4 aAnim; // 动画行（带小数）, 闪白, 缩放, 明暗
+attribute vec3 aTint; // 队伍色（线性）
+attribute vec2 aBlend; // 上一个动作的帧行, 它的权重
 uniform sampler2D uBones;
 varying float vFlash;
 varying float vShade;
-mat4 boneAt(float b){
-  int x = int(b + 0.5) * 4, y = int(aAnim.x + 0.5);
+mat4 boneAt(float b, int y){
+  int x = int(b + 0.5) * 4;
   return mat4(texelFetch(uBones, ivec2(x, y), 0), texelFetch(uBones, ivec2(x + 1, y), 0),
     texelFetch(uBones, ivec2(x + 2, y), 0), texelFetch(uBones, ivec2(x + 3, y), 0));
 }
-mat4 unitMatrix(){
+mat4 skinAt(int y){
 #ifdef INFLUENCES_2
-  mat4 bm = boneAt(aBone.x) * aWeight.x + boneAt(aBone.y) * aWeight.y;
+  return boneAt(aBone.x, y) * aWeight.x + boneAt(aBone.y, y) * aWeight.y;
 #else
-  mat4 bm = boneAt(aBone.x);
+  return boneAt(aBone.x, y);
+#endif
+}
+mat4 skinRow(float row){
+  float f = floor(row);
+  float t = row - f;
+  mat4 m = skinAt(int(f));
+#ifndef UNIT_COARSE
+  if (t > 0.01) m += (skinAt(int(f) + 1) - m) * t;
+#endif
+  return m;
+}
+mat4 unitMatrix(){
+  mat4 bm = skinRow(aAnim.x);
+#ifndef UNIT_COARSE
+  if (aBlend.y > 0.001) bm += (skinRow(aBlend.x) - bm) * aBlend.y;
 #endif
   float c = cos(aInst.w), s = sin(aInst.w), k = aAnim.z;
   mat4 place = mat4(c * k, 0.0, s * k, 0.0, 0.0, k, 0.0, 0.0, -s * k, 0.0, c * k, 0.0, aInst.x, aInst.y, aInst.z, 1.0);

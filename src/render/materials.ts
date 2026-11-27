@@ -65,6 +65,7 @@ export function unitMaterials(bones: THREE.Texture, influences: number): { lit: 
     bind(shader, uni);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${defs}${UNIT_VERT_PARS}\nvarying vec3 vWorld;`)
+      .replace('#include <color_vertex>', '#include <color_vertex>\nvColor.rgb *= mix(vec3(1.0), aTint, aTeam);')
       .replace('#include <beginnormal_vertex>', 'mat4 um = unitMatrix();\nvec3 objectNormal = normalize(mat3(um) * normal);')
       .replace('#include <begin_vertex>', `vec3 transformed = (um * vec4(position, 1.0)).xyz;
         vFlash = aAnim.y; vShade = aAnim.w; vWorld = transformed;`);
@@ -78,7 +79,7 @@ export function unitMaterials(bones: THREE.Texture, influences: number): { lit: 
   depth.onBeforeCompile = shader => {
     bind(shader, uni);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${defs}${UNIT_VERT_PARS}`)
+      .replace('#include <common>', `#include <common>\n${defs}#define UNIT_COARSE\n${UNIT_VERT_PARS}`)
       .replace('#include <begin_vertex>', 'mat4 um = unitMatrix();\nvec3 transformed = (um * vec4(position, 1.0)).xyz;');
   };
   depth.customProgramCacheKey = () => `unitDepth${influences}`;

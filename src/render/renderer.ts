@@ -16,9 +16,11 @@ import { litMaterial, shared } from './materials';
 import { box, cone, cyl, join } from './prims';
 import { Atlas, Q_AXIS, Q_BILLBOARD, Q_GROUND, Q_SCREEN, Quads, Sprite } from './quads';
 import { Terrain, WATER_Y } from './terrain';
-import { CLIP_FALLBACK, TWIST_CLIPS, buildUnitModel } from './models/spec';
+import { buildUnitModel } from './models/spec';
+import { ATTACK_VARIANTS, CLIP_FALLBACK, STD_ACTIONS, TWIST_CLIPS } from './models/actions';
 import { Clip, clipOf } from './rig';
-import { UnitBatch } from './units';
+import { UnitBatch, clipRow } from './units';
+import { UnitAnim } from './unitAnim';
 
 const MAXP = 3000;
 const FOV = 30;
@@ -102,9 +104,15 @@ export class Renderer {
   private readonly camera = new THREE.PerspectiveCamera(FOV, 1, 10, 30000);
   private readonly sun = new THREE.DirectionalLight(0xfff0d6, 2.4);
   private readonly sky = new THREE.HemisphereLight(0xcfe0ff, 0x6e6548, 1.35);
-  private readonly batches: (UnitBatch | null)[][] = [[], [], []];
-  /** [队伍][兵种] 各标准动作解析后的结果（缺的动作已按回退表补上） */
-  private readonly clips: (Record<string, Clip> | null)[][] = [[], [], []];
+  /** [兵种] 的绘制批次：模型与队伍无关，双方同阵营时共用，队伍色按实例给 */
+  private readonly batches: (UnitBatch | null)[] = [];
+  /** [兵种] 各标准动作解析后的结果（缺的动作已按回退表补上） */
+  private readonly clips: (Record<string, Clip> | null)[] = [];
+  /** [兵种] 站着出手的几种不同攻击动作 */
+  private readonly attacks: Clip[][] = [];
+  /** [队伍] 队伍色（线性 rgb），给单位上色 */
+  private readonly tint: Float32Array[];
+  private readonly anim = new UnitAnim(MAX_UNITS);
   private readonly ground: Quads;
   private readonly sprites: Quads;
   private readonly overlay: Quads;
@@ -160,6 +168,7 @@ export class Renderer {
     this.teamRgb = [[190, 190, 182], f1.color, f1.id === f2.id ? f2.altColor : f2.color];
     this.teamColor = this.teamRgb.map(c => [c[0] / 255, c[1] / 255, c[2] / 255] as [number, number, number]);
     this.teamLin = this.teamColor.map(c => new THREE.Color().setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace));
+    this.tint = this.teamLin.map(c => new Float32Array([c.r, c.g, c.b]));
 
     const scene = this.scene;
     scene.background = new THREE.Color(0x9db4c4);
@@ -297,20 +306,17 @@ export class Renderer {
     this.disposables.push(tex, this.ground, this.sprites, this.overlay, this.raised, this.terrain);
 
     // ---- 单位 ----
-    for (let tm = 1; tm <= 2; tm++) {
-      const fac = world.factions[tm]!;
-      for (const d of UNITS) {
-        if (d.faction !== fac.id) continue;
-        const b = new UnitBatch(buildUnitModel(d.model, this.teamRgb[tm]));
-        this.batches[tm][d.idx] = b;
-        const set: Record<string, Clip> = {};
-        for (const name of ['idle', 'walk', 'run', 'attack', 'attackMove', 'die', 'charge', 'brace', 'guard', 'guardWalk', ...TWIST_CLIPS.map(t => t[0])]) {
-          set[name] = clipOf(b.model, name, CLIP_FALLBACK);
-        }
-        this.clips[tm][d.idx] = set;
-        scene.add(b.mesh);
-        this.disposables.push(b);
-      }
+    const facs = new Set([world.factions[1]!.id, world.factions[2]!.id]);
+    for (const d of UNITS) {
+      if (!facs.has(d.faction)) continue;
+      const b = new UnitBatch(buildUnitModel(d.model));
+      this.batches[d.idx] = b;
+      const set: Record<string, Clip> = {};
+      for (const name of STD_ACTIONS) set[name] = clipOf(b.model, name, CLIP_FALLBACK);
+      this.clips[d.idx] = set;
+      this.attacks[d.idx] = [...new Set(ATTACK_VARIANTS.map(n => set[n]))];
+      scene.add(b.mesh);
+      this.disposables.push(b);
     }
 
     // ---- 建筑 ----
@@ -1064,11 +1070,13 @@ export class Renderer {
     // ---------------- 单位 ----------------
     // 拉远后单位的影子小到看不清，省掉这一遍绘制
     const unitShadows = d < 2400;
-    for (let tm = 1; tm <= 2; tm++) for (const b of this.batches[tm]) {
+    for (const b of this.batches) {
       if (!b) continue;
       b.begin();
       b.mesh.castShadow = unitShadows;
     }
+    // 动作计时用模拟时间：暂停时停、加速时快
+    const simT = (tick + alpha) * DT;
     // 尸体
     const nc = Math.min(w.corpseN, MAX_CORPSE);
     const CORPSE_LIFE = 30 * 40;
@@ -1078,12 +1086,12 @@ export class Renderer {
       const x = w.cX[c], z = w.cY[c];
       if (!this.inView(x, z)) continue;
       if (fog && !vis[((z / VIS_CELL) | 0) * vw + ((x / VIS_CELL) | 0)]) continue;
-      const b = this.batches[w.cTeam[c]][w.cType[c]];
+      const b = this.batches[w.cType[c]];
       if (!b) continue;
-      const clip = this.clips[w.cTeam[c]][w.cType[c]]!.die;
+      const clip = this.clips[w.cType[c]]!.die;
       // 最后几秒沉入地面
       const sink = Math.max(0, (age - (CORPSE_LIFE - 150)) / 150);
-      b.add(x, gy(x, z) - sink * 6, z, w.cDir[c], clip, (age + alpha) / (clip.n * 1.0), 0, 1, 0.72);
+      b.add(x, gy(x, z) - sink * 6, z, w.cDir[c], clipRow(clip, ((age + alpha) * DT) / clip.seconds), this.tint[w.cTeam[c]], 0, 1, 0.72);
     }
     const showBars = d < 1900;
     const hbit = 1 << human;
@@ -1097,8 +1105,8 @@ export class Renderer {
       const tm = w.team[i];
       // 敌军要被己方看见才画（包括远处打着火把的）
       if (fog && tm !== human && !(w.seen[i] & hbit)) continue;
-      const b = this.batches[tm][w.type[i]]!;
-      const cl = this.clips[tm][w.type[i]]!;
+      const b = this.batches[w.type[i]]!;
+      const cl = this.clips[w.type[i]]!;
       const def = UNITS[w.type[i]];
       const st = w.state[i];
       // 站上城墙的单位抬到墙顶，上下墙时平滑过渡
@@ -1115,9 +1123,15 @@ export class Renderer {
       const mv2 = mx * mx + mz * mz;
       const gait = sp2 > mv2 ? sp2 : mv2;
       let clip: Clip, ph: number;
-      if (aa > 0) {
-        clip = sp2 > 900 ? this.moveShot(i, cl) : cl.attack;
-        ph = 1 - aa / 0.3;
+      const anim = this.anim;
+      anim.claim(i, w.uid[i]);
+      const atks = this.attacks[w.type[i]];
+      const atk = sp2 > 900 ? this.moveShot(i, cl) : atks[anim.attackVariant(i, aa, atks.length)];
+      // 移动只看自己的速度（近战里被旁人挤动不算）；站着出手后起步才打断，见 UnitAnim
+      const at = anim.attackTime(i, aa, simT, atk.seconds, sp2 > 30);
+      if (at >= 0) {
+        clip = atk;
+        ph = at / atk.seconds;
       } else if (gait > 30) {
         // 走还是跑看实际速度；步幅与行进距离挂钩，脚下不打滑
         let name = gait > def.walk * def.walk * 1.3 ? 'run' : 'walk';
@@ -1126,12 +1140,16 @@ export class Renderer {
         clip = cl[name];
         ph = (w.odo[i] / (b.model.strides[name] ?? b.model.strides.walk ?? 28)) % 1;
       } else {
-        clip = st & S_BRACE ? cl.brace : st & S_SHIELD ? cl.guard : cl.idle;
-        ph = (this.time * 0.4 + i * 0.37) % 1;
+        // 有目标时两次出手之间是戒备姿态
+        const fighting = w.target[i] !== -1;
+        clip = st & S_BRACE ? cl.brace : st & S_SHIELD ? cl.guard : fighting ? cl.ready : cl.idle;
+        ph = (simT / clip.seconds + i * 0.37) % 1;
       }
       const torch = (st & S_TORCH) !== 0;
       // 夜里打火把的被火光照亮
-      b.add(x, y, z, w.dir[i], clip, ph, w.flash[i] > 0 ? 0.25 : 0, 1, torch ? 1 + dark * 0.9 : 1);
+      const row = clipRow(clip, ph);
+      anim.blend(i, clip, row, simT, at >= 0);
+      b.add(x, y, z, w.dir[i], row, this.tint[tm], w.flash[i] > 0 ? 0.25 : 0, 1, torch ? 1 + dark * 0.9 : 1, anim.outRow, anim.outWeight);
       if (torch) {
         const fl = 4.5 + Math.sin(this.time * 17 + i) * 1.2;
         const fy = y + Math.min(b.model.height, 26) + 3;
@@ -1167,7 +1185,7 @@ export class Renderer {
         else S.add(Q_BILLBOARD, white, x, y + top, z, bw * hr, 1.6, 0.95, 0.3, 0.25, 0.9, bw / 2 / (bw * hr || 1), 0.5);
       }
     }
-    for (let tm = 1; tm <= 2; tm++) for (const b of this.batches[tm]) b?.end();
+    for (const b of this.batches) b?.end();
     this.drawn = drawn;
 
     // ---------------- 建筑：血条与烟火 ----------------

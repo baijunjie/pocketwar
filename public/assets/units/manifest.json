@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "libraries": {
+    "human": "units/anims/human.glb"
+  },
+  "models": {
+    "legion": {
+      "kind": "rig",
+      "src": "units/rome/legion.glb",
+      "anims": "human",
+      "set": "sword_shield",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "auxilia": {
+      "kind": "rig",
+      "src": "units/rome/auxilia.glb",
+      "anims": "human",
+      "set": "spear_shield",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "velites": {
+      "kind": "rig",
+      "src": "units/rome/velites.glb",
+      "anims": "human",
+      "set": "javelin",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "sagitt": {
+      "kind": "rig",
+      "src": "units/rome/sagitt.glb",
+      "anims": "human",
+      "set": "bow",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "equites": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/rome/equites.glb",
+        "anims": "human",
+        "set": "ride_lance"
+      },
+      "mount": {
+        "src": "units/anims/horse.glb"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "legion_e": {
+      "kind": "rig",
+      "src": "units/rome/legion_e.glb",
+      "anims": "human",
+      "set": "sword_shield",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "auxilia_e": {
+      "kind": "rig",
+      "src": "units/rome/auxilia_e.glb",
+      "anims": "human",
+      "set": "spear_shield",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "velites_e": {
+      "kind": "rig",
+      "src": "units/rome/velites_e.glb",
+      "anims": "human",
+      "set": "javelin",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "sagitt_e": {
+      "kind": "rig",
+      "src": "units/rome/sagitt_e.glb",
+      "anims": "human",
+      "set": "bow",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "equites_e": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/rome/equites_e.glb",
+        "anims": "human",
+        "set": "ride_lance"
+      },
+      "mount": {
+        "src": "units/anims/horse.glb"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "scorpio": {
+      "kind": "rig",
+      "src": "units/rome/scorpio.glb",
+      "stride": {
+        "walk": 1.759
+      }
+    },
+    "onager": {
+      "kind": "rig",
+      "src": "units/rome/onager.glb",
+      "stride": {
+        "walk": 2.262
+      }
+    }
+  }
+}
