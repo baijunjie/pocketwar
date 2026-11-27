@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EDGE_ZONE, EXIT_BAND, WHEEL_BURST_GAP, WheelClassifier,
-  asWheelMode, edgeSpeed, exitDirection, looksLikeTrackpad,
+  EDGE_ZONE, EXIT_BAND, WHEEL_BURST_GAP, WheelClassifier, ZOOM_MAX, ZOOM_MIN,
+  asWheelMode, edgeSpeed, exitDirection, fracToZoom, looksLikeTrackpad, zoomToFrac,
 } from '../src/camInput';
 import type { WheelSample } from '../src/camInput';
 
@@ -263,5 +263,54 @@ describe('WheelClassifier 自动判定', () => {
     const c = new WheelClassifier();
     expect(c.classify(pad, 'mouse', 1)).toBe('mouse');
     expect(c.classify(mouse, 'auto', 5)).toBe('mouse');
+  });
+});
+
+describe('缩放条位置与缩放的换算', () => {
+  it('缩放范围 0.25～3.2', () => {
+    expect(ZOOM_MIN).toBe(0.25);
+    expect(ZOOM_MAX).toBe(3.2);
+  });
+
+  it('0 = 最远（ZOOM_MIN）、1 = 最近（ZOOM_MAX）', () => {
+    expect(zoomToFrac(ZOOM_MIN)).toBeCloseTo(0);
+    expect(zoomToFrac(ZOOM_MAX)).toBeCloseTo(1);
+    expect(fracToZoom(0)).toBeCloseTo(ZOOM_MIN);
+    expect(fracToZoom(1)).toBeCloseTo(ZOOM_MAX);
+  });
+
+  it('按对数均分：中点是几何平均，每拉一段放大的倍数相同', () => {
+    expect(fracToZoom(0.5)).toBeCloseTo(Math.sqrt(ZOOM_MIN * ZOOM_MAX));
+    expect(zoomToFrac(Math.sqrt(ZOOM_MIN * ZOOM_MAX))).toBeCloseTo(0.5);
+    const ratio = fracToZoom(0.125) / fracToZoom(0);
+    for (let f = 0; f < 0.85; f += 0.1) expect(fracToZoom(f + 0.125) / fracToZoom(f)).toBeCloseTo(ratio);
+  });
+
+  it('越近位置越大（单调递增）', () => {
+    let prev = -1;
+    for (let z = ZOOM_MIN; z <= ZOOM_MAX; z += 0.05) {
+      const f = zoomToFrac(z);
+      expect(f).toBeGreaterThan(prev);
+      prev = f;
+    }
+  });
+
+  it('超出范围的输入夹到端点', () => {
+    expect(zoomToFrac(0.01)).toBe(0);
+    expect(zoomToFrac(100)).toBe(1);
+    expect(fracToZoom(-3)).toBeCloseTo(ZOOM_MIN);
+    expect(fracToZoom(7)).toBeCloseTo(ZOOM_MAX);
+  });
+
+  it('互为反函数', () => {
+    for (const f of [0, 0.1, 0.33, 0.5, 0.9, 1]) expect(zoomToFrac(fracToZoom(f))).toBeCloseTo(f);
+    for (const z of [0.25, 0.4, 1, 2.2, 3.2]) expect(fracToZoom(zoomToFrac(z))).toBeCloseTo(z);
+  });
+
+  it('可以指定范围', () => {
+    expect(zoomToFrac(1, 0.5, 2)).toBeCloseTo(0.5);
+    expect(fracToZoom(0.5, 0.5, 2)).toBeCloseTo(1);
+    expect(fracToZoom(1, 0.5, 2)).toBeCloseTo(2);
+    expect(zoomToFrac(4, 0.5, 2)).toBe(1);
   });
 });

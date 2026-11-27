@@ -26,7 +26,7 @@ export const CARD_SLOP = 8;
 export const CARD_SCROLL_BIAS = 1.5;
 /** 拖卡片时落点（剑尖）离手指这么多像素：手指上方立着卡片，剑尖要从卡片顶上再伸出去一截 */
 export const DROP_REACH = 100;
-/** 拖卡片时手指离屏幕底这么多像素以内，剑开始向右放倒 */
+/** 拖卡片时手指离屏幕底这么多像素以内，剑开始向小地图那一侧放倒 */
 export const DROP_TURN_BAND = 150;
 /** 拖卡片时手指离按下处这么多像素以上，松手才下令：剑一出来剑尖就在画面里，起手就松开（没按准的一下点按）不该变成命令 */
 export const DROP_ARM = 28;
@@ -77,14 +77,14 @@ export function cardIntent(dx: number, dy: number, slop = CARD_SLOP, bias = CARD
 
 /**
  * 拖卡片时落点（剑尖）相对手指的偏移：剑从手指伸出去 reach 像素，剑尖始终在手指外面看得见的地方，不贴回手指下。
- * 平时竖直朝上；手指进到屏幕底以上 band 像素以内时，剑随手指下移逐渐向右放倒，到屏幕底时水平朝右：
- * 手指够不到屏幕外，剑一直朝上的话贴着屏幕底的小地图下半截指不到。朝右倒是因为小地图在屏幕右侧、左边有摇杆那一块可以落指，
+ * 平时竖直朝上；手指进到屏幕底以上 band 像素以内时，剑随手指下移逐渐往 side 那一侧放倒（1 向右、−1 向左），到屏幕底时水平朝那一侧：
+ * 手指够不到屏幕外，剑一直朝上的话贴着屏幕底的小地图下半截指不到。side 取小地图所在的一侧，手指落在另一侧的摇杆一带，
  * 整张小地图都指得到
  */
-export function dropOffset(y: number, bottom: number, reach = DROP_REACH, band = DROP_TURN_BAND): Pt {
+export function dropOffset(y: number, bottom: number, side: 1 | -1 = 1, reach = DROP_REACH, band = DROP_TURN_BAND): Pt {
   const turn = band > 0 ? Math.max(0, Math.min(1, (band - (bottom - y)) / band)) : 0;
   const a = (turn * Math.PI) / 2;
-  return { x: reach * Math.sin(a), y: -reach * Math.cos(a) };
+  return { x: side * reach * Math.sin(a), y: -reach * Math.cos(a) };
 }
 
 /**

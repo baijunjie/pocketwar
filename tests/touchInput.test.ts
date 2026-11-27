@@ -169,7 +169,7 @@ describe('cardIntent 卡片起手方向', () => {
 describe('dropOffset 拖卡片时落点（剑尖）相对手指的偏移', () => {
   // 屏幕底 800：离屏幕底 150px 以内（y > 650）开始放倒
   const bottom = 800;
-  const off = (y: number, reach?: number, band?: number) => dropOffset(y, bottom, reach, band);
+  const off = (y: number, reach?: number, band?: number) => dropOffset(y, bottom, 1, reach, band);
   const len = (v: { x: number; y: number }): number => Math.hypot(v.x, v.y);
 
   it('手指离屏幕底不少于 band：竖直朝上，偏移 (0, −reach)', () => {
@@ -235,15 +235,64 @@ describe('dropOffset 拖卡片时落点（剑尖）相对手指的偏移', () =>
     }
   });
 
+  describe('side = −1（向左放倒）', () => {
+    const offL = (y: number): { x: number; y: number } => dropOffset(y, bottom, -1);
+
+    it('x 分量与 side = 1 镜像、y 相同', () => {
+      for (let y = -100; y <= 1000; y += 7) {
+        const r = dropOffset(y, bottom, 1), l = offL(y);
+        expect(l.x, `y=${y}`).toBeCloseTo(-r.x);
+        expect(l.y, `y=${y}`).toBeCloseTo(r.y);
+      }
+    });
+
+    it('离屏幕底不少于 band：竖直朝上，不受 side 影响', () => {
+      for (const y of [650, 300, 0, -100]) {
+        expect(offL(y).x, `y=${y}`).toBeCloseTo(0);
+        expect(offL(y).y, `y=${y}`).toBeCloseTo(-DROP_REACH);
+      }
+    });
+
+    it('到屏幕底时水平朝左，偏移 (−reach, 0)', () => {
+      for (const y of [800, 900]) {
+        expect(offL(y).x).toBeCloseTo(-DROP_REACH);
+        expect(offL(y).y).toBeCloseTo(0);
+      }
+    });
+
+    it('一半深度是向左 45 度；指定 reach 与 band 同样镜像', () => {
+      const v = offL(bottom - DROP_TURN_BAND / 2);
+      expect(v.x).toBeCloseTo(-DROP_REACH * Math.SQRT1_2);
+      expect(v.y).toBeCloseTo(-DROP_REACH * Math.SQRT1_2);
+      const w = dropOffset(450, 500, -1, 80, 100);
+      expect(w.x).toBeCloseTo(-80 * Math.SQRT1_2);
+      expect(w.y).toBeCloseTo(-80 * Math.SQRT1_2);
+    });
+
+    it('偏移长度始终是 reach，x 不为正', () => {
+      for (let y = -200; y <= 1100; y += 1) {
+        const v = offL(y);
+        expect(len(v), `y=${y}`).toBeCloseTo(DROP_REACH);
+        expect(v.x, `y=${y}`).toBeLessThanOrEqual(1e-9);
+      }
+    });
+
+    it('band 不大于 0 时始终朝上', () => {
+      const v = dropOffset(900, bottom, -1, 100, 0);
+      expect(v.x).toBeCloseTo(0);
+      expect(v.y).toBeCloseTo(-100);
+    });
+  });
+
   it('可以指定 reach 与 band', () => {
     expect(off(0, 50).y).toBeCloseTo(-50);
     expect(len(off(750, 50))).toBeCloseTo(50);
-    const v = dropOffset(450, 500, 80, 100);
+    const v = dropOffset(450, 500, 1, 80, 100);
     // 离屏幕底 50 = band 的一半：45 度
     expect(v.x).toBeCloseTo(80 * Math.SQRT1_2);
     expect(v.y).toBeCloseTo(-80 * Math.SQRT1_2);
-    expect(dropOffset(399, 500, 80, 100).x).toBeCloseTo(0);
-    expect(dropOffset(500, 500, 80, 100).x).toBeCloseTo(80);
+    expect(dropOffset(399, 500, 1, 80, 100).x).toBeCloseTo(0);
+    expect(dropOffset(500, 500, 1, 80, 100).x).toBeCloseTo(80);
   });
 
   it('band 不大于 0 时始终朝上，不出 NaN', () => {

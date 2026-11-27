@@ -8,11 +8,11 @@ import { canUpgradeSite, siteUpgradeCost, unitUpgradeCost, upgradeQueue } from '
 import { MAX_UNITS, S_ROUT, Site, World } from './sim/world';
 import { Minimap } from './render/minimap';
 import { Renderer } from './render/renderer';
-import { CardKind } from './ui/cardBar';
+import { CardKind, allCardPicked } from './ui/cardBar';
 import { Hud, UpgradeAction, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 import { BackGuard, blocksEdgeSwipe } from './backGuard';
-import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection } from './camInput';
+import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection, fracToZoom, zoomToFrac } from './camInput';
 import { loadPref, savePref } from './prefs';
 import { Pinch, TouchGestures, UiMode, asUiMode, inInscribedCircle, isMobileUi } from './touchInput';
 import { PointerLock } from './pointerLock';
@@ -36,6 +36,8 @@ export class GameApp {
   private readonly box: HTMLDivElement;
   private readonly sel = new Uint8Array(MAX_UNITS);
   private selList: number[] = [];
+  /** 全选卡片处于选中态：它代表的是选中的人，不再是屏幕内的（见 setSelection） */
+  private selAll = false;
   private selUid: number[] = [];
   /** 没选部队时选中的据点（-1 = 没有） */
   private selSite = -1;
@@ -107,7 +109,8 @@ export class GameApp {
       pickTypes: (types, mode) => this.pickTypes(types, mode),
       pickAll: mode => this.pickAll(mode),
       selectGroup: (g, jump) => this.selectGroup(g, jump),
-      groupSlot: (g, assign) => this.groupSlot(g, assign),
+      groupSlot: g => this.groupSlot(g),
+      zoomTo: f => this.zoomAt(this.renderer.viewW / 2, this.renderer.viewH / 2, fracToZoom(f) / this.renderer.cam.zoom),
       dropCard: (kind, id, x, y, target) => this.dropCard(kind, id, x, y, target),
       setSpeed: s => this.setSpeed(s),
       focus: (x, y) => this.focus(x, y),
@@ -527,10 +530,12 @@ export class GameApp {
     // 样式表给整个界面设了 !important 的剑形指针，指令模式的十字准星要同样 !important 才盖得过
     this.canvas.style.setProperty('cursor', m ? 'crosshair' : '', m ? 'important' : '');
     this.pointer.refreshCursor();
+    // 移动版的提示条占画面上方，写短：矮屏上也不超过两行
     const mb = this.mobile;
-    this.hud.setMode(m === 'amove' ? `攻击移动：${mb ? '点一下指定目的地（再点一次指令按钮取消）' : '左键指定目的地（右键取消）'}`
-      : m === 'rally' ? `集结点：${mb ? '点一下指定位置' : '左键指定位置'}，${this.selSite >= 0 ? '只设所选据点' : '给全部据点设'}${mb ? '（再点一次指令按钮退出）' : '（右键退出；Shift+R 取消集结点）'}`
-      : m === 'outpost' ? `扎营：${mb ? '点一下' : '左键'}指定临时据点的位置，所选部队会赶去搭建（木材 ${RULES.economy.outpostCost}，${mb ? '再点一次指令按钮取消' : '右键取消'}）` : '');
+    this.hud.setMode(m === 'amove' ? `攻击移动：${mb ? '点一下目的地（再点指令取消）' : '左键指定目的地（右键取消）'}`
+      : m === 'rally' ? `集结点：${mb ? '点一下位置' : '左键指定位置'}，${this.selSite >= 0 ? '只设所选据点' : '给全部据点设'}${mb ? '（再点指令退出）' : '（右键退出；Shift+R 取消集结点）'}`
+      : m === 'outpost' ? (mb ? `扎营：点一下位置搭临时据点（木材 ${RULES.economy.outpostCost}，再点指令取消）`
+        : `扎营：左键指定临时据点的位置，所选部队会赶去搭建（木材 ${RULES.economy.outpostCost}，右键取消）`) : '');
   }
 
   /** 设集结点模式下选中对象变了：提示跟着换；选中的据点设不了集结点就退出模式，并给出与按 R 时一样的提示 */
@@ -553,22 +558,34 @@ export class GameApp {
   }
 
   // ------------------------------------------------------------------ 选择
-  private setSelection(list: number[]): void {
+  /** all：指定全选卡片的选中态（点全选卡片时），不给就按屏幕内的人是否全都选着来定 */
+  private setSelection(list: number[], all?: boolean): void {
     for (const s of this.selList) this.sel[s] = 0;
     this.selList = list;
     this.selUid = list.map(s => this.world.uid[s]);
     for (const s of list) this.sel[s] = 1;
+    this.selAll = list.length > 0 && (all ?? allCardPicked(list, this.screenUnits()));
     // 选了部队就不再选着据点
     if (list.length) this.selSite = this.renderer.selSite = -1;
     this.refreshRallyMode();
-    this.hud.updateSelection(list, this.selSite, this.screenUnits());
+    this.syncSelection();
+  }
+
+  /** 把当前的选择交给界面（详情、指令按钮、卡片） */
+  private syncSelection(): void {
+    this.hud.updateSelection(this.selList, this.selSite, this.screenUnits(), this.allPicked);
+  }
+
+  /** 全选卡片处于选中态（选中的人全部阵亡、溃逃被清出选择后就不算） */
+  private get allPicked(): boolean {
+    return this.selAll && this.selList.length > 0;
   }
 
   private selectSite(id: number): void {
     if (id >= 0 && this.selList.length) this.setSelection([]);
     this.selSite = this.renderer.selSite = id;
     this.refreshRallyMode();
-    this.hud.updateSelection(this.selList, id, this.screenUnits());
+    this.syncSelection();
   }
 
   /** 鼠标点到的据点：点在它的建筑上，或者点在旗帜圈里 */
@@ -676,7 +693,7 @@ export class GameApp {
   private refreshUi(): void {
     this.hud.update();
     this.pushGroups();
-    this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
+    this.syncSelection();
     this.hud.updateUpgrades(this.offers());
   }
 
@@ -759,7 +776,7 @@ export class GameApp {
   }
 
   /**
-   * 画面上的框选：框住的己方单位，加上框扫到的卡片——全选卡片的屏幕内全部部队、兵种卡片的屏幕内这个兵种、编队卡片的这一队，合并成一次选择
+   * 画面上的框选：框住的己方单位，加上框扫到的卡片代表的人（全选、兵种卡片见 allCardUnits、typeUnits，编队卡片是这一队），合并成一次选择
    */
   private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean, withCards = true): void {
     const w = this.world;
@@ -782,7 +799,7 @@ export class GameApp {
     }
     if (withCards) {
       const cards = this.hud.cards.cardsIn(this.clientRect(x0, y0, x1, y1));
-      if (cards.all) for (const s of this.screenUnits()) push(s);
+      if (cards.all) for (const s of this.allCardUnits()) push(s);
       for (const s of this.typeUnits(cards.types)) push(s);
       for (const g of cards.groups) for (const s of this.groupAlive(g)) push(s);
     }
@@ -804,16 +821,24 @@ export class GameApp {
   }
 
   /**
-   * 兵种卡片代表的人：屏幕内的这些兵种，加上已选着、但不在屏幕内的同兵种（卡片也给这部分人出，选它不该把他们丢掉）。
+   * 兵种卡片代表的人：选中的兵种是选中的这些人（选中后不随屏幕变化，移动镜头不会把他们丢掉），没选中的兵种是屏幕内的这些人。
    * 点卡片、拖卡片、画面框扫到卡片都按这个口径
    */
   private typeUnits(types: number[]): number[] {
     if (!types.length) return [];
-    const w = this.world, want = new Set(types);
-    const list = this.screenUnits().filter(s => want.has(w.type[s]));
-    const got = new Set(list);
-    for (const s of this.selList) if (want.has(w.type[s]) && !got.has(s)) list.push(s);
+    const w = this.world, want = new Set(types), picked = new Set<number>();
+    const list: number[] = [];
+    for (const s of this.selList) if (want.has(w.type[s])) {
+      list.push(s);
+      picked.add(w.type[s]);
+    }
+    for (const s of this.screenUnits()) if (want.has(w.type[s]) && !picked.has(w.type[s])) list.push(s);
     return list;
+  }
+
+  /** 全选卡片代表的人：选中态时是选中的人，否则是屏幕内的全部己方部队 */
+  private allCardUnits(): number[] {
+    return this.allPicked ? this.selList.slice() : this.screenUnits();
   }
 
   /** 第 g 队里还活着、能操控的人 */
@@ -827,7 +852,7 @@ export class GameApp {
     this.groups[g] = { slots: this.selList.slice(), uids: this.selUid.slice() };
     this.hud.message(`已编为第 ${g} 队（${this.selList.length} 人）`, 'info');
     this.pushGroups();
-    this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
+    this.syncSelection();
   }
 
   /** 按编队号选中第 g 队；0.4 秒内连按同一个号，镜头再跳过去 */
@@ -837,22 +862,17 @@ export class GameApp {
     this.lastGroup = { t: now, g };
   }
 
-  /**
-   * 移动版的编队按钮（没有键盘的 Ctrl+数字）：长按（assign）是把所选部队编为这一队；
-   * 点一下是选中这一队，这一队还没有人（没编过或已全部阵亡）时改为把所选部队编进去
-   */
-  private groupSlot(g: number, assign: boolean): void {
+  /** 移动版的编队按钮（没有键盘的 Ctrl+数字）：只管编队，把所选部队编为这一队；选中一队靠编队卡片 */
+  private groupSlot(g: number): void {
     if (!this.world.humanTeam) return;
-    if (!assign && this.groupAlive(g).length) return this.recallGroup(g);
     if (!this.selList.length) {
-      this.hud.message(assign ? '先选中部队，再长按编队按钮把它们编为这一队' : `第 ${g} 队还没有人：先选中部队，再点它编队`, 'info');
+      this.hud.message('先选中部队，再点编队按钮把它们编为这一队', 'info');
       return;
     }
     this.assignGroup(g);
-    if (assign) navigator.vibrate?.(15);
   }
 
-  /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键、连点编队按钮、双击编队卡片） */
+  /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键、双击编队卡片） */
   private selectGroup(g: number, jump: boolean): void {
     const w = this.world, alive = this.groupAlive(g);
     this.setSelection(alive);
@@ -866,7 +886,7 @@ export class GameApp {
   }
 
   /**
-   * 卡片拖到地面或小地图上松开：全选卡片是屏幕内的全部部队，兵种卡片是屏幕内这个兵种（连同选着、但不在屏幕内的同兵种），编队卡片是这一队；
+   * 卡片拖到地面或小地图上松开：全选卡片、兵种卡片代表的人见 allCardUnits、typeUnits，编队卡片是这一队；
    * 选中这批人，松在画面上的敌军身上就攻击它（同右键），松在敌方建筑上直接攻打它，否则攻击移动到松开处（同攻击移动指令）
    */
   private dropCard(kind: CardKind, id: number, x: number, y: number, target: 'view' | 'mini'): void {
@@ -905,9 +925,9 @@ export class GameApp {
   /** 点全选卡片（见 CardBarCallbacks.pickAll） */
   private pickAll(mode: 'replace' | 'add' | 'map'): void {
     if (mode === 'map') return this.command('all');
-    if (mode === 'replace') return this.setSelection(this.screenUnits());
+    if (mode === 'replace') return this.setSelection(this.allCardUnits(), true);
     const have = new Set(this.selList);
-    this.setSelection([...this.selList, ...this.screenUnits().filter(s => !have.has(s))]);
+    this.setSelection([...this.selList, ...this.screenUnits().filter(s => !have.has(s))], true);
   }
 
   /** 点兵种卡片（见 CardBarCallbacks.pickTypes） */
@@ -961,7 +981,7 @@ export class GameApp {
         for (const s of set) s.rally = null;
         this.hud.message(this.selSite >= 0 ? `已取消${sites[0].name}的集结点：新出的援军留在据点里` : '已取消全部集结点：新出的援军留在各自的据点', 'info');
         this.sound.ui('order');
-        this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
+        this.syncSelection();
       }
     }
     else if (!this.selList.length) return;
@@ -1031,7 +1051,7 @@ export class GameApp {
       this.renderer.addMarker(x, y, 1, 0.9, 0.3, false);
       this.hud.message(this.selSite >= 0 ? `${sites[0].name}的集结点已设：之后它新出的援军开赴这里${this.mobile ? '' : '（Shift+R 取消）'}`
         : `集结点已设：之后各据点新出的援军开赴这里${this.mobile ? '（指令面板里可取消集结）' : '（Shift+R 取消）'}`, 'info', x, y);
-      this.hud.updateSelection(this.selList, this.selSite, this.screenUnits());
+      this.syncSelection();
     }
     this.setMode('');
   }
@@ -1214,6 +1234,7 @@ export class GameApp {
       this.minimap.draw(this.renderer.viewQuad(), 0.1);
     }
     this.hud.setWindView(this.renderer.cam.yaw);
+    if (this.mobile) this.hud.zoom.sync(zoomToFrac(this.renderer.cam.zoom));
     this.uiTimer -= real;
     if (this.uiTimer <= 0) {
       this.uiTimer = 0.25;

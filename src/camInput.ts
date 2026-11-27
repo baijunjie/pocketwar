@@ -1,7 +1,22 @@
 /**
- * 镜头输入的纯判定：边缘卷屏的速度、鼠标从哪条边离开网页、滚轮事件来自鼠标滚轮还是触控板。
+ * 镜头输入的纯判定：边缘卷屏的速度、鼠标从哪条边离开网页、滚轮事件来自鼠标滚轮还是触控板、缩放的范围与缩放条上的位置。
  * 不碰 DOM 状态，便于单元测试；由 `game.ts` 接到事件上。
  */
+
+/** 镜头缩放的范围：zoom 越大越近 */
+export const ZOOM_MIN = 0.25;
+export const ZOOM_MAX = 3.2;
+
+/** 缩放条上的位置（0 = 最远、1 = 最近）：按缩放的对数均分，每拉一段放大的倍数相同 */
+export function zoomToFrac(zoom: number, min = ZOOM_MIN, max = ZOOM_MAX): number {
+  const f = Math.log(zoom / min) / Math.log(max / min);
+  return Math.max(0, Math.min(1, f));
+}
+
+/** zoomToFrac 的反函数：超出 0～1 的按端点算 */
+export function fracToZoom(f: number, min = ZOOM_MIN, max = ZOOM_MAX): number {
+  return min * (max / min) ** Math.max(0, Math.min(1, f));
+}
 
 /** 离屏幕边缘多少像素以内开始卷屏：只认最外沿，贴边的面板留出的边框加内边距不小于它，按钮不会被卷屏抢走 */
 export const EDGE_ZONE = 6;

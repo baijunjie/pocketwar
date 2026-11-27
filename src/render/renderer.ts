@@ -4,6 +4,7 @@ import {
   BK_KEEP, BK_MAIN, BK_TOWER, BK_WALL, BUILDINGS, DT, PROJ_ARC, P_BALL, P_BIGBOLT, P_BOLT, P_BULLET, P_JAVELIN, P_ROCKET, P_STONE, P_TORCH,
   RULES, SITE_INFO, TILE, T_BRIDGE, UNITS,
 } from '../sim/defs';
+import { ZOOM_MAX, ZOOM_MIN } from '../camInput';
 import { CHUNK } from '../sim/map';
 import { rallyPoint } from '../sim/rally';
 import {
@@ -615,7 +616,7 @@ export class Renderer {
 
   clampCam(): void {
     const c = this.cam, w = this.world;
-    c.zoom = Math.max(0.25, Math.min(3.2, c.zoom));
+    c.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, c.zoom));
     c.pitch = Math.max(0.45, Math.min(1.4, c.pitch));
     c.x = Math.max(0, Math.min(w.W, c.x));
     c.y = Math.max(0, Math.min(w.H, c.y));

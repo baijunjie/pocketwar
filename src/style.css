@@ -84,31 +84,27 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .groups { padding-top: 12px; }
 .unitbar .hint, .cmds .hint { color: var(--dim); padding: 0 8px; align-self: center; }
 .unitbar .hint { padding: 6px 12px; border-radius: 4px; background: var(--panel); }
-/* 全选卡片：兵种栏最左，与兵种卡片同高，写屏幕内人数 */
+/* 全选卡片：兵种栏最左，写屏幕内人数（选中后写选中的人数）。全选、兵种、编队三种卡片一样大 */
 /* 骨架与兵种卡片相同（头像位、名字行、血条位），高度跟着一致：不靠 stretch，否则行比卡片高时（移动版卡片带、桌面版换行）它会更高 */
-.ucard.acard { width: 76px; flex: none; text-shadow: 0 1px 2px #000; }
-.acard .ab { height: 64px; display: flex; flex-direction: column; justify-content: center; }
+.ucard.acard { text-shadow: 0 1px 2px #000; }
+.acard .ab { height: var(--img); display: flex; flex-direction: column; justify-content: center; }
 .acard .ah { font-size: 13px; }
 .acard b { display: block; font-size: 22px; line-height: 1.3; }
 .acard .nm { color: var(--dim); }
 .acard .hp { visibility: hidden; }
 .ucard.acard.off { opacity: 0.5; }
 .ucard.acard.off:hover, .ucard.acard.off.hover { background: rgba(20, 16, 12, 0.82); }
-.ucard { position: relative; width: 88px; padding: 4px 3px 6px; box-sizing: border-box; text-align: center; border: 1px solid var(--line); border-radius: 6px; background: rgba(20, 16, 12, 0.82); box-shadow: 0 3px 8px rgba(0, 0, 0, 0.45); transition: transform 0.12s ease-out, box-shadow 0.12s, background 0.12s; }
+.ucard { --img: 60px; position: relative; flex: none; width: 84px; padding: 4px 3px 6px; box-sizing: border-box; text-align: center; border: 1px solid var(--line); border-radius: 6px; background: rgba(20, 16, 12, 0.82); box-shadow: 0 3px 8px rgba(0, 0, 0, 0.45); transition: transform 0.12s ease-out, box-shadow 0.12s, background 0.12s; }
 .ucard:hover, .ucard.hover { background: rgba(60, 46, 24, 0.9); }
 .ucard.on { transform: translateY(-12px); border-color: var(--gold); background: rgba(70, 54, 26, 0.92); box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5), 0 0 8px rgba(216, 176, 96, 0.35); }
 .ucard.hot { background: rgba(90, 70, 30, 0.92); border-color: var(--gold); }
 .ucard .sel { position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%); padding: 0 6px; border-radius: 3px; background: var(--gold); color: #1a140c; font-size: 11px; font-weight: 700; line-height: 16px; white-space: nowrap; }
-.ucard img { width: 64px; height: 64px; display: block; margin: 0 auto; }
+.ucard img { width: var(--img); height: var(--img); display: block; margin: 0 auto; }
 .ucard .n { position: absolute; top: 2px; right: 5px; font-weight: 700; font-size: 16px; text-shadow: 0 1px 2px #000; }
 .ucard .nm { display: block; font-size: 13px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ucard .hp { display: block; height: 4px; margin: 4px 6px 0; background: rgba(0, 0, 0, 0.5); border-radius: 2px; overflow: hidden; }
-/* 编队卡片：比兵种卡片矮一点，左上角是队号 */
-.gcard { width: 76px; }
-.gcard img { width: 48px; height: 48px; }
+/* 编队卡片：左上角是队号 */
 .gcard .gno { position: absolute; top: 2px; left: 4px; min-width: 18px; padding: 0 3px; border-radius: 3px; background: var(--gold); color: #1a140c; font-size: 13px; font-weight: 700; line-height: 18px; }
-.gcard .n { font-size: 14px; }
-.gcard .nm { font-size: 12px; }
 /* 拖拽中跟着鼠标的那张卡片；松开处不能下令时变灰 */
 .ucard.ghost { position: fixed; left: 0; top: 0; z-index: 40; margin: 0; pointer-events: none; transform-origin: 0 0; opacity: 0.92; transition: none; border-color: var(--gold); }
 .ucard.ghost.nodrop { opacity: 0.45; filter: grayscale(0.8); }
@@ -128,10 +124,12 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .cmds button b { font-weight: 500; }
 .cmds button i { font-style: normal; font-size: 11px; color: var(--gold); }
 .feed { top: 84px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none !important; }
-.msg { pointer-events: auto; padding: 4px 14px; border-radius: 4px; background: rgba(20, 16, 12, 0.88); border-left: 3px solid var(--gold); font-size: 13px; transition: opacity 1.2s; }
+.msg { pointer-events: none; padding: 4px 14px; border-radius: 4px; background: rgba(20, 16, 12, 0.88); border-left: 3px solid var(--gold); font-size: 13px; transition: opacity 1.2s; }
 .msg.good { border-color: #6fd46a; }
 .msg.bad { border-color: #e2584a; color: #ffc9c0; }
-.msg.fade { opacity: 0; }
+.msg.go { pointer-events: auto; }
+/* 淡出中的战报不再接指针 */
+.msg.fade { opacity: 0; pointer-events: none; }
 .modetip { display: none; top: 48px; left: 50%; transform: translateX(-50%); padding: 5px 16px; border-radius: 4px; background: rgba(160, 60, 30, 0.9); font-weight: 600; pointer-events: none !important; }
 /* 浮层叠放次序的顶层：帮助与结算遮罩盖过设置、菜单、抽屉与把手 */
 .overlay { z-index: 50; }
@@ -200,6 +198,27 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 @media (max-width: 980px) {
   .factions { grid-template-columns: repeat(2, 1fr); }
   .opts { grid-template-columns: 1fr; }
+}
+/* 手机竖屏：标题、阵营卡与选项收紧，阵营卡两列按屏宽均分（头像可缩），选项按钮不折字 */
+@media (max-width: 520px) {
+  .menu-inner { padding: 18px 10px 22px; }
+  .menu h1 { font-size: 44px; letter-spacing: 10px; text-indent: 10px; }
+  .menu header p { letter-spacing: 3px; }
+  .menu h2 { margin: 14px 0 8px; }
+  .factions { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .fcard { padding: 8px 8px 6px; }
+  .fhead { flex-wrap: wrap; gap: 0 6px; }
+  .fhead b { font-size: 20px; }
+  .fcard p { min-height: 0; font-size: 12px; }
+  .fcard ul { padding-left: 14px; font-size: 11.5px; }
+  .roster { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ru { font-size: 10px; overflow: hidden; }
+  .ru canvas { max-width: 100%; height: auto !important; aspect-ratio: 1; }
+  .opts { gap: 10px; margin: 16px 0 14px; }
+  .opt { flex-wrap: wrap; justify-content: center; gap: 4px 8px; }
+  .opt label { min-width: 0; }
+  .seg button { padding: 4px 8px; white-space: nowrap; }
+  .seg input { width: 80px; }
 }
 
 .topbar .env, .topbar .food, .topbar .morale { font-size: 12px; padding: 2px 8px; border-radius: 3px; background: rgba(255, 255, 255, 0.06); white-space: nowrap; }
@@ -291,122 +310,212 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .lock-tip { position: fixed; left: 0; top: 0; max-width: 360px; padding: 4px 8px; font-size: 12px; line-height: 1.5; white-space: pre-line; color: var(--text); background: rgba(20, 16, 12, 0.96); border: 1px solid var(--line); border-radius: 4px; pointer-events: none; z-index: 10001; will-change: transform; }
 
 /* ---------- 移动版（竖屏触控）：根 #app 上有 .mobile 类 ----------
-   层级（.hud 内）：常驻面板 < 把手 10 < 抽屉遮罩 20 < 抽屉 30 < 菜单与设置 40 < 帮助与结算遮罩 50
-   上半屏是游戏画面，下半屏顶部是紧贴分屏线的卡片带，卡片带下面是小地图；据点列表与指令面板是两侧滑出的抽屉。 */
-#app.mobile { --strip: 112px; --bar: 34px; touch-action: manipulation; -webkit-touch-callout: none; }
+   层级（.hud 内）：常驻面板 < 把手 10 < 战报 11（盖过把手向内伸的命中区）< 抽屉遮罩 20 < 抽屉 30 < 菜单与设置 40 < 拖卡片期间的顶栏 41 < 帮助与结算遮罩 50
+   上面是游戏画面，下面依次是卡片带、编队按钮一排、一边摇杆（上面横着缩放条）一边小地图；据点列表与指令面板是两侧滑出的抽屉。
+   下面这一块按内容定高（--bottom），剩下的都给画面（--split）：#app 是尺寸容器，cqw / cqh 都按它算。
+   操控区总高控制在屏高四成左右，画面优先：小地图边长按屏高在 110～154px 之间取，摇杆一列与它等高。
+   本节的尺寸都写成「N × --u」：--u 是按 #app 宽度相对 390 等比缩放的 1px，限在 0.9～1.1 倍（各宽度手机上比例一致，最窄的屏上字和按钮也不至于太小）；
+   注释里说的 px 都是 390 宽时的值。1px 的边框不缩放，小字不小于 10px */
+#app.mobile { container-type: size; touch-action: manipulation; -webkit-touch-callout: none; }
+/* 尺寸变量放在 #app 的子元素上：矮屏时由容器查询（只能改容器的后代）换一档，由它们算出的变量跟着重算 */
+#app.mobile > * {
+  --u: clamp(0.9px, 100cqw / 390, 1.1px);
+  font-size: calc(13 * var(--u));
+  /* --card：卡片高（--img 加名字行、血条、内边距与边框，见下面「三种卡片一样大」）；--strip：卡片带 = 顶边 2px（不缩放）+ 上下内边距 2×9 + 卡片；
+     --rowh：编队按钮高，--row 再加与下面一排的间距 6 */
+  --bar: calc(32 * var(--u)); --card: calc(71 * var(--u)); --map-min: 110px; --strip: calc(var(--card) + calc(18 * var(--u)) + 2px); --pad: calc(6 * var(--u)); --rowh: calc(36 * var(--u)); --row: calc(var(--rowh) + calc(6 * var(--u)));
+  /* 小地图边长：屏高四成减去卡片带与编队排，限在 110～154px，并给左边的摇杆一列留出至少 150px 宽 */
+  /* 下限不随 --u 缩小，摇杆在最窄的屏上也不小于约 70px */
+  --map0: clamp(var(--map-min), min(40cqh - var(--strip) - var(--row) - 2 * var(--pad), 100cqw - calc(150 * var(--u))), calc(154 * var(--u)));
+  --map: var(--map0);
+  /* 摇杆一列与小地图等高：上面缩放条 30 + 间距 6，下面摇杆 */
+  --joy: calc(var(--map) - calc(36 * var(--u)));
+  --bottom: calc(var(--strip) + var(--row) + var(--map) + 2 * var(--pad));
+  --split: calc(100cqh - var(--bottom));
+}
+/* 取整到整像素：小地图画布按整像素建缓冲，边长带小数会被浏览器重采样发虚。不支持 round() 的老浏览器只是略虚，布局照常 */
+@supports (width: round(down, 1px, 1px)) {
+  /* 加 0.01px 再向下取整：正好等于基准（如 390 宽时的 154）时，浮点误差不把它取成小 1px */
+  #app.mobile > * { --map: round(down, calc(var(--map0) + 0.01px), 1px); }
+}
+/* 矮屏（高不到 700）：卡片与编队按钮再收紧一档 */
+@container (max-height: 699px) {
+  #app.mobile > * { --card: calc(63 * var(--u)); --rowh: calc(32 * var(--u)); }
+  #app.mobile .ucard { --img: calc(34 * var(--u)); }
+  /* 全选卡片的「全选」加人数要收在 34px 的头像位里 */
+  #app.mobile .acard .ah { line-height: 1.1; }
+  #app.mobile .acard b { font-size: calc(16 * var(--u)); line-height: 1.1; }
+}
+/* 很矮的屏（高不到 540）：放不下四成，再收紧一档，让画面保住约一半 */
+@container (max-height: 539px) {
+  #app.mobile > * { --card: calc(59 * var(--u)); --rowh: calc(30 * var(--u)); --map-min: 104px; }
+  #app.mobile .ucard { --img: calc(30 * var(--u)); }
+  #app.mobile .acard b { font-size: calc(15 * var(--u)); }
+}
+/* 观战时没有编队按钮那一排 */
+#app.mobile.watch > * { --row: 0px; }
 .mobile .desktop-only { display: none !important; }
 .mobile .mobile-only { display: revert !important; }
 .mobile .cmds button.mobile-only { display: flex !important; }
-.mobile canvas.view { height: 50%; touch-action: none; }
+.mobile canvas.view { height: var(--split); touch-action: none; }
 .mobile .hud > * { touch-action: none; }
-.mobile button { min-height: 40px; }
-/* 顶栏缩成上半屏顶端一条细栏：只留双方人数、时间、粮、木石金，其余收进菜单 */
-.mobile .topbar { width: 100%; max-width: none; height: var(--bar); gap: 6px; padding: 2px 6px; border-right: none; border-radius: 0; font-size: 11px; overflow: visible; }
+.mobile button { min-height: calc(40 * var(--u)); }
+/* 顶栏缩成画面顶端一条细栏：只留双方人数、时间、粮、木石金，其余收进菜单（天气与风向画在小地图的两个上角） */
+.mobile .topbar { width: 100%; max-width: none; height: var(--bar); gap: calc(5 * var(--u)); padding: calc(2 * var(--u)) calc(6 * var(--u)); border-right: none; border-radius: 0; font-size: max(10px, calc(11 * var(--u))); overflow: visible; }
 .mobile .topbar .env, .mobile .topbar .wind, .mobile .topbar .morale, .mobile .topbar .dbg, .mobile .counts .vs { display: none !important; }
-.mobile .topbar .counts, .mobile .topbar .clock, .mobile .topbar .food, .mobile .topbar .res { font-size: 11px; padding-left: 0; padding-right: 0; background: none; }
-.mobile .counts { gap: 4px; }
-.mobile .counts .tag { padding: 0 5px; }
-.mobile .topbar .res { gap: 4px; }
+.mobile .topbar .counts, .mobile .topbar .clock, .mobile .topbar .food, .mobile .topbar .res { font-size: max(10px, calc(11 * var(--u))); padding-left: 0; padding-right: 0; background: none; }
+.mobile .counts { gap: calc(4 * var(--u)); }
+/* 阵营牌缩成一个色点（名字在悬停提示里），省出宽度给粮草与资源 */
+.mobile .counts .tag { width: calc(8 * var(--u)); height: calc(8 * var(--u)); padding: 0; border-radius: 50%; font-size: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35); }
+.mobile .counts .vs + .tag { margin-left: calc(4 * var(--u)); }
+.mobile .topbar .res { gap: calc(4 * var(--u)); }
+/* 太窄时压粮草（省略号收尾），「菜单」始终留在屏内；不到 360 宽时不显示用时，把位置让给粮草 */
 .mobile .topbar .food { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.mobile .topbar .menubtn { position: relative; flex-shrink: 0; margin-left: auto; min-height: 28px; padding: 0 12px; }
+@container (max-width: 359px) { .mobile .topbar .clock { display: none; } }
+.mobile .hud.dragging .topbar { z-index: 41; }
+.mobile .topbar .menubtn { position: relative; flex-shrink: 0; margin-left: auto; min-height: calc(26 * var(--u)); padding: 0 calc(10 * var(--u)); }
 /* 命中范围扩到约 40px 高，向左右多伸一点 */
-.mobile .topbar .menubtn::after { content: ''; position: absolute; inset: -6px -4px -6px -8px; }
+.mobile .topbar .menubtn::after { content: ''; position: absolute; inset: calc(-7 * var(--u)) calc(-4 * var(--u)) calc(-7 * var(--u)) calc(-8 * var(--u)); }
 /* 菜单：右上角按钮弹出的按钮组 */
-.mobile .ctl { display: none; top: var(--bar); right: 4px; z-index: 40; width: 232px; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(20, 16, 12, 0.96); }
+.mobile .ctl { display: none; top: var(--bar); right: calc(4 * var(--u)); z-index: 40; width: calc(228 * var(--u)); grid-template-columns: repeat(3, 1fr); gap: calc(4 * var(--u)); padding: calc(6 * var(--u)); border: 1px solid var(--line); border-radius: calc(6 * var(--u)); background: rgba(20, 16, 12, 0.96); }
 .mobile .ctl.open { display: grid; }
-.mobile .ctl button { padding: 4px 2px; white-space: nowrap; }
-.mobile .settings { top: var(--bar); z-index: 40; right: 4px; width: min(300px, calc(100% - 8px)); max-height: calc(50% - 40px); overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; touch-action: pan-y; }
-.mobile .modetip { top: var(--bar); left: 3%; right: 3%; transform: none; width: auto; text-align: center; font-size: 12px; }
-/* 战报占满宽度，提示条出现时让到它下面（提示条最多两行） */
-.mobile .feed { top: var(--bar); left: 3%; right: 3%; transform: none; max-width: none; align-items: stretch; }
-.mobile .has-mode .feed { top: calc(var(--bar) + 50px); }
+.mobile .ctl button { padding: calc(4 * var(--u)) calc(2 * var(--u)); white-space: nowrap; }
+.mobile .settings .srow.mobile-only { display: flex !important; }
+.mobile .settings .seg button { min-width: calc(44 * var(--u)); }
+.mobile .settings { top: var(--bar); z-index: 40; right: calc(4 * var(--u)); width: min(calc(300 * var(--u)), calc(100% - calc(8 * var(--u)))); max-height: calc(100% - var(--bar) - calc(8 * var(--u))); overflow-y: auto; padding: calc(6 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u)); border: 1px solid var(--line); border-radius: calc(6 * var(--u)); touch-action: pan-y; }
+/* 提示条与战报左右让出两侧把手（22px），只占画面区 */
+.mobile .modetip { text-wrap: balance; top: calc(var(--bar) + calc(2 * var(--u))); left: calc(26 * var(--u)); right: calc(26 * var(--u)); transform: none; width: auto; padding: calc(4 * var(--u)) calc(10 * var(--u)); text-align: center; font-size: calc(12 * var(--u)); }
+/* 战报接在提示条下面（--tip 是提示条的实际高度，由脚本给），不伸出画面：画面矮时同时只留一两条 */
+.mobile .feed { z-index: 11; top: calc(var(--bar) + calc(2 * var(--u)) + var(--tip, 0px)); left: calc(26 * var(--u)); right: calc(26 * var(--u)); max-height: calc(var(--split) - var(--bar) - var(--tip, 0px) - calc(6 * var(--u))); overflow: hidden;
+  transform: none; max-width: none; align-items: stretch; gap: calc(2 * var(--u)); }
+@container (max-height: 599px) { .mobile .feed .msg:nth-child(n+2) { display: none; } }
+@container (min-height: 600px) and (max-height: 759px) { .mobile .feed .msg:nth-child(n+3) { display: none; } }
 .mobile .feed .msg { max-width: 100%; }
-.mobile .msg { font-size: 12px; }
+.mobile .msg { padding: calc(3 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); }
 .mobile .help .card { max-height: 100%; }
+.mobile .help h2 { font-size: calc(22 * var(--u)); }
 .mobile .help-content { touch-action: pan-y; }
-/* 详情浮在上半屏底部、紧贴分屏线 */
+/* 详情浮在画面底部、紧贴卡片带 */
 .mobile .bottom { display: contents; }
-.mobile .detail { position: absolute; left: 42px; right: 42px; bottom: 50%; width: auto; max-height: 25%; overflow-y: auto; touch-action: pan-y; padding: 6px 8px; border-bottom: none; border-radius: 6px 6px 0 0; }
+.mobile .detail { position: absolute; left: calc(42 * var(--u)); right: calc(42 * var(--u)); bottom: var(--bottom); width: auto; max-height: calc(var(--split) / 2); overflow-y: auto; touch-action: pan-y; padding: calc(5 * var(--u)) calc(7 * var(--u)); border-bottom: none; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; }
 /* 左右各让出把手的宽度（把手 22px 加向内伸出的 20px 命中范围），详情不盖住把手 */
-.mobile .udetail, .mobile .sdetail { min-width: 0; font-size: 11px; }
-.mobile .sdetail { flex-direction: column; align-items: stretch; gap: 4px; }
-.mobile .sdetail .who { width: auto; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start; gap: 2px 8px; text-align: left; }
+.mobile .udetail, .mobile .sdetail { min-width: 0; font-size: max(10px, calc(11 * var(--u))); }
+.mobile .sdetail { flex-direction: column; align-items: stretch; gap: calc(4 * var(--u)); }
+.mobile .sdetail .who { width: auto; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start; gap: calc(2 * var(--u)) calc(8 * var(--u)); text-align: left; }
 .mobile .sdetail .who span { display: inline-block; }
 .mobile .sdetail .grid span { white-space: nowrap; }
 .mobile .sdetail .grid b { white-space: normal; }
-.mobile .udetail .who { width: 64px; }
+.mobile .udetail { gap: calc(8 * var(--u)); }
+.mobile .udetail .who { width: calc(60 * var(--u)); }
+.mobile .udetail .who img { width: calc(48 * var(--u)); height: calc(48 * var(--u)); }
 .mobile .udetail .rows { min-width: 0; }
 .mobile .udetail .lvrow { flex-wrap: wrap; }
 .mobile .udetail .grid { grid-template-columns: auto 1fr; }
 .mobile .sdetail .rows { min-width: 0; }
 .mobile .sdetail .picks { flex-wrap: nowrap; overflow-x: auto; touch-action: pan-x pan-y; scrollbar-width: none; }
-.mobile .sdetail .picks button { flex: none; }
+.mobile .sdetail .picks button { flex: none; width: calc(54 * var(--u)); padding: calc(3 * var(--u)) calc(2 * var(--u)); font-size: max(10px, calc(11 * var(--u))); }
+.mobile .sdetail .picks button img { width: calc(36 * var(--u)); height: calc(36 * var(--u)); }
+.mobile .sdetail .picks button i { font-size: max(10px, calc(10 * var(--u))); }
 .mobile .sdetail .acts { min-width: 0; flex-direction: row; flex-wrap: wrap; }
-/* 卡片带：编队卡片在前、兵种卡片在后，排成一行横向滑动（滚动由 CardBar 按手指位移驱动，手势方向区分滚动与拖卡片） */
-.mobile .cardwrap { position: absolute; left: 0; right: 0; top: 50%; height: var(--strip); flex-direction: row; align-items: stretch; justify-content: flex-start; gap: 0;
+/* 卡片带：最前面是「取消选择」，然后编队卡片、兵种卡片，排成一行横向滑动（滚动由 CardBar 按手指位移驱动，手势方向区分滚动与拖卡片） */
+.mobile .cardwrap { position: absolute; left: 0; right: 0; top: var(--split); height: var(--strip); flex-direction: row; align-items: stretch; justify-content: flex-start; gap: 0;
   max-width: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; touch-action: none; pointer-events: auto !important; background: rgba(22, 18, 13, 0.96); border-top: 2px solid var(--gold); }
 .mobile .cardwrap::-webkit-scrollbar { display: none; }
-.mobile .cardrow { flex: none; flex-wrap: nowrap; width: max-content; max-width: none; min-height: 0; padding: 14px 4px 6px; gap: 6px; pointer-events: auto !important; }
-.mobile .groups { padding-right: 8px; margin-right: 2px; border-right: 1px solid var(--line); }
-.mobile .unitbar .hint { white-space: normal; width: min(260px, 70vw); }
-.mobile .ucard { width: 76px; }
-.mobile .ucard img { width: 52px; height: 52px; }
-.mobile .ucard .nm { font-size: 12px; }
-.mobile .gcard { width: 66px; }
-.mobile .gcard img { width: 40px; height: 40px; }
+/* 「取消选择」与卡片同高，自己处理手指（见 bindPress）；按住时是 .down */
+.mobile .cardwrap > .desel { flex: none; align-self: center; display: flex !important; flex-direction: column; align-items: center; justify-content: center; width: calc(44 * var(--u)); height: var(--card); min-height: 0; margin-left: calc(4 * var(--u)); padding: 0;
+  font-size: max(10px, calc(11 * var(--u))); line-height: 1.25; touch-action: none; }
+.mobile .cardwrap > .desel b { font-size: calc(16 * var(--u)); line-height: 1.2; color: var(--gold); }
+.mobile .cardwrap > .desel:hover { background: rgba(255, 255, 255, 0.06); }
+.mobile .cardwrap > .desel.down { background: rgba(216, 176, 96, 0.3); }
+.mobile .cardwrap > .desel:disabled { opacity: 0.38; }
+.mobile .cardrow { flex: none; flex-wrap: nowrap; width: max-content; max-width: none; min-height: 0; padding: calc(9 * var(--u)) calc(4 * var(--u)); gap: calc(4 * var(--u)); pointer-events: auto !important; }
+.mobile .groups { padding-right: calc(6 * var(--u)); margin-right: calc(2 * var(--u)); border-right: 1px solid var(--line); }
+.mobile .unitbar .hint { white-space: normal; width: min(calc(260 * var(--u)), 70vw); padding: calc(4 * var(--u)) calc(8 * var(--u)); font-size: calc(12 * var(--u)); }
+/* 三种卡片一样大，比桌面版小 */
+.mobile .ucard { --img: calc(42 * var(--u)); width: calc(62 * var(--u)); padding: calc(3 * var(--u)) calc(2 * var(--u)) calc(4 * var(--u)); border-radius: calc(5 * var(--u)); }
+.mobile .ucard.on { transform: translateY(calc(-7 * var(--u))); }
+.mobile .ucard .nm { font-size: max(10px, calc(11 * var(--u))); }
+.mobile .ucard .n { top: 1px; right: calc(4 * var(--u)); font-size: calc(13 * var(--u)); }
+.mobile .ucard .lv { top: calc(2 * var(--u)); left: calc(4 * var(--u)); font-size: max(10px, calc(10 * var(--u))); }
+.mobile .ucard .hp { height: calc(3 * var(--u)); margin: calc(3 * var(--u)) calc(4 * var(--u)) 0; }
+.mobile .ucard .sel { bottom: calc(-8 * var(--u)); padding: 0 calc(4 * var(--u)); font-size: max(10px, calc(10 * var(--u))); line-height: calc(14 * var(--u)); }
+.mobile .gcard .gno { top: 1px; left: calc(3 * var(--u)); min-width: calc(15 * var(--u)); font-size: max(10px, calc(11 * var(--u))); line-height: calc(15 * var(--u)); }
+.mobile .acard .ah { font-size: max(10px, calc(11 * var(--u))); }
+.mobile .acard b { font-size: calc(18 * var(--u)); }
 /* 拖拽中的卡片不透明：剑叠在它后面，透出来会盖住卡片的内容 */
-.mobile .ucard.ghost { width: 76px; opacity: 1; background: #1c1610; }
+.mobile .ucard.ghost { opacity: 1; background: #1c1610; }
 .mobile .ucard.ghost.elite { background: #2e2412; }
 .mobile .ucard.ghost.nodrop { opacity: 0.55; }
-.mobile .ucard.ghost.gcard { width: 66px; }
-.mobile .ucard.acard, .mobile .ucard.ghost.acard { width: 60px; }
-.mobile .acard .ab { height: 52px; }
-/* 下半屏卡片带以下：最上面一排控制按钮（编队 1～5、取消选择，连间距占 --row；观战时没有这一排），下面摇杆在左、小地图在右并排。
-   摇杆按宽度取一份（--joy），小地图在剩下的宽度与高度里放到最大 */
-.mobile .mini { --row: 0px; --joy: min(clamp(84px, 30cqw, 132px), 100cqh - var(--row)); --map: min(100cqh - var(--row), 100cqw - var(--joy) - 12px); left: 0; right: 0; top: calc(50% + var(--strip)); bottom: 0; padding: 6px; display: flex; flex-direction: column; justify-content: center; gap: 8px; border: none; border-radius: 0; background: none; backdrop-filter: none; container-type: size; }
-.mobile .mini.hasctl { --row: 48px; }
-.mobile .minirow { flex: none; display: flex; align-items: center; justify-content: space-evenly; }
+/* 卡片带以下：最上面一排编队按钮（观战时没有这一排），下面一边是摇杆（上叠缩放条）、一边是小地图，摇杆一侧与小地图上下对齐 */
+.mobile .mini { left: 0; right: 0; top: calc(var(--split) + var(--strip)); bottom: 0; padding: var(--pad); display: flex; flex-direction: column; gap: calc(6 * var(--u)); border: none; border-radius: 0; background: none; backdrop-filter: none; }
+.mobile .minirow { flex: none; height: var(--map); display: flex; align-items: stretch; gap: calc(10 * var(--u)); }
+/* 设置里把摇杆放到右侧（惯用左手）：小地图换到左侧 */
+.mobile.stick-right .minirow { flex-direction: row-reverse; }
 .mobile .mini canvas { flex: none; width: var(--map); height: var(--map); touch-action: none; }
-/* 控制按钮自己处理手指（点一下 / 长按），按住时是 .down；触屏上 :hover 点完会一直挂着，这里不用它 */
-.mobile .ctlrow.mobile-only { display: flex !important; flex: none; gap: 6px; height: 40px; }
-.mobile .ctlrow button { flex: 1 1 0; min-width: 0; padding: 0 2px; line-height: 1.2; white-space: nowrap; touch-action: none; }
-.mobile .ctlrow button:hover { background: rgba(255, 255, 255, 0.06); }
-.mobile .ctlrow button.down { background: rgba(216, 176, 96, 0.3); }
-.mobile .ctlrow button.on, .mobile .ctlrow button.on:hover { background: var(--gold); }
-.mobile .ctlrow button.on.down { filter: brightness(0.8); }
-.mobile .ctlrow button:disabled { opacity: 0.38; }
-.mobile .ctlrow .desel { flex-grow: 1.8; }
-/* 编队按钮：队号，有人的队描金边、后面写人数 */
-.mobile .ctlrow .slot { display: flex; align-items: center; justify-content: center; gap: 3px; color: var(--dim); }
-.mobile .ctlrow .slot b { font-size: 16px; }
-.mobile .ctlrow .slot i { font-style: normal; font-size: 11px; }
-.mobile .ctlrow .slot i:empty { display: none; }
-.mobile .ctlrow .slot.has { color: var(--text); border-color: var(--gold); }
-.mobile .ctlrow .slot.on { color: #1c150b; }
-.mobile .joy { position: relative; flex: none; width: var(--joy); height: var(--joy); border-radius: 50%; border: 1px solid var(--line); background: radial-gradient(circle, rgba(216, 176, 96, 0.14), rgba(30, 24, 16, 0.92) 72%); box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6); touch-action: none; }
+/* 编队按钮自己处理手指（点一下），按住时是 .down；触屏上 :hover 点完会一直挂着，这里不用它 */
+.mobile .groupslots.mobile-only { display: flex !important; flex: none; gap: calc(4 * var(--u)); height: var(--rowh); }
+.mobile .groupslots button { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; padding: 0 calc(2 * var(--u)); line-height: 1.2; white-space: nowrap; touch-action: none; }
+/* 命中范围上下各多伸 3px（从边框内沿算，再加上不缩放的 1px 边框；上面是 .mini 的 6px 内边距，下面与缩放条之间 6px，缩放条也只往上伸 3px） */
+.mobile .groupslots button::after { content: ''; position: absolute; inset: calc(-3 * var(--u) - 1px) 0; }
+.mobile .groupslots button:hover { background: rgba(255, 255, 255, 0.06); }
+.mobile .groupslots button.down { background: rgba(216, 176, 96, 0.3); }
+.mobile .groupslots button.on, .mobile .groupslots button.on:hover { background: var(--gold); }
+.mobile .groupslots button.on.down { filter: brightness(0.8); }
+/* 编队按钮：队号，有人的队描金边、队号下面写人数 */
+.mobile .groupslots .slot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; line-height: 1; color: var(--dim); }
+.mobile .groupslots .slot b { font-size: calc(15 * var(--u)); }
+.mobile .groupslots .slot i { font-style: normal; font-size: max(10px, calc(10 * var(--u))); }
+.mobile .groupslots .slot i:empty { display: none; }
+.mobile .groupslots .slot.has { color: var(--text); border-color: var(--gold); }
+.mobile .groupslots .slot.on { color: #1c150b; }
+/* 摇杆一列：占满小地图旁边的宽度，上面是横贯整列的缩放条，下面摇杆居中；上下与小地图对齐 */
+.mobile .joycol.mobile-only { display: flex !important; flex: 1 1 0; min-width: 0; flex-direction: column; align-items: center; justify-content: space-between; gap: calc(6 * var(--u)); }
+/* 缩放条：左 − 右 +（点一下各一档），中间长条按住拖滑块 */
+.mobile .zoom { position: relative; flex: none; align-self: stretch; height: calc(30 * var(--u)); display: flex; align-items: center; border: 1px solid var(--line); border-radius: calc(15 * var(--u)); background: rgba(30, 24, 16, 0.92); touch-action: none; }
+/* 命中范围上下各多伸 3px（从边框内沿算，再加上不缩放的 1px 边框；与编队排、摇杆之间各只有 6px） */
+.mobile .zoom::before { content: ''; position: absolute; inset: calc(-3 * var(--u) - 1px) 0; }
+.mobile .zoom.on { border-color: var(--gold); }
+/* 两端的 − / + 各宽 38px、用竖线与长条隔开：点偏一点仍是一档，不落到长条上跳到头；按住的那一端单独亮起 */
+.mobile .zoom b { flex: none; align-self: stretch; display: flex; align-items: center; justify-content: center; width: calc(38 * var(--u)); font-size: calc(17 * var(--u)); font-weight: 600; line-height: 1; text-align: center; color: var(--gold); pointer-events: none; }
+.mobile .zoom b:first-child { border-right: 1px solid var(--line); border-radius: calc(14 * var(--u)) 0 0 calc(14 * var(--u)); }
+.mobile .zoom b:last-child { border-left: 1px solid var(--line); border-radius: 0 calc(14 * var(--u)) calc(14 * var(--u)) 0; }
+.mobile .zoom b.down { background: rgba(216, 176, 96, 0.3); color: var(--text); }
+.mobile .ztrack { position: relative; flex: 1; min-width: 0; height: 100%; pointer-events: none; }
+.mobile .ztrack::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: calc(4 * var(--u)); margin-top: calc(-2 * var(--u)); border-radius: calc(2 * var(--u)); background: rgba(216, 176, 96, 0.3); }
+/* 滑块：左端最远（--f = 0）、右端最近（1） */
+.mobile .ztrack i { position: absolute; top: 50%; left: calc(var(--f, 0) * (100% - calc(20 * var(--u)))); width: calc(20 * var(--u)); height: calc(20 * var(--u)); margin-top: calc(-10 * var(--u)); border-radius: 50%; border: 1px solid #1a1208;
+  background: radial-gradient(circle at 36% 30%, #ecd092, #a67c2e); box-shadow: 0 1px calc(4 * var(--u)) rgba(0, 0, 0, 0.55); pointer-events: none; }
+.mobile .zoom.on .ztrack i { filter: brightness(1.15); }
+.mobile .joy { position: relative; flex: none; width: var(--joy); height: var(--joy); border-radius: 50%; border: 1px solid var(--line); background: radial-gradient(circle, rgba(216, 176, 96, 0.14), rgba(30, 24, 16, 0.92) 72%); box-shadow: inset 0 0 calc(12 * var(--u)) rgba(0, 0, 0, 0.6); touch-action: none; }
 .mobile .joy.on { border-color: var(--gold); }
-.mobile .joy i { position: absolute; left: 28%; top: 28%; width: 44%; height: 44%; border-radius: 50%; border: 1px solid #1a1208; background: radial-gradient(circle at 36% 30%, #ecd092, #a67c2e); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55); pointer-events: none; will-change: transform; }
-/* 抽屉与把手 */
+.mobile .joy i { position: absolute; left: 28%; top: 28%; width: 44%; height: 44%; border-radius: 50%; border: 1px solid #1a1208; background: radial-gradient(circle at 36% 30%, #ecd092, #a67c2e); box-shadow: 0 calc(2 * var(--u)) calc(6 * var(--u)) rgba(0, 0, 0, 0.55); pointer-events: none; will-change: transform; }
+/* 抽屉与把手：抽屉从顶栏下一直到屏幕底，滑出时盖住卡片带、摇杆与小地图 */
 .mobile .rightcol { display: contents; }
 .scrim { display: none; }
 .mobile .scrim.show { display: block; position: absolute; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.3); }
-.mobile .drawer { position: absolute; top: var(--bar); bottom: 50%; z-index: 30; width: min(78%, 320px); overflow-y: auto; touch-action: pan-y; visibility: hidden; transition: transform 0.18s ease-out, visibility 0s 0.18s; }
-.mobile .drawer.left { left: 0; flex: none; transform: translateX(-102%); border-left: none; border-right: 1px solid var(--line); border-radius: 0 6px 6px 0; }
-.mobile .drawer.right { right: 0; transform: translateX(102%); border-right: none; border-left: 1px solid var(--line); border-radius: 6px 0 0 6px; }
+.mobile .drawer { position: absolute; top: var(--bar); bottom: 0; z-index: 30; background: rgba(20, 16, 12, 0.96); width: min(80%, calc(320 * var(--u))); overflow-y: auto; touch-action: pan-y; visibility: hidden; transition: transform 0.18s ease-out, visibility 0s 0.18s; }
+.mobile .drawer.left { left: 0; flex: none; transform: translateX(-102%); padding: calc(4 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u)) calc(6 * var(--u)); border-left: none; border-bottom: none; border-right: 1px solid var(--line); border-radius: 0 calc(6 * var(--u)) 0 0; }
+.mobile .drawer.right { right: 0; transform: translateX(102%); gap: calc(8 * var(--u)); padding: calc(6 * var(--u)) calc(6 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u)); border-right: none; border-bottom: none; border-left: 1px solid var(--line); border-radius: calc(6 * var(--u)) 0 0 0; }
 .mobile .drawer.left.open, .mobile .drawer.right.open { visibility: visible; transform: none; transition-delay: 0s; }
 .mobile .drawer .list { overflow: visible; }
 .mobile .sites.folded .list { display: block; }
-.mobile .sites .fold { pointer-events: none; }
+.mobile .sites .fold { pointer-events: none; margin-bottom: calc(2 * var(--u)); font-size: calc(12 * var(--u)); }
+.mobile .sites h3 { font-size: calc(12 * var(--u)); }
+.mobile .site .dot { width: calc(9 * var(--u)); height: calc(9 * var(--u)); }
 .mobile .sites .fold i { display: none; }
 .mobile .sites .fold b::before, .mobile .sites.folded .fold b::before { content: ''; }
-.mobile .site { min-height: 40px; padding: 4px; font-size: 13px; }
-.mobile .chips { gap: 6px; }
-.mobile .chip { display: flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 4px 10px; font-size: 14px; }
-.mobile .handle { position: absolute; top: calc(25% - 36px); z-index: 10; width: 22px; height: 72px; background: var(--panel); border: 1px solid var(--line); }
-.mobile .handle.left { left: 0; border-radius: 0 10px 10px 0; border-left: none; }
-.mobile .handle.right { right: 0; border-radius: 10px 0 0 10px; border-right: none; }
+.mobile .site { min-height: calc(40 * var(--u)); padding: calc(4 * var(--u)); font-size: calc(13 * var(--u)); }
+.mobile .chips { gap: calc(6 * var(--u)); }
+.mobile .chip i { font-size: max(10px, calc(10 * var(--u))); }
+.mobile .chip { display: flex; align-items: center; justify-content: center; min-width: calc(40 * var(--u)); min-height: calc(40 * var(--u)); padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(14 * var(--u)); }
+.mobile .cgrid { gap: calc(6 * var(--u)); }
+.mobile .cmds button { padding: calc(4 * var(--u)) calc(8 * var(--u)); }
+.mobile .csec h3 { margin-bottom: calc(4 * var(--u)); }
+.mobile .handle { position: absolute; top: calc(var(--split) / 2 - calc(36 * var(--u))); z-index: 10; width: calc(22 * var(--u)); height: calc(72 * var(--u)); background: var(--panel); border: 1px solid var(--line); }
+.mobile .handle.left { left: 0; border-radius: 0 calc(10 * var(--u)) calc(10 * var(--u)) 0; border-left: none; }
+.mobile .handle.right { right: 0; border-radius: calc(10 * var(--u)) 0 0 calc(10 * var(--u)); border-right: none; }
 /* 命中范围向内多伸出去一截，凑够手指能点的宽度；把手贴着屏幕边，靠边的一侧不用伸 */
-.mobile .handle.left::after { content: ''; position: absolute; top: -8px; bottom: -8px; left: 0; right: -20px; }
-.mobile .handle.right::after { content: ''; position: absolute; top: -8px; bottom: -8px; right: 0; left: -20px; }
-.mobile .handle i { position: absolute; top: 50%; left: 50%; width: 4px; height: 28px; margin: -14px 0 0 -2px; border-radius: 2px; background: var(--gold); opacity: 0.7; }
+.mobile .handle.left::after { content: ''; position: absolute; top: calc(-8 * var(--u)); bottom: calc(-8 * var(--u)); left: 0; right: calc(-20 * var(--u)); }
+.mobile .handle.right::after { content: ''; position: absolute; top: calc(-8 * var(--u)); bottom: calc(-8 * var(--u)); right: 0; left: calc(-20 * var(--u)); }
+.mobile .handle i { position: absolute; top: 50%; left: 50%; width: calc(4 * var(--u)); height: calc(28 * var(--u)); margin: calc(-14 * var(--u)) 0 0 calc(-2 * var(--u)); border-radius: calc(2 * var(--u)); background: var(--gold); opacity: 0.7; }
 .mobile .cgrid button i { display: none; }

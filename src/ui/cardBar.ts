@@ -1,5 +1,6 @@
 /**
  * 底部的卡片：兵种栏最左的全选卡片（屏幕内的全部己方部队）、兵种卡片（屏幕内以及已选中的每个己方兵种一张）与其上方一排编队卡片（每个还有活人的编队一张）。
+ * 没选中的卡片按屏幕内的人数，选中后改按选中的人、不再随屏幕变化：移动镜头不会让选中的人从卡片上掉出去。
  * 卡片直接浮在画面底部、不包外框，卡片之间的空隙就是画面：从画面上拉的框扫到卡片时，game 用 `cardsIn` 把这些兵种 / 编队并进框选。
  * 点击选择；按住拖动时卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）。
  * 移动版用手指拖时卡片立在手指上方（下沿压在手指下），另画一把剑从卡片顶上伸出去，剑尖所指才是落点。
@@ -11,9 +12,9 @@ import SWORD from './sword.svg?raw';
 import { unitTip } from './unitText';
 
 export interface CardBarCallbacks {
-  /** 点兵种卡片：replace = 改选屏幕内这个兵种；toggle = 选着就去掉、没选就加上；map = 选中全图的这个兵种（双击） */
+  /** 点兵种卡片：replace = 改选这张卡片代表的人（选中的兵种是选中的这些人，没选中的是屏幕内的）；toggle = 选着就去掉、没选就加上；map = 选中全图的这个兵种（双击） */
   pickTypes(types: number[], mode: 'replace' | 'toggle' | 'map'): void;
-  /** 点全选卡片：replace = 改选屏幕内的全部己方部队；add = 加选它们；map = 选中全图的己方部队（双击） */
+  /** 点全选卡片：replace = 改选它代表的人（选中态时是选中的人，否则是屏幕内的全部己方部队）；add = 加选屏幕内的；map = 选中全图的己方部队（双击） */
   pickAll(mode: 'replace' | 'add' | 'map'): void;
   /** 点编队卡片：选中这一队；jump = 双击，镜头再跳到这队 */
   selectGroup(g: number, jump: boolean): void;
@@ -40,6 +41,16 @@ export interface Rect {
   by: number;
 }
 
+/**
+ * 选择变成 list 那一刻（不是点全选卡片选出来的时候），全选卡片是否处于选中态：屏幕内的己方单位（screen）全都被选着。
+ * 屏幕内一个人都没有时谈不上「都选着」，不算。定下后不随镜头变
+ */
+export function allCardPicked(list: number[], screen: number[]): boolean {
+  if (!list.length) return false;
+  const picked = new Set(list);
+  return screen.length > 0 && screen.every(s => picked.has(s));
+}
+
 /** 卡片元素是哪种卡片 */
 function kindOf(c: HTMLElement): CardKind {
   return c.dataset.all !== undefined ? 'all' : c.dataset.g !== undefined ? 'group' : 'type';
@@ -64,14 +75,16 @@ export class CardBar {
   private readonly cleanup: (() => void)[] = [];
   /** 移动版：卡片带横向滚动，按住后按方向区分是滚动还是拖卡片下令；拖拽中从手指伸出一把剑，剑尖是落点 */
   mobile = false;
+  /** 移动版的小地图在哪一侧（1 右、−1 左）：拖卡片时手指贴近屏幕底，剑往这一侧放倒 */
+  mapSide: 1 | -1 = 1;
 
   /**
    * area：两排卡片所在的容器（指针捕获挂在它上面）；overlay：拖拽中的卡片挂在这里；
-   * minimap：小地图画布，松在它上面算投到小地图
+   * minimap：小地图画布，松在它上面算投到小地图；topbar：顶栏，移动版拖拽中的卡片不往上盖住它
    */
   constructor(private readonly world: World, private readonly portrait: (defIdx: number, team: number) => string,
     private readonly minimap: HTMLCanvasElement, private readonly overlay: HTMLElement, private readonly cb: CardBarCallbacks,
-    area: HTMLElement) {
+    area: HTMLElement, private readonly topbar: HTMLElement | null = null) {
     this.groupRow = el('div', 'cardrow groups');
     this.groupRow.hidden = true;
     this.roster = el('div', 'cardrow unitbar');
@@ -82,9 +95,13 @@ export class CardBar {
     return this.held || this.boxing;
   }
 
-  update(sel: number[], screen: number[]): void {
+  /**
+   * sel：选中的单位；screen：屏幕内的己方单位；
+   * allPicked：全选卡片处于选中态，代表的是选中的人（由 game 在选择变化时定下，之后不随屏幕变）
+   */
+  update(sel: number[], screen: number[], allPicked = false): void {
     if (this.frozen) return;
-    this.renderRoster(sel, screen);
+    this.renderRoster(sel, screen, allPicked);
     this.renderGroups(sel);
   }
 
@@ -97,8 +114,8 @@ export class CardBar {
     for (const f of this.cleanup) f();
   }
 
-  /** 兵种栏：屏幕内（以及已选中）的每个己方兵种一张卡片；选中的兵种卡片上前一步 */
-  private renderRoster(sel: number[], screen: number[]): void {
+  /** 兵种栏：屏幕内（以及已选中）的每个己方兵种一张卡片；选中的兵种卡片上前一步，人数写选中的 */
+  private renderRoster(sel: number[], screen: number[], allOn: boolean): void {
     const w = this.world;
     interface Row { scr: number; n: number; hp: number; lv: number; top: number; morale: number }
     const rows = new Map<number, Row>();
@@ -129,48 +146,51 @@ export class CardBar {
     }
     const types = [...rows.keys()].sort((a, b) => UNITS[a].row - UNITS[b].row || a - b);
     const mAvg = sel.length ? Math.round(moraleSum / sel.length) : 0;
-    // 全选卡片在屏幕内的人全都选着时上前一步
-    const picked = new Set(sel);
-    const allOn = screen.length > 0 && screen.every(s => picked.has(s));
-    let key = `${this.mobile}|${w.humanTeam}|${sel.length}|${screen.length}|${Math.round(mAvg / 4)}|${allOn}|`;
+    const allN = allOn ? sel.length : screen.length;
+    let key = `${this.mobile}|${w.humanTeam}|${sel.length}|${allN}|${Math.round(mAvg / 4)}|${allOn}|`;
     for (const t of types) {
       const r = rows.get(t)!, k = r.n || r.scr;
-      key += `${t}:${r.scr}:${r.n}:${Math.round((r.hp / k) * 20)}:${Math.round((r.lv / k) * 4)}:${r.top},`;
+      key += `${t}:${r.n ? 0 : r.scr}:${r.n}:${Math.round((r.hp / k) * 20)}:${Math.round((r.lv / k) * 4)}:${r.top},`;
     }
     if (key === this.rosterKey) return;
     this.rosterKey = key;
     if (!w.humanTeam) {
-      this.roster.innerHTML = `<div class="hint">观战模式：${this.mobile ? '推摇杆、拖动小地图或双指滑动移动镜头，双指捏合缩放' : '方向键 / 拖动小地图移动镜头，滚轮缩放'}</div>`;
+      this.roster.innerHTML = `<div class="hint">观战模式：${this.mobile ? '推摇杆、拖动小地图或双指滑动移动镜头，双指捏合或拉缩放条缩放' : '方向键 / 拖动小地图移动镜头，滚轮缩放'}</div>`;
       return;
     }
     if (!types.length) {
       this.roster.innerHTML = `<div class="hint">屏幕内没有我方部队 · 拖框选择部队 · ${this.mobile ? '点地面移动或攻击' : '右键移动或攻击'} · 点据点可升级</div>`;
       return;
     }
-    const allTip = `屏幕内 ${screen.length} 人${sel.length ? `，已选 ${sel.length} 人，平均士气 ${mAvg}` : ''}`
-      + '\n—\n点击：选中屏幕内的全部部队　Shift+点击：加选它们　双击：选中全图的部队'
-      + '\n拖到地面或小地图上松开：这些部队攻击移动过去，松在敌军身上则攻击它　从画面上拉框扫过卡片：一并选中它们';
-    // 屏幕内没人（选着的全在屏幕外）时全选卡片变暗、按下不响应（见 bind）：点它只会把选择清空
-    let html = `<div class="ucard acard${allOn ? ' on' : ''}${screen.length ? '' : ' off'}" data-all="1" title="${allTip}">
-      <span class="ab"><span class="ah">全选</span><b>${screen.length}</b></span>
+    const allTip = (allOn ? `已选 ${sel.length} 人（选中后不随屏幕变化），平均士气 ${mAvg}`
+      : `屏幕内 ${screen.length} 人${sel.length ? `，已选 ${sel.length} 人，平均士气 ${mAvg}` : ''}`)
+      + (allOn ? '\n—\nShift+点击：加选屏幕内的部队　双击：选中全图的部队\n拖到地面或小地图上松开：选中的部队攻击移动过去，松在敌军身上则攻击它'
+        : '\n—\n点击：选中屏幕内的全部部队　Shift+点击：加选它们　双击：选中全图的部队'
+        + '\n拖到地面或小地图上松开：屏幕内的部队攻击移动过去，松在敌军身上则攻击它')
+      + '　从画面上拉框扫过卡片：一并选中它们';
+    // 没选中、屏幕内又没人时全选卡片变暗、按下不响应（见 bind）：点它只会把选择清空
+    let html = `<div class="ucard acard${allOn ? ' on' : ''}${allN ? '' : ' off'}" data-all="1" title="${allTip}">
+      <span class="ab"><span class="ah">全选</span><b>${allN}</b></span>
       ${sel.length ? `<span class="nm mor${mAvg < 40 ? ' bad' : mAvg < 55 ? ' warn' : ''}">士气 ${mAvg}</span>` : '<span class="nm">拖去下令</span>'}
       <span class="hp"></span>
-      ${sel.length ? `<span class="sel">选 ${sel.length}</span>` : ''}</div>`;
+      ${sel.length && !allOn ? `<span class="sel">选 ${sel.length}</span>` : ''}</div>`;
     for (const t of types) {
       const r = rows.get(t)!, d = UNITS[t], k = r.n || r.scr;
       const lv = Math.round(r.lv / k);
       const routAt = d.lvRout[lv];
-      const tip = `${unitTip(d)}\n—\n屏幕内 ${r.scr} 人${r.n ? `，已选 ${r.n} 人` : ''}　平均等级 ${lv + 1}（${LEVELS.names[lv]}），最高 ${r.top + 1} 级`
+      const tip = `${unitTip(d)}\n—\n${r.n ? `已选 ${r.n} 人（选中后不随屏幕变化）` : `屏幕内 ${r.scr} 人`}　平均等级 ${lv + 1}（${LEVELS.names[lv]}），最高 ${r.top + 1} 级`
         + `　士气 ${Math.round(r.morale / k)}　${routAt < 0 ? '死战不退' : `低于 ${routAt} 溃逃`}`
-        + '\n—\n点击：选中屏幕内的这个兵种　Shift+点击：加选 / 去掉　双击：选中全图的这个兵种'
-        + '\n拖到地面或小地图上松开：这个兵种攻击移动过去，松在敌军身上则攻击它　从画面上拉框扫过卡片：一并选中这些兵种';
+        + (r.n ? '\n—\n点击：只留下选中的这个兵种　Shift+点击：去掉它们　双击：选中全图的这个兵种'
+          + '\n拖到地面或小地图上松开：选中的这个兵种攻击移动过去，松在敌军身上则攻击它'
+          : '\n—\n点击：选中屏幕内的这个兵种　Shift+点击：加选　双击：选中全图的这个兵种'
+          + '\n拖到地面或小地图上松开：屏幕内的这个兵种攻击移动过去，松在敌军身上则攻击它')
+        + '　从画面上拉框扫过卡片：一并选中这些兵种';
       html += `<div class="ucard${d.tier ? ' elite' : ''}${r.n ? ' on' : ''}" data-t="${t}" title="${tip.replace(/"/g, '&quot;')}">
         <img src="${this.portrait(t, w.humanTeam)}" draggable="false">
-        <span class="n">${r.scr}</span>
+        <span class="n">${r.n || r.scr}</span>
         <span class="nm">${d.name}</span>
         <span class="lv">Lv${lv + 1}</span>
-        <span class="hp"><u style="width:${Math.round((r.hp / k) * 100)}%"></u></span>
-        ${r.n ? `<span class="sel">选 ${r.n}</span>` : ''}</div>`;
+        <span class="hp"><u style="width:${Math.round((r.hp / k) * 100)}%"></u></span></div>`;
     }
     this.roster.innerHTML = html;
   }
@@ -247,7 +267,7 @@ export class CardBar {
   }
 
   /**
-   * 点击：全选卡片选屏幕内的全部部队（Shift 加选，双击选全图），兵种卡片选屏幕内这个兵种（Shift 加选 / 去掉，双击选全图），
+   * 点击：全选卡片、兵种卡片选它代表的人（没选中时是屏幕内的，选中后是选中的；Shift 加选 / 去掉，双击选全图），
    * 编队卡片选这一队（双击跳镜头）；
    * 按住拖动：卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）；松在别处、按右键、按 Esc、窗口失去焦点都取消。
    * 移动版（手指拖）：按住后横向位移明显占主导是滚动卡片带（area 自己是滚动容器），否则是拖卡片；滚动中手指竖向离开了卡片带也改成拖卡片。
@@ -257,6 +277,7 @@ export class CardBar {
     let down: { card: HTMLElement | null; x: number; y: number; add: boolean; id: number; scroll0: number;
       intent: 'wait' | 'drag' | 'scroll' } | null = null;
     let ghost: HTMLElement | null = null;
+    let topEdge = -Infinity;
     // 移动版拖卡片时指着落点的剑（桌面版落点就是鼠标指针，本来就是剑）
     const sword = el('div', 'dragptr');
     sword.innerHTML = SWORD;
@@ -271,7 +292,7 @@ export class CardBar {
     /** 指针在 (x, y) 时的落点：桌面版就是鼠标位置；移动版是剑尖，在手指外面（见 dropOffset） */
     const dropAt = (x: number, y: number): { x: number; y: number } => {
       if (!this.mobile) return { x, y };
-      const o = dropOffset(y, this.overlay.getBoundingClientRect().bottom);
+      const o = dropOffset(y, this.overlay.getBoundingClientRect().bottom, this.mapSide);
       return { x: x + o.x, y: y + o.y };
     };
     /** 松手算不算下令：移动版里手指要离开按下处一段才算（见 DROP_ARM），拖回按下处松手即取消 */
@@ -280,15 +301,19 @@ export class CardBar {
     const place = (x: number, y: number): void => {
       if (!ghost || !down) return;
       const p = dropAt(x, y), ok = armed(down, x, y) && !!target(p.x, p.y);
+      const scr = this.overlay.getBoundingClientRect();
       if (this.mobile) {
         // 卡片立在手指上方、左右居中（不伸出屏幕）：上沿在手指上方、离剑的长度差 SWORD_OUT，所以剑朝上时剑尖从卡片顶上伸出这么多；
-        // 卡片比这段高，下沿压在手指下，露在手指上方的是卡片的内容
-        const scr = this.overlay.getBoundingClientRect(), w = ghost.offsetWidth * TOUCH_GHOST_SCALE;
+        // 卡片比这段高，下沿压在手指下，露在手指上方的是卡片的内容。手指贴近屏幕顶时卡片停在顶栏下沿，不盖住顶栏，剑照旧指着落点
+        const w = ghost.offsetWidth * TOUCH_GHOST_SCALE;
         const gx = Math.max(scr.left, Math.min(scr.right - w, x - w / 2));
-        ghost.style.transform = `translate(${gx}px, ${y - DROP_REACH + SWORD_OUT}px) scale(${TOUCH_GHOST_SCALE})`;
+        ghost.style.transform = `translate(${gx}px, ${Math.max(scr.top, topEdge, y - DROP_REACH + SWORD_OUT)}px) scale(${TOUCH_GHOST_SCALE})`;
       } else {
-        // 卡片跟在鼠标右下方
-        ghost.style.transform = `translate(${p.x + 14}px, ${p.y + 14}px) scale(${GHOST_SCALE})`;
+        // 卡片跟在鼠标右下方；靠右边、底边放不下时换到鼠标的左边、上边，不伸出屏幕
+        const w = ghost.offsetWidth * GHOST_SCALE, h = ghost.offsetHeight * GHOST_SCALE;
+        const gx = p.x + 14 + w <= scr.right ? p.x + 14 : p.x - 14 - w;
+        const gy = p.y + 14 + h <= scr.bottom ? p.y + 14 : p.y - 14 - h;
+        ghost.style.transform = `translate(${gx}px, ${gy}px) scale(${GHOST_SCALE})`;
       }
       ghost.classList.toggle('nodrop', !ok);
       // 剑图里剑尖朝左上、剑身沿 45° 斜下去：转到剑柄正对手指
@@ -302,6 +327,7 @@ export class CardBar {
       down = null;
       ghost?.remove();
       ghost = null;
+      this.overlay.classList.remove('dragging');
       sword.remove();
       this.held = false;
       this.rosterKey = this.groupKey = '?';
@@ -335,6 +361,8 @@ export class CardBar {
       stop();
     };
     area.addEventListener('pointerdown', e => {
+      // 卡片带里的按钮（移动版的「取消选择」）自己处理手指，不当作按在卡片带上
+      if ((e.target as HTMLElement).closest('button')) return;
       let card = (e.target as HTMLElement).closest<HTMLElement>('.cardrow .ucard');
       // 禁用的卡片（屏幕内没人的全选卡片）：桌面版在这里吃掉，不能放给底下的画面（会变成点选、框选或指令模式里的下令）；
       // 移动版当作按在空隙上，只能滚动卡片带
@@ -395,6 +423,10 @@ export class CardBar {
         }
         ghost.classList.remove('hover', 'hot', 'on');
         ghost.classList.add('ghost');
+        // 拖拽期间顶栏盖过卡片与剑（样式表里按 dragging 提层级）：剑朝上伸进顶栏时不压住顶栏上的字
+        this.overlay.classList.add('dragging');
+        // 移动版顶栏的下沿：拖拽中的卡片不往上盖住它（没有顶栏就是 overlay 的上沿）
+        topEdge = this.mobile && this.topbar ? this.topbar.getBoundingClientRect().bottom : -Infinity;
         this.overlay.appendChild(ghost);
         if (this.mobile) this.overlay.appendChild(sword);
       }

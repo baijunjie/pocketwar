@@ -157,24 +157,94 @@ export class Minimap {
     c.stroke();
     c.restore();
     c.restore();
+    this.drawWeather();
     this.drawWind();
+  }
+
+  /**
+   * 圆外空角里的角标底圆（right：右上角，否则左上角），画完把原点挪到圆心并缩放到半径 13 的坐标，接着按这个尺度画图标（调用方负责 save / restore）。
+   * 角上的空地沿对角线只有半径的 √2−1 倍：小地图小时角标跟着缩小、往角里收，不压到地图圆面上
+   */
+  private cornerBadge(right: boolean, fill = 'rgba(12, 10, 8, 0.78)'): void {
+    const c = this.ctx, S = this.size;
+    // 角标外沿离角落（沿对角线）不超过空地减 1px：(r + 2)·√2 + r ≤ (√2 − 1)·S/2 − 1
+    const r = Math.max(6, Math.min(13, ((Math.SQRT2 - 1) * (S / 2) - 1 - 2 * Math.SQRT2) / (Math.SQRT2 + 1)));
+    const off = r + 2, cx = right ? S - off : off;
+    c.fillStyle = fill;
+    c.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    c.lineWidth = 1;
+    c.beginPath();
+    c.arc(cx, off, r, 0, Math.PI * 2);
+    c.fill();
+    c.stroke();
+    c.translate(cx, off);
+    c.scale(r / 13, r / 13);
+  }
+
+  /** 左上角（圆外的空角）画天气：雪、雨、晴（白天太阳、夜里月亮），夜里底色偏蓝 */
+  private drawWeather(): void {
+    const env = this.world.env, c = this.ctx;
+    c.save();
+    this.cornerBadge(false, env.night ? 'rgba(28, 36, 72, 0.85)' : undefined);
+    c.lineCap = 'round';
+    if (env.snowing) {
+      // 六瓣雪花
+      c.strokeStyle = '#e6eef8';
+      c.lineWidth = 1.6;
+      c.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = (i * Math.PI) / 3 + Math.PI / 2, dx = Math.cos(a) * 7, dy = Math.sin(a) * 7;
+        c.moveTo(-dx, -dy);
+        c.lineTo(dx, dy);
+      }
+      c.stroke();
+    } else if (env.raining) {
+      // 三道斜着落下的雨
+      c.strokeStyle = '#a9c8ea';
+      c.lineWidth = 1.8;
+      c.beginPath();
+      for (const x of [-5, 0, 5]) {
+        const y = x === 0 ? -1 : 1;
+        c.moveTo(x + 2, y - 5);
+        c.lineTo(x - 2, y + 4);
+      }
+      c.stroke();
+    } else if (env.night) {
+      // 月牙：亮圆挖掉偏右上的一块（裁在亮圆以内，挖的那个圆伸出去的部分不画）
+      c.fillStyle = '#e8e2c4';
+      c.beginPath();
+      c.arc(0, 0, 7, 0, Math.PI * 2);
+      c.clip();
+      c.beginPath();
+      c.arc(0, 0, 7, 0, Math.PI * 2);
+      c.arc(3.5, -2.5, 6, 0, Math.PI * 2);
+      c.fill('evenodd');
+    } else {
+      // 太阳：圆心加一圈光芒
+      c.fillStyle = c.strokeStyle = '#f0c64a';
+      c.beginPath();
+      c.arc(0, 0, 4, 0, Math.PI * 2);
+      c.fill();
+      c.lineWidth = 1.6;
+      c.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const a = (i * Math.PI) / 4, cs = Math.cos(a), sn = Math.sin(a);
+        c.moveTo(cs * 6.5, sn * 6.5);
+        c.lineTo(cs * 9, sn * 9);
+      }
+      c.stroke();
+    }
+    c.restore();
   }
 
   /** 右上角（圆外的空角）画风向：箭头指向风吹去的方向，随小地图一起转；无风不画 */
   private drawWind(): void {
     const env = this.world.env, k = env.wind;
     if (k <= 0.02) return;
-    const c = this.ctx, S = this.size;
-    const cx = S - 15, cy = 15, a = env.windDir + this.yaw;
+    const c = this.ctx;
+    const a = env.windDir + this.yaw;
     c.save();
-    c.fillStyle = 'rgba(12, 10, 8, 0.78)';
-    c.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-    c.lineWidth = 1;
-    c.beginPath();
-    c.arc(cx, cy, 13, 0, Math.PI * 2);
-    c.fill();
-    c.stroke();
-    c.translate(cx, cy);
+    this.cornerBadge(true);
     c.rotate(a);
     // 风越大箭头越长、越亮
     const len = 5 + k * 4;

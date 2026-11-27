@@ -30,6 +30,9 @@ export class FakeEl extends EventTarget {
   textContent = '';
   scrollLeft = 0;
   offsetWidth = 0;
+  offsetHeight = 0;
+  /** 直接赋值的点击处理（`el.onclick = ...`）；假 DOM 不自动触发，测试里手动调 */
+  onclick: ((e: Event) => void) | null = null;
   rect: FakeRect = rectOf(0, 0, 0, 0);
   /** 当前持有指针捕获的 pointerId（没有是 null） */
   captured: number | null = null;
@@ -63,6 +66,7 @@ export class FakeEl extends EventTarget {
       this.appendChild(c);
     }
   }
+  get firstElementChild(): FakeEl | null { return this.children[0] ?? null; }
   get lastElementChild(): FakeEl | null { return this.children[this.children.length - 1] ?? null; }
 
   get className(): string { return [...this.cls].join(' '); }
@@ -78,6 +82,11 @@ export class FakeEl extends EventTarget {
     return c;
   }
   append(...cs: FakeEl[]): void { cs.forEach(c => this.appendChild(c)); }
+  prepend(...cs: FakeEl[]): void {
+    for (const c of cs) c.remove();
+    for (const c of cs) c.parent = this;
+    this.children.unshift(...cs);
+  }
   remove(): void {
     if (!this.parent) return;
     this.parent.children.splice(this.parent.children.indexOf(this), 1);
@@ -90,10 +99,11 @@ export class FakeEl extends EventTarget {
   hasPointerCapture(id: number): boolean { return this.captured === id; }
   releasePointerCapture(id: number): void { if (this.captured === id) this.captured = null; }
 
-  /** 只认 `.类名` 与 `.a .b`（取最后一段的类名向上找），够这里用 */
+  /** 只认 `.类名`、标签名（如 `button`）与 `.a .b`（取最后一段向上找），够这里用 */
   closest(sel: string): FakeEl | null {
-    const last = sel.trim().split(/\s+/).pop()!.replace(/^\./, '');
-    for (let n: FakeEl | null = this; n; n = n.parent) if (n.classList.contains(last)) return n;
+    const last = sel.trim().split(/\s+/).pop()!;
+    const match = (n: FakeEl): boolean => (last.startsWith('.') ? n.classList.contains(last.slice(1)) : n.tagName === last);
+    for (let n: FakeEl | null = this; n; n = n.parent) if (match(n)) return n;
     return null;
   }
   /** 只认 `.类名`，深度优先 */
@@ -113,6 +123,7 @@ export class FakeEl extends EventTarget {
     Object.assign(c.style, this.style);
     c.html = this.html;
     c.offsetWidth = this.offsetWidth;
+    c.offsetHeight = this.offsetHeight;
     if (deep) for (const k of this.children) c.appendChild(k.cloneNode(true));
     return c;
   }

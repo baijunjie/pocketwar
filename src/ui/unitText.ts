@@ -1,4 +1,4 @@
-/** 兵种的文字说明：悬停提示（兵种卡片、营寨选兵、主菜单、详情面板共用）与面板数值的写法 */
+/** 兵种的文字说明：悬停提示（兵种卡片、营寨选兵、主菜单、详情面板共用），以及面板与界面上数值的写法 */
 import { AURA_KINDS, ELITE, RULES, SIZES, UNITS, UnitAura, UnitDef, unitKind } from '../sim/defs';
 import { unitUpgradeCost } from '../sim/systems/economy';
 
@@ -13,6 +13,13 @@ export function auraPct(a: UnitAura): string {
 /** 光环的加成写成「所受远程伤害 −20%」 */
 export function auraEffect(a: UnitAura): string {
   return `${AURA_KINDS[a.kind].name} ${auraPct(a)}`;
+}
+
+/** 窄地方写的人数、资源：上千写成「1.4k」，上万写成「12k」，向下取，不把没到的数写大 */
+export function compactNum(v: number): string {
+  const n = Math.floor(v);
+  if (n < 1000) return String(n);
+  return n < 10000 ? `${Math.floor(n / 100) / 10}k` : `${Math.floor(n / 1000)}k`;
 }
 
 /** 面板与兵种提示的数值保留一位小数（级数算出来的攻击、间隔、冲撞伤害是无限小数） */

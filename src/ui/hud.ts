@@ -14,8 +14,10 @@ import { TAP_SLOP, UiMode, swipeDir } from '../touchInput';
 import { loadPref, savePref } from '../prefs';
 import { CardBar, CardBarCallbacks } from './cardBar';
 import { Joystick } from './joystick';
-import { ControlRow } from './controlRow';
-import { auraPct, num, rangeText, unitTip } from './unitText';
+import { GroupSlots, GROUP_SLOTS } from './groupSlots';
+import { ZoomSlider } from './zoomSlider';
+import { bindPress } from './pressable';
+import { auraPct, compactNum, num, rangeText, unitTip } from './unitText';
 
 /** 城池、营寨名字后面的星数 = 据点等级；其他据点不能升级，不显示。compact：据点列表里写成「★3」省地方 */
 function starsHtml(s: Site, compact = false): string {
@@ -60,8 +62,10 @@ export type UpgradeAction = 'sel' | 'all' | 'cities' | 'camps';
 
 export interface HudCallbacks extends CardBarCallbacks {
   command(cmd: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow' | 'deselect'): void;
-  /** 移动版的编队按钮（见 ControlRowCallbacks.groupSlot） */
-  groupSlot(g: number, assign: boolean): void;
+  /** 移动版的编队按钮：把所选部队编为第 g 队 */
+  groupSlot(g: number): void;
+  /** 移动版的缩放条：把镜头缩放到缩放条上的位置 f（0 = 最远、1 = 最近，见 camInput 的 fracToZoom） */
+  zoomTo(f: number): void;
   /** 点了某个升级按钮 */
   upgrade(act: UpgradeAction): void;
   /** 选中一个据点（-1 = 取消） */
@@ -93,6 +97,9 @@ const WHEEL_MODES: { mode: WheelMode; label: string; tip: string }[] = [
   { mode: 'mouse', label: '鼠标', tip: '滚轮缩放镜头' },
 ];
 
+/** 移动版的摇杆在哪一侧（小地图在另一侧），设置里改、会记住 */
+export type StickSide = 'left' | 'right';
+
 /** 设置面板里「界面」的选项 */
 const UI_MODES: { mode: UiMode; label: string; tip: string }[] = [
   { mode: 'auto', label: '自动', tip: '触屏设备竖屏时用移动版，其余用桌面版' },
@@ -112,10 +119,16 @@ const css = (c: [number, number, number]): string => `rgb(${c[0]},${c[1]},${c[2]
 export class Hud {
   readonly root: HTMLDivElement;
   readonly minimap: HTMLCanvasElement;
-  /** 移动版的控制排：编队按钮与「取消选择」（观战时没有） */
-  private ctlRow: ControlRow | null = null;
-  /** 移动版的镜头摇杆（小地图左边）：game 每帧读它的读数卷屏 */
+  /** 移动版的编队按钮一排（观战时没有） */
+  private slotRow: GroupSlots | null = null;
+  /** 移动版卡片带最前面的「取消选择」（观战时没有） */
+  private deselBtn: HTMLButtonElement | null = null;
+  /** 移动版的镜头摇杆（与小地图并排）：game 每帧读它的读数卷屏 */
   readonly stick = new Joystick();
+  /** 移动版摇杆上方的缩放条：game 每帧把镜头的缩放同步给它 */
+  readonly zoom: ZoomSlider;
+  /** 移动版的摇杆在哪一侧 */
+  private stickSide: StickSide = loadPref('stickSide') === 'right' ? 'right' : 'left';
   private readonly counts: HTMLDivElement;
   private readonly clock: HTMLSpanElement;
   /** 风向标：箭头指向风吹去的方向（随镜头旋转），无风时隐藏 */
@@ -165,6 +178,9 @@ export class Hud {
   private readonly upHead: HTMLElement;
   private upKey = '';
   private sitesHtml = '';
+  /** 有可取消的选择（部队或据点）、正处于指令模式：两个「取消选择」据此可按 */
+  private hasSel = false;
+  private inMode = false;
   /** 挂在 window 上的监听，销毁时摘掉 */
   private readonly disposers: (() => void)[] = [];
 
@@ -293,20 +309,20 @@ export class Hud {
     // ---- 小地图 ----
     const mm = el('div', 'panel mini');
     this.minimap = el('canvas');
-    // 移动版：最上面一排控制按钮（编队 1～5、取消选择），下面摇杆与小地图并排
+    // 移动版：最上面一排编队按钮，下面一边是缩放条叠在摇杆上方、一边是小地图
     if (human) {
-      // 移动版里点空地是下令移动，取消选择靠按钮：常用，所以在指令面板之外再放一个伸手就到的
-      const row = new ControlRow({ groupSlot: (g, assign) => cb.groupSlot(g, assign), deselect: () => cb.command('deselect') });
-      this.ctlRow = row;
+      const row = new GroupSlots(g => cb.groupSlot(g));
+      this.slotRow = row;
       row.el.classList.add('mobile-only');
       this.disposers.push(() => row.destroy());
-      mm.classList.add('hasctl');
       mm.appendChild(row.el);
-    }
+    } else host.classList.add('watch');
     const mmRow = el('div', 'minirow');
-    this.stick.el.classList.add('mobile-only');
+    const joyCol = el('div', 'joycol mobile-only');
+    this.zoom = new ZoomSlider(f => cb.zoomTo(f));
     this.disposers.push(() => this.stick.destroy());
-    mmRow.append(this.stick.el, this.minimap);
+    joyCol.append(this.zoom.el, this.stick.el);
+    mmRow.append(joyCol, this.minimap);
     mm.appendChild(mmRow);
     root.appendChild(mm);
 
@@ -322,8 +338,16 @@ export class Hud {
     });
     // 两排卡片包在一个容器里：移动版里它是横向滚动的卡片带，编队卡片与兵种卡片排成一行
     const cardwrap = el('div', 'cardwrap');
-    this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root, cb, cardwrap);
+    this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root, cb, cardwrap, top);
     this.disposers.push(() => this.cards.destroy());
+    if (human) {
+      // 移动版里点空地是下令移动，取消选择靠按钮：常用，所以在指令面板之外，卡片带最前面再放一个伸手就到的
+      const b = (this.deselBtn = el('button', 'desel mobile-only', '<b>✕</b>取消<br>选择'));
+      b.setAttribute('aria-label', '取消选择');
+      const unbind = bindPress(b, { tap: () => cb.command('deselect') });
+      this.disposers.push(unbind);
+      cardwrap.appendChild(b);
+    }
     cardwrap.append(this.cards.groupRow, this.cards.roster);
     bottom.append(this.selBox, cardwrap);
     root.appendChild(bottom);
@@ -393,7 +417,8 @@ export class Hud {
       this.closeSettings();
     };
     root.appendChild(this.scrim);
-    for (const side of ['left', 'right'] as const) {
+    // 观战时指令面板里只有一句「观战模式」，移动版不放拉它出来的把手
+    for (const side of human ? ['left', 'right'] as const : ['left'] as const) {
       const h = el('div', `handle mobile-only ${side}`, '<i></i>');
       h.setAttribute('role', 'button');
       h.setAttribute('aria-label', side === 'left' ? '据点列表' : '指令面板');
@@ -406,6 +431,12 @@ export class Hud {
     this.feed = el('div', 'feed');
     this.modeTip = el('div', 'modetip');
     root.append(this.feed, this.modeTip);
+    // 战报接在提示条下面：提示条换行（屏宽变了、文字变了）时跟着更新它的高度
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => this.syncTipHeight());
+      ro.observe(this.modeTip);
+      this.disposers.push(() => ro.disconnect());
+    }
 
     // ---- 帮助 ----
     this.help = el('div', 'overlay help', `
@@ -420,8 +451,9 @@ export class Hud {
             <tr><th scope="row">长按地面</th><td>攻击移动</td></tr>
             <tr><th scope="row">双指捏合 / 拧转</th><td>缩放 / 旋转镜头</td></tr>
             <tr><th scope="row">推摇杆 / 拖动或点小地图</th><td>移动镜头</td></tr>
+            <tr><th scope="row">摇杆上方的缩放条</th><td>拖动滑块或点在条上缩放镜头（往右拉近）；点两端的 − / + 缩放一档</td></tr>
             <tr><th scope="row">卡片拖到地图上</th><td>剑尖指着的地方是落点：这批人攻击移动过去，松在敌军身上则攻击它</td></tr>
-            <tr><th scope="row">编队按钮 1～5</th><td>点：选中这一队（没人时把所选部队编进去），连点两下镜头跳过去；长按：把所选部队编为这一队</td></tr>
+            <tr><th scope="row">编队按钮 1～${GROUP_SLOTS}</th><td>把所选部队编为这一队（原来的这一队作废）；选中一队点卡片带里的编队卡片</td></tr>
             <tr><th scope="row">两侧边缘的把手</th><td>拉出据点列表 / 指令面板</td></tr>
           </table>
           <table class="desktop-only" aria-label="基本操作">
@@ -434,8 +466,8 @@ export class Hud {
             <summary>详细操作与规则</summary>
             <table class="desktop-only">
               <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
-              <tr><td>底部兵种卡片</td><td>卡片上的数字是屏幕内的人数。点击：选中屏幕内这个兵种；Shift 加选 / 去掉；双击：选中全图的这个兵种；按住拖到地面或小地图上松开：这个兵种攻击移动过去，松在敌军身上则攻击它（右键或 Esc 取消）。从画面上拉框扫过卡片：一并选中这些兵种。选中的兵种卡片会上前一步</td></tr>
-              <tr><td>全选卡片</td><td>兵种栏最左一张，写屏幕内的总人数。点击：选中屏幕内的全部部队；Shift 加选；双击：选中全图的部队；拖动、框扫同兵种卡片</td></tr>
+              <tr><td>底部兵种卡片</td><td>没选中的卡片写屏幕内的人数，选中后改写选中的人数、不再随镜头变化。点击：选中屏幕内这个兵种（已选中的卡片则只留下选中的这个兵种）；Shift 加选 / 去掉；双击：选中全图的这个兵种；按住拖到地面或小地图上松开：这个兵种攻击移动过去，松在敌军身上则攻击它（右键或 Esc 取消）。从画面上拉框扫过卡片：一并选中这些兵种。选中的兵种卡片会上前一步</td></tr>
+              <tr><td>全选卡片</td><td>兵种栏最左一张，写屏幕内的总人数；屏幕内的人全都选着时上前一步，改写选中的人数、不再随镜头变化。点击：选中屏幕内的全部部队（已选中时保持选中的这些人）；Shift 加选；双击：选中全图的部队；拖动、框扫同兵种卡片</td></tr>
               <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
               <tr><td>右键按住拖动</td><td>在按下处列阵，面朝拖动的方向（原地拖动即原地转向重排）</td></tr>
               <tr><td>右键敌军 / 敌方建筑</td><td>攻击（中立的军事建筑会放箭，也直接右键就打；Ctrl+右键可强攻中立的城墙、门楼、木栅、营门；带着器械或战象时，中立的城墙、门楼直接右键就砸；普通建筑不可攻击）</td></tr>
@@ -561,6 +593,29 @@ export class Hud {
     useg.append(...ubtns);
     urow.appendChild(useg);
     this.settings.append(urow);
+
+    const jrow = el('div', 'srow mobile-only', '<span title="摇杆与缩放条放在哪一侧，小地图在另一侧">摇杆位置</span>');
+    const jseg = el('div', 'seg');
+    const jbtns = (['left', 'right'] as const).map(side => {
+      const b = el('button', '', side === 'left' ? '左' : '右');
+      b.onclick = () => {
+        this.applyStickSide(side);
+        savePref('stickSide', side);
+        for (const x of jbtns) x.classList.toggle('on', x === b);
+      };
+      b.classList.toggle('on', this.stickSide === side);
+      return b;
+    });
+    jseg.append(...jbtns);
+    jrow.appendChild(jseg);
+    this.settings.append(jrow, el('div', 'shint mobile-only', '惯用左手时把摇杆放到右侧'));
+  }
+
+  /** 移动版的摇杆放到哪一侧（小地图在另一侧）；拖卡片时剑也改往小地图那一侧放倒 */
+  private applyStickSide(side: StickSide): void {
+    this.stickSide = side;
+    this.host.classList.toggle('stick-right', side === 'right');
+    this.cards.mapSide = side === 'right' ? -1 : 1;
   }
 
   /** 移动版弹出 / 收起右上角「菜单」里的按钮组 */
@@ -622,14 +677,14 @@ export class Hud {
   /** 编队（只含还有活人的，按队号排）：交给编队卡片与移动版的编队按钮；下一次 updateSelection 时画出来 */
   setGroups(groups: { g: number; slots: number[] }[]): void {
     this.cards.setGroups(groups);
-    this.ctlRow?.setGroups(groups);
+    this.slotRow?.setGroups(groups);
   }
 
   /** 移动版：拉出（left / right）或收起（null）抽屉，同一时间只开一个 */
   openDrawer(side: 'left' | 'right' | null): void {
     this.drawers.left.classList.toggle('open', side === 'left');
     this.drawers.right.classList.toggle('open', side === 'right');
-    for (const s of ['left', 'right'] as const) this.root.querySelector(`.handle.${s}`)!.setAttribute('aria-expanded', String(side === s));
+    for (const s of ['left', 'right'] as const) this.root.querySelector(`.handle.${s}`)?.setAttribute('aria-expanded', String(side === s));
     this.syncScrim();
   }
 
@@ -638,6 +693,7 @@ export class Hud {
     this.mobile = on;
     this.host.classList.toggle('mobile', on);
     this.cards.mobile = on;
+    this.applyStickSide(this.stickSide);
     this.stick.reset();
     this.openDrawer(null);
     this.setMenu(false);
@@ -657,8 +713,11 @@ export class Hud {
   setMode(text: string): void {
     this.modeTip.textContent = text;
     // 移动版里战报条要让到提示条下面
-    this.root.classList.toggle('has-mode', !!text);
     this.modeTip.style.display = text ? 'block' : 'none';
+    this.syncTipHeight();
+    // 指令模式里「取消选择」也用来退出模式：没选东西时也要能按
+    this.inMode = !!text;
+    this.syncDeselect();
   }
 
   setDebug(text: string): void {
@@ -666,8 +725,10 @@ export class Hud {
   }
 
   message(text: string, kind: 'good' | 'bad' | 'info', x?: number, y?: number): void {
+    // 只有带地点、点了能跳过去的战报接指针；其余的点下去落到底下的画面与把手上
     const m = el('div', `msg ${kind}`, text);
     if (x !== undefined && y !== undefined) {
+      m.classList.add('go');
       m.onclick = () => this.cb.focus(x, y);
     }
     this.feed.prepend(m);
@@ -684,6 +745,17 @@ export class Hud {
     this.windArrow.style.transform = `rotate(${deg}deg)`;
   }
 
+  /** 把提示条的实际高度写到根上的 --tip（移动版的战报据此接在它下面），没有提示时是 0 */
+  private syncTipHeight(): void {
+    this.root.style.setProperty('--tip', this.modeTip.style.display === 'block' ? `${this.modeTip.offsetHeight + 2}px` : '0px');
+  }
+
+  /** 两个「取消选择」（指令面板里与卡片带最前面）：有可取消的选择、或处于指令模式时可按 */
+  private syncDeselect(): void {
+    const off = !this.hasSel && !this.inMode;
+    for (const b of [this.cmdBtns.get('deselect'), this.deselBtn]) if (b && b.disabled !== off) b.disabled = off;
+  }
+
   /** 低频刷新（约 4 次/秒） */
   update(): void {
     const w = this.world;
@@ -691,9 +763,9 @@ export class Hud {
     const human = w.humanTeam || 1;
     const other = 3 - human;
     this.counts.innerHTML = `
-      <span class="tag" style="--c:${css(this.teamRgb[human])}">${f[human].name}</span><b>${w.teamCount[human]}</b>
+      <span class="tag" style="--c:${css(this.teamRgb[human])}" title="${f[human].name}">${f[human].name}</span><b>${w.teamCount[human]}</b>
       <span class="vs">对</span>
-      <span class="tag" style="--c:${css(this.teamRgb[other])}">${f[other].name}</span><b>${w.teamCount[other]}</b>`;
+      <span class="tag" style="--c:${css(this.teamRgb[other])}" title="${f[other].name}">${f[other].name}</span><b>${w.teamCount[other]}</b>`;
     const t = Math.floor(w.time);
     this.clock.textContent = `${String((t / 60) | 0).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
     // 时辰与天气
@@ -719,13 +791,15 @@ export class Hud {
       stone: '升级城池；有石料时城池的建筑修得更快',
       gold: `把部队升为高级形态（每份口粮 ${RULES.economy.unitGold}）`,
     };
+    // 移动版顶栏窄：上千的数缩写，给右端的「菜单」留住位置
+    const amount = (v: number): string => (this.mobile ? compactNum(v) : String(Math.floor(v)));
     this.resBox.innerHTML = RES_KINDS.map(k => `<span class="r-${k}" title="${RES_NAMES[k]}：每分钟 +${Math.round(w.income[k][human])}\n${use[k]}">`
-      + `${RES_SHORT[k]} <b>${Math.floor(w.stock[k][human])}</b></span>`).join('');
+      + `${RES_SHORT[k]} <b>${amount(w.stock[k][human])}</b></span>`).join('');
     // 粮草
     if (w.upkeep0[human] > 0) {
       const net = w.foodIn[human] - w.foodOut[human];
       this.foodBox.hidden = false;
-      this.foodBox.textContent = this.mobile ? `粮 ${Math.round(w.food[human])}（${net >= 0 ? '+' : ''}${Math.round(net)}）`
+      this.foodBox.textContent = this.mobile ? `粮 ${amount(w.food[human])}（${net >= 0 ? '+' : ''}${Math.round(net)}）`
         : `粮草 ${Math.round(w.food[human])}（${net >= 0 ? '+' : ''}${Math.round(net)}/分）`;
       this.foodBox.className = `food${w.hunger[human] > 0.15 ? ' bad' : net < 0 ? ' warn' : ''}`;
       this.foodBox.title = `每分钟产 ${Math.round(w.foodIn[human])}、耗 ${Math.round(w.foodOut[human])}，粮仓上限 ${Math.round(w.foodCap[human])}`
@@ -997,9 +1071,10 @@ export class Hud {
 
   /**
    * @param site 没选部队时选中的据点（-1 = 没有）
-   * @param screen 屏幕内的己方单位（兵种栏按它数每个兵种的数量）
+   * @param screen 屏幕内的己方单位（兵种栏按它数没选中的兵种的数量）
+   * @param allPicked 全选卡片处于选中态（见 CardBar.update）
    */
-  updateSelection(sel: number[], site = -1, screen: number[] = []): void {
+  updateSelection(sel: number[], site = -1, screen: number[] = [], allPicked = false): void {
     const w = this.world;
     // ---- 详情：选中单个单位，或没选部队而选着据点 ----
     if (!sel.length && site >= 0 && !w.sites[site].gone) {
@@ -1013,16 +1088,17 @@ export class Hud {
       this.selKey = '?';
     }
     // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
-    const canDeselect = sel.length > 0 || site >= 0;
+    this.hasSel = sel.length > 0 || site >= 0;
     for (const [cmd, b] of this.cmdBtns) {
+      if (cmd === 'deselect') continue;
       const off = cmd === 'unrally' ? !this.rallySet(site) : cmd === 'follow' ? !sel.length && !this.following
-        : cmd === 'deselect' ? !canDeselect
         : cmd !== 'all' && cmd !== 'rally' && !sel.length;
       if (b.disabled !== off) b.disabled = off;
       if (cmd === 'follow') b.classList.toggle('on', this.following);
     }
-    this.ctlRow?.update(sel, canDeselect);
-    this.cards.update(sel, screen);
+    this.syncDeselect();
+    this.slotRow?.update(sel);
+    this.cards.update(sel, screen, allPicked);
   }
 
 
@@ -1053,7 +1129,7 @@ export class Hud {
   }
 
   destroy(): void {
-    this.host.classList.remove('mobile');
+    this.host.classList.remove('mobile', 'watch', 'stick-right');
     for (const f of this.disposers) f();
     this.root.remove();
   }

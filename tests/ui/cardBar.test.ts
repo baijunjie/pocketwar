@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { World } from '../../src/sim/world';
-import { CardBar } from '../../src/ui/cardBar';
+import { CardBar, allCardPicked } from '../../src/ui/cardBar';
 import type { CardBarCallbacks } from '../../src/ui/cardBar';
 import { FakeCanvas, FakeEl, firePointer, installFakeDom, rectOf } from './fakeDom';
 
@@ -22,6 +22,7 @@ describe('CardBar 拖卡片', () => {
     const c = new FakeEl();
     c.className = ['ucard', ...classes].join(' ');
     c.offsetWidth = 60;
+    c.offsetHeight = 100;
     Object.assign(c.dataset, data);
     const sel = new FakeEl('span');
     sel.className = 'sel';
@@ -47,6 +48,30 @@ describe('CardBar 拖卡片', () => {
     return { x: Number(m![1]), y: Number(m![2]), k: Number(m![3]) };
   };
 
+  let cbs: CardBarCallbacks;
+  /** 建 CardBar 并把两排卡片放进 area（真实的 hud 也是这样挂的）；topbar 是传给构造函数的顶栏 */
+  const build = (topbar: FakeEl | null = null): void => {
+    bar = new CardBar({} as World, () => '', mini as unknown as HTMLCanvasElement, overlay as unknown as HTMLElement, cbs,
+      area as unknown as HTMLElement, topbar as unknown as HTMLElement | null);
+    area.appendChild(bar.groupRow as unknown as FakeEl);
+    area.appendChild(bar.roster as unknown as FakeEl);
+    card = mkCard({ t: '3' });
+    groupCard = mkCard({ g: '2' }, 'gcard');
+    allCard = mkCard({ all: '1' }, 'acard');
+    offCard = mkCard({ all: '1' }, 'acard', 'off');
+    (bar.roster as unknown as FakeEl).append(allCard, card, offCard);
+    (bar.groupRow as unknown as FakeEl).append(groupCard);
+  };
+
+  /** 换成传了顶栏的 CardBar：CardBar 销毁时不摘 area 上的监听，所以连 area 一起换新的 */
+  const rebuild = (topbar: FakeEl | null, mobile: boolean): void => {
+    bar.destroy();
+    area = new FakeEl();
+    area.rect = rectOf(0, 500, 400, 100);
+    build(topbar);
+    bar.mobile = mobile;
+  };
+
   beforeEach(() => {
     vi.useFakeTimers();
     dom = installFakeDom(vi);
@@ -63,22 +88,13 @@ describe('CardBar 拖卡片', () => {
     // 小地图画布是方的：左上 (120, 620)、边长 180，内切圆圆心 (210, 710)、半径 90
     mini.rect = rectOf(120, 620, 180, 180);
     dom.hit.fn = (_x, y) => (y < 500 ? view : y > 600 && y <= 800 ? mini : area);
-    const cb: CardBarCallbacks = {
+    cbs = {
       pickTypes: (types, mode) => calls.push(`types ${types.join(',')} ${mode}`),
       pickAll: mode => calls.push(`all ${mode}`),
       selectGroup: (g, jump) => calls.push(`group ${g} ${jump}`),
       dropCard: (kind, id, x, y, target) => drops.push({ kind, id, x, y, target }),
     };
-    bar = new CardBar({} as World, () => '', mini as unknown as HTMLCanvasElement, overlay as unknown as HTMLElement, cb, area as unknown as HTMLElement);
-    // 两排卡片放进 area（真实的 hud 也是这样挂的）
-    area.appendChild(bar.groupRow as unknown as FakeEl);
-    area.appendChild(bar.roster as unknown as FakeEl);
-    card = mkCard({ t: '3' });
-    groupCard = mkCard({ g: '2' }, 'gcard');
-    allCard = mkCard({ all: '1' }, 'acard');
-    offCard = mkCard({ all: '1' }, 'acard', 'off');
-    (bar.roster as unknown as FakeEl).append(allCard, card, offCard);
-    (bar.groupRow as unknown as FakeEl).append(groupCard);
+    build();
   });
 
   afterEach(() => {
@@ -322,6 +338,104 @@ describe('CardBar 拖卡片', () => {
         expect(g.k).toBe(0.9);
         expect(g.x).toBeCloseTo(120 - 27);
         expect(g.y).toBeCloseTo(300 - 100 + 34);
+      });
+
+      it('手指贴近屏幕顶：影子上沿停在 overlay 上沿（不伸出屏幕），左右夹取不变，剑与落点不变', () => {
+        down(card, 110, 550);
+        // 手指 y = 100：上沿 100 − 66 = 34，还没到顶
+        move(110, 100);
+        expect(ghostAt().y).toBeCloseTo(34);
+        // 手指 y = 50：上沿本来是 −16，停在 0
+        move(110, 50);
+        expect(ghostAt().y).toBeCloseTo(0);
+        expect(ghostAt().x).toBeCloseTo(110 - 27);
+        // 剑朝上，剑尖仍在手指上方 100px（超出屏幕顶）
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(110);
+        expect(s.y).toBeCloseTo(-50);
+        move(110, 0);
+        expect(ghostAt().y).toBeCloseTo(0);
+        move(5, 0);
+        expect(ghostAt().x).toBeCloseTo(0);
+      });
+
+      it('overlay 上沿不在 0 时，卡片上沿夹在 overlay 的上沿', () => {
+        overlay.rect = rectOf(0, 30, 400, 770);
+        down(card, 110, 550);
+        move(110, 60);
+        expect(ghostAt().y).toBeCloseTo(30);
+        move(110, 200);
+        expect(ghostAt().y).toBeCloseTo(200 - 66);
+      });
+
+      describe('顶栏（构造函数传入的 topbar）', () => {
+        let topbar: FakeEl;
+        beforeEach(() => {
+          topbar = new FakeEl();
+          topbar.className = 'panel topbar';
+          topbar.rect = rectOf(0, 0, 400, 60);
+          rebuild(topbar, true);
+        });
+
+        it('顶栏在 overlay 里但没传给构造函数时不生效；没传顶栏就只看 overlay 上沿', () => {
+          rebuild(null, true);
+          overlay.appendChild(topbar);
+          down(card, 110, 550);
+          move(110, 50);
+          expect(ghostAt().y).toBeCloseTo(0);
+        });
+
+        it('卡片上沿不高于顶栏下沿：y = max(overlay 上沿, 顶栏下沿, 手指 y − 66)', () => {
+          down(card, 110, 550);
+          move(110, 100);
+          expect(ghostAt().y).toBeCloseTo(60);
+          move(110, 20);
+          expect(ghostAt().y).toBeCloseTo(60);
+          // 手指 y = 126：上沿刚好 60；再往下就跟手指
+          move(110, 126);
+          expect(ghostAt().y).toBeCloseTo(60);
+          move(110, 200);
+          expect(ghostAt().y).toBeCloseTo(134);
+        });
+
+        it('左右夹取、剑与落点不变', () => {
+          down(card, 110, 550);
+          move(110, 50);
+          expect(ghostAt().x).toBeCloseTo(110 - 27);
+          const s = swordAt();
+          expect(s.x).toBeCloseTo(110);
+          expect(s.y).toBeCloseTo(-50);
+          move(5, 50);
+          expect(ghostAt().x).toBeCloseTo(0);
+        });
+
+        it('顶栏下沿比 overlay 上沿还靠上时以 overlay 上沿为准', () => {
+          topbar.rect = rectOf(0, -80, 400, 60);
+          down(card, 110, 550);
+          move(110, 50);
+          expect(ghostAt().y).toBeCloseTo(0);
+        });
+
+        it('顶栏下沿在拖拽开始时取一次：拖拽中顶栏变了不影响这一次', () => {
+          down(card, 110, 550);
+          move(110, 300);
+          topbar.rect = rectOf(0, 0, 400, 200);
+          move(110, 100);
+          expect(ghostAt().y).toBeCloseTo(60);
+          up(110, 100);
+          // 下一次拖拽开始时重新取
+          down(card, 110, 550);
+          move(110, 300);
+          move(110, 100);
+          expect(ghostAt().y).toBeCloseTo(200);
+        });
+
+        it('松手后的下一次拖拽拿到新的顶栏位置（顶栏变矮后上沿跟着降）', () => {
+          topbar.rect = rectOf(0, 0, 400, 90);
+          down(card, 110, 550);
+          move(110, 100);
+          expect(ghostAt().y).toBeCloseTo(90);
+        });
       });
 
       it('影子不跟着落点走：手指在屏幕底时剑放倒朝右，影子仍按手指位置放', () => {
@@ -682,10 +796,201 @@ describe('CardBar 拖卡片', () => {
       });
     });
 
+    describe('mapSide：剑往小地图那一侧放倒', () => {
+      it('默认是 1（右）', () => {
+        expect(bar.mapSide).toBe(1);
+      });
+
+      it('mapSide = −1：手指到屏幕底时剑水平朝左，落点在手指左边 100px、y 在屏幕底', () => {
+        bar.mapSide = -1;
+        down(card, 210, 550);
+        move(210, 800);
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(110);
+        expect(s.y).toBeCloseTo(800);
+        expect(s.deg).toBeCloseTo(-45);
+      });
+
+      it('mapSide = −1：一半深度时向左 45 度，与 1 时左右镜像', () => {
+        down(card, 210, 550);
+        move(210, 725);
+        const r = swordAt();
+        up(210, 725);
+        bar.mapSide = -1;
+        down(card, 210, 550);
+        move(210, 725);
+        const l = swordAt();
+        expect(l.x - 210).toBeCloseTo(-(r.x - 210));
+        expect(l.y).toBeCloseTo(r.y);
+      });
+
+      it('mapSide = −1：手指离屏幕底 150px 以外时剑照旧竖直朝上', () => {
+        bar.mapSide = -1;
+        down(card, 210, 550);
+        move(210, 400);
+        const s = swordAt();
+        expect(s.x).toBeCloseTo(210);
+        expect(s.y).toBeCloseTo(300);
+      });
+
+      it('mapSide = −1：松手的落点用向左放倒的剑尖（落在小地图圆内就是 mini）；mapSide = 1 同一手指位置落点在圆外、不下令', () => {
+        // 手指 (290, 750)：离屏幕底 50，转 60 度，偏移 (∓86.6, −50)
+        down(card, 290, 550);
+        move(290, 750);
+        up(290, 750);
+        expect(drops).toEqual([]);
+        bar.mapSide = -1;
+        down(card, 290, 550);
+        move(290, 750);
+        up(290, 750);
+        expect(drops).toHaveLength(1);
+        expect(drops[0]).toMatchObject({ kind: 'type', id: 3, target: 'mini' });
+        expect(drops[0].x).toBeCloseTo(290 - 100 * Math.sin(Math.PI / 3));
+        expect(drops[0].y).toBeCloseTo(750 - 50);
+      });
+    });
+
+    describe('卡片带里的按钮（取消选择）', () => {
+      let btn: FakeEl;
+      beforeEach(() => {
+        btn = new FakeEl('button');
+        btn.className = 'desel';
+        area.appendChild(btn);
+      });
+
+      it('在按钮上按下被忽略：不捕获指针、不阻止默认行为、没有 hot', () => {
+        const e = down(btn, 30, 550);
+        expect(area.captured).toBeNull();
+        expect(e.defaultPrevented).toBe(false);
+        for (const c of [card, allCard, groupCard]) expect(c.classList.contains('hot')).toBe(false);
+      });
+
+      it('按在按钮的子节点（<b>✕</b>）上同样忽略', () => {
+        const inner = new FakeEl('b');
+        btn.appendChild(inner);
+        const e = down(inner, 30, 550);
+        expect(area.captured).toBeNull();
+        expect(e.defaultPrevented).toBe(false);
+      });
+
+      it('按在按钮上再拖也不滚动卡片带、不出影子、松手不下令也不选中', () => {
+        area.scrollLeft = 100;
+        down(btn, 30, 550);
+        move(0, 552);
+        expect(area.scrollLeft).toBe(100);
+        move(30, 300);
+        expect(ghost()).toBeUndefined();
+        up(30, 300);
+        expect(drops).toEqual([]);
+        expect(calls).toEqual([]);
+      });
+
+      it('对照：按在卡片之间的空隙上照旧能滚动', () => {
+        area.scrollLeft = 100;
+        down(null, 30, 550);
+        move(0, 552);
+        expect(area.scrollLeft).not.toBe(100);
+      });
+    });
+
     it('右键不触发', () => {
       down(card, 100, 550, { button: 2 });
       expect(card.classList.contains('hot')).toBe(false);
       expect(area.captured).toBeNull();
+    });
+  });
+
+  describe('拖拽中 overlay 的 dragging 类', () => {
+    const dragging = (): boolean => overlay.classList.contains('dragging');
+    const esc = (): void => {
+      const e = new Event('keydown', { cancelable: true });
+      Object.defineProperty(e, 'key', { value: 'Escape' });
+      dom.win.dispatchEvent(e);
+    };
+
+    for (const mobile of [true, false]) {
+      describe(mobile ? '移动版' : '桌面版', () => {
+        beforeEach(() => {
+          bar.mobile = mobile;
+        });
+
+        it('影子出现（拖出去）时加上，按下与还没拖出起手距离时没有', () => {
+          expect(dragging()).toBe(false);
+          down(card, 100, 550);
+          expect(dragging()).toBe(false);
+          move(101, 549);
+          expect(ghost()).toBeUndefined();
+          expect(dragging()).toBe(false);
+          move(100, 300);
+          expect(ghost()).toBeDefined();
+          expect(dragging()).toBe(true);
+        });
+
+        it('松手去掉（下令与不下令两种都是）', () => {
+          down(card, 100, 550);
+          move(100, 300);
+          up(100, 300);
+          expect(dragging()).toBe(false);
+          down(card, 100, 550);
+          move(100, 300);
+          move(100, 540);
+          up(100, 540);
+          expect(dragging()).toBe(false);
+        });
+
+        it('pointercancel、lostpointercapture、窗口失焦、Esc 都去掉', () => {
+          const ends: [string, () => void][] = [
+            ['pointercancel', () => firePointer(area, 'pointercancel', { pointerId: 1 })],
+            ['lostpointercapture', () => firePointer(area, 'lostpointercapture', { pointerId: 1 })],
+            ['blur', () => dom.win.dispatchEvent(new Event('blur'))],
+            ['esc', esc],
+          ];
+          for (const [name, end] of ends) {
+            down(card, 100, 550);
+            move(100, 300);
+            expect(dragging(), name).toBe(true);
+            end();
+            expect(dragging(), name).toBe(false);
+            up(100, 300);
+          }
+        });
+
+        it('按着左键再按右键（buttons 带 2）取消拖拽，去掉', () => {
+          down(card, 100, 550);
+          move(100, 300);
+          expect(dragging()).toBe(true);
+          move(100, 290, 3);
+          expect(dragging()).toBe(false);
+          expect(ghost()).toBeUndefined();
+        });
+
+        it('取消后可以再拖，再次加上', () => {
+          down(card, 100, 550);
+          move(100, 300);
+          up(100, 300);
+          down(card, 100, 550);
+          move(100, 300);
+          expect(dragging()).toBe(true);
+        });
+      });
+    }
+
+    it('移动版：横向滚动卡片带不加 dragging；滚动改成拖时才加', () => {
+      bar.mobile = true;
+      down(card, 200, 550);
+      move(150, 551);
+      expect(dragging()).toBe(false);
+      move(150, 300);
+      expect(dragging()).toBe(true);
+      up(150, 300);
+      expect(dragging()).toBe(false);
+    });
+
+    it('点按（没拖动）不加 dragging', () => {
+      bar.mobile = true;
+      down(card, 100, 550);
+      up(100, 550);
+      expect(dragging()).toBe(false);
     });
   });
 
@@ -749,10 +1054,65 @@ describe('CardBar 拖卡片', () => {
       expect(drops.map(d => [d.x, d.y, d.target])).toEqual([[65, 625, 'mini'], [235, 625, 'mini'], [65, 790, 'mini'], [235, 790, 'mini']]);
     });
 
-    it('靠右边也始终在鼠标右下方 14px，不翻转', () => {
-      down(card, 390, 550);
-      move(390, 300);
-      expect(ghost()!.style.transform).toBe('translate(404px, 314px) scale(0.8)');
+    // 卡片 60 × 100，缩放 0.8 后 48 × 80；overlay 是 (0, 0) – (400, 800)
+    describe('影子放不下时换边', () => {
+      const at = (x: number, y: number): string => {
+        down(card, x, 550);
+        move(x, y);
+        const t = ghost()!.style.transform;
+        up(x, y);
+        return t;
+      };
+
+      it('桌面版不受顶栏影响：鼠标靠近屏幕顶时影子照旧在鼠标下方 14px', () => {
+        const topbar = new FakeEl();
+        topbar.className = 'panel topbar';
+        topbar.rect = rectOf(0, 0, 400, 60);
+        rebuild(topbar, false);
+        expect(at(100, 20)).toBe('translate(114px, 34px) scale(0.8)');
+      });
+
+      it('右边、下边都放得下：在鼠标右下方 14px', () => {
+        expect(at(100, 300)).toBe('translate(114px, 314px) scale(0.8)');
+      });
+
+      it('右边放不下（卡片右沿会超出 overlay 右边界）：换到鼠标左边 14px，x = 鼠标 − 14 − 48', () => {
+        expect(at(390, 300)).toBe('translate(328px, 314px) scale(0.8)');
+      });
+
+      it('右沿刚好贴着右边界还算放得下，再多 1px 就换边', () => {
+        expect(at(338, 300)).toBe('translate(352px, 314px) scale(0.8)');
+        expect(at(339, 300)).toBe('translate(277px, 314px) scale(0.8)');
+      });
+
+      it('底边放不下：换到鼠标上边 14px，y = 鼠标 − 14 − 80', () => {
+        expect(at(100, 780)).toBe('translate(114px, 686px) scale(0.8)');
+      });
+
+      it('下沿刚好贴着底边还算放得下，再多 1px 就换边', () => {
+        expect(at(100, 706)).toBe('translate(114px, 720px) scale(0.8)');
+        expect(at(100, 707)).toBe('translate(114px, 613px) scale(0.8)');
+      });
+
+      it('两个方向各自判断：右下角两边都放不下，换到左上', () => {
+        expect(at(390, 780)).toBe('translate(328px, 686px) scale(0.8)');
+      });
+
+      it('换边只动影子，落点仍是鼠标位置', () => {
+        down(card, 390, 550);
+        move(390, 300);
+        up(390, 300);
+        expect(drops).toHaveLength(1);
+        expect(drops[0].x).toBeCloseTo(390);
+        expect(drops[0].y).toBeCloseTo(300);
+      });
+
+      it('按 overlay 的边界算，不是固定的屏幕尺寸', () => {
+        overlay.rect = rectOf(0, 0, 200, 500);
+        expect(at(100, 300)).toBe('translate(114px, 314px) scale(0.8)');
+        expect(at(150, 300)).toBe('translate(88px, 314px) scale(0.8)');
+        expect(at(100, 420)).toBe('translate(114px, 326px) scale(0.8)');
+      });
     });
 
     it('点按选中', () => {
@@ -760,5 +1120,200 @@ describe('CardBar 拖卡片', () => {
       up(100, 550);
       expect(calls).toEqual(['types 3 replace']);
     });
+  });
+});
+
+describe('CardBar.update 卡片上的人数与全选卡片', () => {
+  // 世界里的单位：0～3 是兵种 0（4 个），4～6 是兵种 1（3 个），7～9 是兵种 2（3 个）；都满血、1 级、士气 50
+  const TYPES = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2];
+  let area: FakeEl, bar: CardBar;
+  const roster = (): string => (bar.roster as unknown as FakeEl).innerHTML;
+  /** 兵种卡片上的人数：type 卡片 `data-t="t"` 里 `<span class="n">` */
+  const typeN = (t: number): number | null => {
+    const m = new RegExp(`data-t="${t}"[\\s\\S]*?<span class="n">(\\d+)</span>`).exec(roster());
+    return m ? Number(m[1]) : null;
+  };
+  const hasType = (t: number): boolean => roster().includes(`data-t="${t}"`);
+  const typeOn = (t: number): boolean => new RegExp(`class="ucard(?: elite)? on" data-t="${t}"`).test(roster());
+  /** 全选卡片：类名与人数 */
+  const all = (): { cls: string; n: number } => {
+    const m = /class="ucard acard([^"]*)" data-all="1"[\s\S]*?<b>(\d+)<\/b>/.exec(roster());
+    expect(m, roster()).not.toBeNull();
+    return { cls: m![1], n: Number(m![2]) };
+  };
+
+  beforeEach(() => {
+    installFakeDom(vi);
+    area = new FakeEl();
+    const n = TYPES.length;
+    const w = {
+      humanTeam: 1,
+      type: Uint8Array.from(TYPES),
+      hp: new Float32Array(n).fill(100), maxHp: new Float32Array(n).fill(100),
+      level: new Uint8Array(n), morale: new Float32Array(n).fill(50),
+    } as unknown as World;
+    bar = new CardBar(w, () => '', new FakeCanvas() as unknown as HTMLCanvasElement, new FakeEl() as unknown as HTMLElement, {
+      pickTypes: () => {}, pickAll: () => {}, selectGroup: () => {}, dropCard: () => {},
+    }, area as unknown as HTMLElement);
+  });
+
+  afterEach(() => {
+    bar.destroy();
+    vi.unstubAllGlobals();
+  });
+
+  describe('兵种卡片', () => {
+    it('没选中的兵种：人数写屏幕内的人数，不带 on', () => {
+      bar.update([], [0, 1, 4]);
+      expect(typeN(0)).toBe(2);
+      expect(typeN(1)).toBe(1);
+      expect(typeOn(0)).toBe(false);
+      expect(hasType(2)).toBe(false);
+    });
+
+    it('选中的兵种（sel 里有这个兵种）：人数写选中的人数，带 on，不随屏幕内人数变化', () => {
+      bar.update([0, 1, 2], [0, 1, 2, 3, 4, 5]);
+      expect(typeN(0)).toBe(3);
+      expect(typeOn(0)).toBe(true);
+      // 没选中的兵种仍按屏幕内
+      expect(typeN(1)).toBe(2);
+      expect(typeOn(1)).toBe(false);
+      // 镜头移动，屏幕内只剩一个没选的、选中的全出了屏幕：选中兵种的人数不变，卡片还在
+      bar.update([0, 1, 2], [4]);
+      expect(typeN(0)).toBe(3);
+      expect(hasType(0)).toBe(true);
+      expect(typeN(1)).toBe(1);
+    });
+
+    it('屏幕内有同兵种的未选中者时，选中兵种仍只写选中的人数', () => {
+      bar.update([0], [0, 1, 2, 3]);
+      expect(typeN(0)).toBe(1);
+    });
+
+    it('选中的单位全不在屏幕内也有卡片', () => {
+      bar.update([7, 8], []);
+      expect(typeN(2)).toBe(2);
+    });
+  });
+
+  describe('「选 N」角标', () => {
+    const badges = (): string[] => [...roster().matchAll(/<span class="sel">([^<]*)<\/span>/g)].map(m => m[1]);
+    /** 兵种卡片（从第一个 data-t 起）的 html */
+    const typeCards = (): string => roster().slice(roster().indexOf('data-t='));
+
+    it('兵种卡片没有「选 N」角标，不论选没选中', () => {
+      bar.update([0, 1, 4], [0, 1, 2, 4]);
+      expect(typeCards()).not.toContain('class="sel"');
+      expect(typeCards()).not.toMatch(/选 \d+<\/span>/);
+      bar.update([0, 1, 4], [0, 1, 2, 4], true);
+      expect(typeCards()).not.toContain('class="sel"');
+    });
+
+    it('全选卡片：有选中、但不处于选中态（allPicked 为 false）时显示「选 N」', () => {
+      bar.update([0, 1], [0, 1, 2]);
+      expect(badges()).toEqual(['选 2']);
+      bar.update([0, 1, 4], [0, 1, 2], false);
+      expect(badges()).toEqual(['选 3']);
+    });
+
+    it('全选卡片处于选中态（allPicked 为 true）时不显示', () => {
+      bar.update([0, 1], [0, 1, 2], true);
+      expect(badges()).toEqual([]);
+    });
+
+    it('没有选中时不显示', () => {
+      bar.update([], [0, 1, 2]);
+      expect(badges()).toEqual([]);
+    });
+
+    it('allPicked 切换时角标跟着出现和消失', () => {
+      bar.update([0, 1], [0, 1, 2], false);
+      expect(badges()).toEqual(['选 2']);
+      bar.update([0, 1], [0, 1, 2], true);
+      expect(badges()).toEqual([]);
+      bar.update([0, 1], [0, 1, 2], false);
+      expect(badges()).toEqual(['选 2']);
+    });
+  });
+
+  describe('全选卡片', () => {
+    it('allPicked 为 true：带 on，人数写 sel.length（不是屏幕内的人数）', () => {
+      bar.update([0, 1, 2, 4], [0, 1, 2, 3, 4, 5, 6], true);
+      expect(all().cls).toContain(' on');
+      expect(all().n).toBe(4);
+    });
+
+    it('allPicked 为 true 时屏幕内没人也写 sel.length、不变暗（不带 off）', () => {
+      bar.update([0, 1, 2], [], true);
+      const a = all();
+      expect(a.cls).toContain(' on');
+      expect(a.cls).not.toContain('off');
+      expect(a.n).toBe(3);
+    });
+
+    it('allPicked 为 true 时 sel 的人数不随屏幕内的人数变化', () => {
+      bar.update([0, 1], [0, 1, 2, 3], true);
+      expect(all().n).toBe(2);
+      bar.update([0, 1], [2], true);
+      expect(all().n).toBe(2);
+    });
+
+    it('allPicked 为 false：人数写屏幕内的人数，不带 on', () => {
+      bar.update([0], [0, 1, 4]);
+      const a = all();
+      expect(a.n).toBe(3);
+      expect(a.cls).not.toContain('on');
+      expect(a.cls).not.toContain('off');
+    });
+
+    it('allPicked 默认为 false', () => {
+      bar.update([0], [0, 1, 4]);
+      expect(all().n).toBe(3);
+      expect(all().cls).not.toContain('on');
+    });
+
+    it('allPicked 为 false 时屏幕内没人变暗（带 off），人数写 0，选着的人在屏幕外也一样', () => {
+      bar.update([0, 1], [], false);
+      const a = all();
+      expect(a.cls).toContain('off');
+      expect(a.cls).not.toContain('on');
+      expect(a.n).toBe(0);
+    });
+
+    it('不再自己按「屏幕内的人全都选着」判 on：allPicked 为 false 时即使屏幕内的人全选着也不带 on', () => {
+      bar.update([0, 1, 4], [0, 1, 4], false);
+      expect(all().cls).not.toContain('on');
+      expect(all().n).toBe(3);
+    });
+
+    it('allPicked 为 true 与 false 之间切换，卡片跟着变', () => {
+      bar.update([0, 1], [0, 1, 2], true);
+      expect(all().cls).toContain(' on');
+      bar.update([0, 1], [0, 1, 2], false);
+      expect(all().cls).not.toContain(' on');
+      expect(all().n).toBe(3);
+    });
+  });
+});
+
+describe('allCardPicked 选择变化那一刻全选卡片是否处于选中态（按屏幕判定）', () => {
+  it('选择为空：不是选中态，不论屏幕内有没有人', () => {
+    expect(allCardPicked([], [1, 2])).toBe(false);
+    expect(allCardPicked([], [])).toBe(false);
+  });
+
+  it('屏幕内的己方单位全都被选着才是选中态（list 里多出别的人、顺序不同都算）', () => {
+    expect(allCardPicked([1, 2, 3], [1, 2, 3])).toBe(true);
+    expect(allCardPicked([1, 2, 3, 9], [1, 2, 3])).toBe(true);
+    expect(allCardPicked([3, 2, 1], [1, 2])).toBe(true);
+  });
+
+  it('屏幕内有人没被选着就不是选中态', () => {
+    expect(allCardPicked([1, 2], [1, 2, 3])).toBe(false);
+    expect(allCardPicked([9], [1])).toBe(false);
+  });
+
+  it('屏幕内没有己方单位不算选中态（选的全在屏幕外）', () => {
+    expect(allCardPicked([1, 2], [])).toBe(false);
   });
 });
