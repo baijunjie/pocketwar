@@ -31,6 +31,19 @@ export interface DeployPoint {
   dx: number;
   dy: number;
 }
+/** 桥在地图格坐标中的中心、单位方向和长度。 */
+export interface BridgeSpan {
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+  length: number;
+  /** 覆盖的通行格与桥下用于渲染的地形。 */
+  bed: [cell: number, terrain: number][];
+}
+/** 斜桥两侧需要覆盖旋转后仍能完整容纳的通行格。 */
+export const BRIDGE_WIDTH = 3.1;
+
 export interface GameMap {
   seed: number;
   w: number;
@@ -41,6 +54,7 @@ export interface GameMap {
   dirt: Uint8Array;
   sites: SiteSpec[];
   buildings: BuildingSpec[];
+  bridges?: BridgeSpan[];
   /** 树木与山石：每个 4 个数 (x, y, kind, scale)，按 8×8 格区块排序 */
   props: Float32Array;
   /** 区块 → props 起始下标（长度 = 区块数 + 1） */
@@ -78,6 +92,60 @@ const HALF: Record<number, [number, number]> = {
   [SITE_QUARRY]: [5, 5],
   [SITE_MINE]: [5, 5],
 };
+
+function findBridge(
+  terrain: Uint8Array, river: Uint8Array, occ: Uint8Array, size: number,
+  x: number, y: number, dx: number, dy: number,
+): (BridgeSpan & { approaches: number[]; clearance: number[] }) | undefined {
+  const water = (cell: number): boolean => terrain[cell] === T_DEEP || terrain[cell] === T_SHALLOW;
+  const indexAt = (x: number, y: number): number =>
+    x >= 2 && y >= 2 && x < size - 2 && y < size - 2 ? Math.floor(y) * size + Math.floor(x) : -1;
+  const center = indexAt(x, y);
+  if (!river[center] || terrain[center] !== T_DEEP) return;
+
+  const halfWidth = BRIDGE_WIDTH / 2;
+  const offsets = [-halfWidth, -halfWidth / 2, 0, halfWidth / 2, halfWidth];
+  const wet = (d: number): boolean => offsets.some(offset => {
+    const cell = indexAt(x + dx * d - dy * offset, y + dy * d + dx * offset);
+    return cell < 0 || water(cell);
+  });
+  let start = 0, end = 0;
+  while (start > -12 && wet(start)) start -= 0.25;
+  while (end < 12 && wet(end)) end += 0.25;
+  if (start <= -12 || end >= 12) return;
+
+  const midpoint = (start + end) / 2;
+  x += dx * midpoint;
+  y += dy * midpoint;
+  const length = end - start + 2.5, halfLength = length / 2;
+  const reach = Math.ceil(halfLength + halfWidth + 2);
+  const bed: BridgeSpan['bed'] = [], approaches: number[] = [], clearance: number[] = [];
+  const ends = [false, false];
+  // 通行格的四个角都要落在桥面内，地形寻路才能继续用原有的整格碰撞。
+  const cellProjection = (Math.abs(dx) + Math.abs(dy)) / 2;
+  for (let ty = Math.floor(y) - reach; ty <= Math.floor(y) + reach; ty++) {
+    for (let tx = Math.floor(x) - reach; tx <= Math.floor(x) + reach; tx++) {
+      const ox = tx + 0.5 - x, oy = ty + 0.5 - y;
+      const across = Math.abs(-ox * dy + oy * dx), along = ox * dx + oy * dy;
+      const cell = indexAt(tx, ty);
+      if (across <= halfWidth + cellProjection && Math.abs(along) <= halfLength + cellProjection) {
+        if (cell < 0 || occ[cell] || terrain[cell] === T_BRIDGE) return;
+        clearance.push(cell);
+      }
+      if (across + cellProjection > halfWidth || Math.abs(along) > halfLength + 1.3) continue;
+      if (cell < 0 || occ[cell] || terrain[cell] === T_BRIDGE) return;
+      if (Math.abs(along) + cellProjection <= halfLength) {
+        if (water(cell) && !river[cell]) return;
+        bed.push([cell, water(cell) ? terrain[cell] : T_ROAD]);
+      } else if (!water(cell)) {
+        approaches.push(cell);
+        ends[along < 0 ? 0 : 1] = true;
+      }
+    }
+  }
+  if (!ends[0] || !ends[1]) return;
+  return { x, y, dx, dy, length, bed, approaches, clearance };
+}
 
 export function generateMap(seed: number, size = 320): GameMap {
   const W = size, H = size, N = W * H;
@@ -117,11 +185,14 @@ export function generateMap(seed: number, size = 320): GameMap {
   const river = new Uint8Array(N);
   const sign = rng.next() < 0.5 ? -1 : 1;
   const fords = [0.2 + rng.range(-0.04, 0.04), 0.5 + rng.range(-0.05, 0.05), 0.8 + rng.range(-0.04, 0.04)];
+  const riverCenter = (t: number): [number, number] => {
+    const off = sign * (34 + 26 * vnoise(t * 3.4, 0.5, sE));
+    return [t * W + off * 0.7071, t * H - off * 0.7071];
+  };
   const steps = W * 3;
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;
-    const off = sign * (34 + 26 * vnoise(t * 3.4, 0.5, sE));
-    const cx = t * W + off * 0.7071, cy = t * H - off * 0.7071;
+    const [cx, cy] = riverCenter(t);
     const half = 2.3 + 1.3 * vnoise(t * 7, 3.5, sE);
     let ford = false;
     for (const f of fords) if (Math.abs(t - f) < 0.013) ford = true;
@@ -149,8 +220,7 @@ export function generateMap(seed: number, size = 320): GameMap {
     let ford = false;
     for (const f of fords) if (Math.abs(t - f) < 0.011) ford = true;
     if (!ford) continue;
-    const off = sign * (34 + 26 * vnoise(t * 3.4, 0.5, sE));
-    const cx = t * W + off * 0.7071, cy = t * H - off * 0.7071;
+    const [cx, cy] = riverCenter(t);
     for (let dy = -5; dy <= 5; dy++) {
       for (let dx = -5; dx <= 5; dx++) {
         const x = Math.round(cx) + dx, y = Math.round(cy) + dy;
@@ -415,12 +485,32 @@ export function generateMap(seed: number, size = 320): GameMap {
     deploy[s.owner] = { x: px * TILE, y: py * TILE, dx, dy };
   }
 
-  // ---- 道路 ----
+  // ---- 浮桥与道路 ----
+  const bridges: BridgeSpan[] = [];
+  const bridgeClearance = new Set<number>();
+  for (let i = 1; i < fords.length; i++) {
+    const middle = (fords[i - 1] + fords[i]) / 2;
+    for (const offset of [0, -3, 3, -6, 6, -9, 9, -12, 12]) {
+      const t = middle + offset / W;
+      const [x, y] = riverCenter(t);
+      const [ax, ay] = riverCenter(t - 2 / W), [bx, by] = riverCenter(t + 2 / W);
+      const tangent = Math.hypot(bx - ax, by - ay);
+      const candidate = findBridge(terrain, river, occ, W, x + 0.5, y + 0.5, (by - ay) / tangent, (ax - bx) / tangent);
+      if (!candidate) continue;
+      const { approaches, clearance, ...span } = candidate;
+      bridges.push(span);
+      for (const [cell] of span.bed) terrain[cell] = T_BRIDGE;
+      for (const cell of approaches) terrain[cell] = T_ROAD;
+      for (const cell of clearance) bridgeClearance.add(cell);
+      break;
+    }
+  }
+  const roadBlocked = (i: number): boolean => occ[i] === 1 || terrain[i] === T_DEEP;
   const roadCost = (i: number): number => {
-    if (occ[i] === 1) return 0;
+    if (roadBlocked(i)) return 0;
     const t = terrain[i];
     const base = t === T_ROAD || t === T_BRIDGE ? 0.35 : t === T_GRASS ? 1 : t === T_FARM ? 1.3 : t === T_FOREST ? 1.8
-      : t === T_HILL ? 2.2 : t === T_SHALLOW ? 4.5 : t === T_DEEP ? 9 : 14;
+      : t === T_HILL ? 2.2 : t === T_SHALLOW ? 4.5 : 14;
     return base + hash2(i % W, (i / W) | 0, sE) * 0.5;
   };
   const gCost = new Float32Array(N);
@@ -478,7 +568,7 @@ export function generateMap(seed: number, size = 320): GameMap {
         const nc = ny * W + nx;
         const rc = roadCost(nc);
         if (rc === 0) continue;
-        if ((d & 1) && (occ[cy * W + nx] === 1 || occ[ny * W + cx] === 1)) continue;
+        if ((d & 1) && (roadBlocked(cy * W + nx) || roadBlocked(ny * W + cx))) continue;
         const g = gCost[c] + rc * (d & 1 ? 1.4142 : 1);
         if (g < gCost[nc]) {
           gCost[nc] = g;
@@ -491,21 +581,14 @@ export function generateMap(seed: number, size = 320): GameMap {
     for (let c = goal; c >= 0; c = from[c]) {
       const x = c % W, y = (c / W) | 0;
       const t = terrain[c];
-      if (t === T_DEEP || t === T_SHALLOW) {
-        terrain[c] = T_BRIDGE;
-        for (const [ox, oy] of [[1, 0], [0, 1]]) {
+      if (t === T_DEEP || t === T_SHALLOW || t === T_BRIDGE) continue;
+      if (t === T_MOUNTAIN) {
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
           const j = (y + oy) * W + x + ox;
-          if (terrain[j] === T_DEEP || terrain[j] === T_SHALLOW) terrain[j] = T_BRIDGE;
+          if (terrain[j] === T_MOUNTAIN) terrain[j] = T_HILL;
         }
-      } else {
-        if (t === T_MOUNTAIN) {
-          for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
-            const j = (y + oy) * W + x + ox;
-            if (terrain[j] === T_MOUNTAIN) terrain[j] = T_HILL;
-          }
-        }
-        terrain[c] = T_ROAD;
       }
+      terrain[c] = T_ROAD;
     }
   };
   // 最小生成树 + 若干环路，保证所有据点连通
@@ -552,6 +635,7 @@ export function generateMap(seed: number, size = 320): GameMap {
   for (let y = 1; y < H - 1; y++) {
     for (let x = 1; x < W - 1; x++) {
       const i = y * W + x;
+      if (bridgeClearance.has(i)) continue;
       const t = terrain[i];
       const ci = ((y / CHUNK) | 0) * chunkW + ((x / CHUNK) | 0);
       if (t === T_FOREST && occ[i] === 0) {
@@ -576,7 +660,9 @@ export function generateMap(seed: number, size = 320): GameMap {
   }
   for (let k = 0; k < decor.length; k += 4) {
     const tx = (decor[k] / TILE) | 0, ty = (decor[k + 1] / TILE) | 0;
-    if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1 || occ[ty * W + tx] !== 0 || terrain[ty * W + tx] === T_ROAD) continue;
+    if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) continue;
+    const cell = ty * W + tx;
+    if (occ[cell] !== 0 || terrain[cell] === T_ROAD || bridgeClearance.has(cell)) continue;
     lists[((ty / CHUNK) | 0) * chunkW + ((tx / CHUNK) | 0)].push(decor[k], decor[k + 1], decor[k + 2], decor[k + 3]);
   }
   const propChunk = new Int32Array(chunkW * chunkH + 1);
@@ -599,5 +685,5 @@ export function generateMap(seed: number, size = 320): GameMap {
     }
   }
 
-  return { seed, w: W, h: H, terrain, height, dirt, sites, buildings, props, propChunk, chunkW, chunkH, spawn, deploy };
+  return { seed, w: W, h: H, terrain, height, dirt, sites, buildings, bridges, props, propChunk, chunkW, chunkH, spawn, deploy };
 }

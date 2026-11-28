@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { BUILDINGS, TILE } from '../sim/defs';
 import { Col, ball, box, cone, cyl, join, xf } from './prims';
+import { BRIDGE_WIDTH } from '../sim/map';
+import { BRIDGE_DECK_Y } from './terrain';
 
 const STONE = 0x9c978c, STONE_D = 0x7d786e, STONE_L = 0xb4afa3, PLASTER = 0xd9cfb8, TIMBER = 0x5a4028, WOOD = 0x8a6a42;
 const THATCH = 0xb59a58, TILE_RED = 0xa9523a, TILE_GREY = 0x4c5356, CANVAS = 0xd8cfb4, MUD = 0xc7a877, IRON = 0x4a4d54;
@@ -431,8 +433,23 @@ export function propGeo(kind: number): G {
   return join(g, xf(box(8, 5, 7, cols[(kind - 4) % 3]), { ry: 0.6, rz: 0.2, t: [10, 2, 5] }));
 }
 
-/** 桥面：一格大小的木板桥段 */
-export function bridgeGeo(): G {
-  return join(box(TILE + 3, 2, TILE + 3, 0x8a7350, 0, 0, 0), box(TILE + 3, 0.4, 1, 0x6e5a3c, 0, 1.1, -8), box(TILE + 3, 0.4, 1, 0x6e5a3c, 0, 1.1, 8),
-    cyl(2, 2, 18, TIMBER, -10, -9, -TILE / 2 + 2, 5), cyl(2, 2, 18, TIMBER, 10, -9, TILE / 2 - 2, 5));
+/** 一座完整的浮桥，桥面沿本地 X 轴延伸，浮筒横置于桥面下方。 */
+export function bridgeGeo(length: number): G {
+  const width = BRIDGE_WIDTH * TILE;
+  const parts: G[] = [];
+  const planks = Math.ceil(length / 6);
+  const plankWidth = length / planks;
+  for (let i = 0; i < planks; i++) {
+    const x = (i + 0.5) * plankWidth - length / 2;
+    parts.push(box(plankWidth - 0.18, 1.8, width, i % 3 === 0 ? 0xa48258 : 0x97764e, x, BRIDGE_DECK_Y - 0.9));
+  }
+  for (const z of [-width / 2 + 2, width / 2 - 2]) {
+    parts.push(box(length, 2.6, 2.6, TIMBER, 0, BRIDGE_DECK_Y - 2.2, z));
+  }
+  const floats = Math.ceil(length / (TILE * 1.35));
+  for (let i = 0; i < floats; i++) {
+    const x = ((i + 0.5) / floats - 0.5) * length;
+    parts.push(xf(ball(1, 0x634831, 0, 0, 0, 10), { s: [9, 4, width / 2 + 7], t: [x, -3.6, 0] }));
+  }
+  return join(...parts);
 }

@@ -3,10 +3,11 @@ import * as THREE from 'three';
 import {
   T_BRIDGE, T_DEEP, T_FARM, T_FOREST, T_HILL, T_MOUNTAIN, T_ROAD, T_SHALLOW, TILE,
 } from '../sim/defs';
-import { GameMap } from '../sim/map';
+import { BRIDGE_WIDTH, type GameMap } from '../sim/map';
 import { shared } from './materials';
 
 export const WATER_Y = -3.2;
+export const BRIDGE_DECK_Y = 1.6;
 
 const COLOR_FS = `
 uniform sampler2D uA, uB;
@@ -100,7 +101,11 @@ export class Terrain {
 
   constructor(private readonly map: GameMap, private readonly fogW: number, private readonly fogH: number,
     flat: { tx: number; ty: number; w: number; h: number }[]) {
-    const { w, h, terrain, height, dirt } = map;
+    const { w, h, height, dirt } = map;
+    const terrain = map.bridges?.length ? map.terrain.slice() : map.terrain;
+    for (const span of map.bridges ?? []) {
+      for (const [cell, bed] of span.bed) terrain[cell] = bed;
+    }
     const n = w * h;
     // ---- 每格海拔 ----
     let elev: Float32Array = new Float32Array(n);
@@ -150,6 +155,23 @@ export class Terrain {
       }
       hv[y * vw1 + x] = s / c;
     }
+    // 桥头贴住岸面，桥下的高地也要留出桥面净空。
+    const bridgeGround = BRIDGE_DECK_Y - 0.2;
+    for (const span of map.bridges ?? []) {
+      const pad = Math.abs(span.dx) + Math.abs(span.dy);
+      const halfLength = span.length / 2, halfWidth = BRIDGE_WIDTH / 2;
+      const reach = Math.ceil(halfLength + halfWidth + 2 * pad);
+      for (let y = Math.max(0, Math.floor(span.y) - reach); y <= Math.min(h, Math.floor(span.y) + reach); y++) {
+        for (let x = Math.max(0, Math.floor(span.x) - reach); x <= Math.min(w, Math.floor(span.x) + reach); x++) {
+          const ox = x - span.x, oy = y - span.y;
+          const along = Math.abs(ox * span.dx + oy * span.dy), across = Math.abs(-ox * span.dy + oy * span.dx);
+          if (along > halfLength + pad || across > halfWidth + pad) continue;
+          const i = y * vw1 + x;
+          // 斜桥的边不经过格点，接缝两侧的顶点要同高才能与桥板贴合。
+          hv[i] = along >= halfLength - pad ? bridgeGround : Math.min(hv[i], bridgeGround);
+        }
+      }
+    }
     const pos = new Float32Array(vw1 * vh1 * 3);
     for (let y = 0; y < vh1; y++) for (let x = 0; x < vw1; x++) {
       const o = (y * vw1 + x) * 3;
@@ -189,7 +211,7 @@ export class Terrain {
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x, o = i * 4;
       const t = terrain[i];
-      const bridge = t === T_BRIDGE;
+      const bridge = map.terrain[i] === T_BRIDGE;
       A[o] = bf[i] * 255;
       A[o + 1] = bh[i] * 255;
       A[o + 2] = bm[i] * 255;
@@ -200,8 +222,8 @@ export class Terrain {
       const x0 = Math.max(0, x - 1), x1 = Math.min(w - 1, x + 1), y0 = Math.max(0, y - 1), y1 = Math.min(h - 1, y + 1);
       const sh = Math.max(0, Math.min(1, 0.5 + (elev[y0 * w + x0] - elev[y1 * w + x1]) * 0.012));
       const kk = 0.7 + sh * 0.6;
-      const c = t === T_DEEP ? [34, 78, 112] : t === T_SHALLOW ? [78, 140, 150] : t === T_FOREST ? [50, 86, 42]
-        : t === T_HILL ? [140, 138, 86] : t === T_MOUNTAIN ? [128, 124, 118] : t === T_ROAD || bridge ? [170, 148, 106]
+      const c = bridge ? [170, 148, 106] : t === T_DEEP ? [34, 78, 112] : t === T_SHALLOW ? [78, 140, 150] : t === T_FOREST ? [50, 86, 42]
+        : t === T_HILL ? [140, 138, 86] : t === T_MOUNTAIN ? [128, 124, 118] : t === T_ROAD ? [170, 148, 106]
         : t === T_FARM ? [160, 150, 74] : dirt[i] > 100 ? [140, 122, 90] : [96, 132, 62];
       mini[o] = c[0] * kk;
       mini[o + 1] = c[1] * kk;

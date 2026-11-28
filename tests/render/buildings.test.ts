@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { BUILDINGS, BR_MILITARY } from '../../src/sim/defs';
-import { buildingGeo, flagHeight, lookLevel, wallGeo } from '../../src/render/buildings';
+import { Mesh, MeshBasicMaterial, Raycaster, Vector3 } from 'three';
+import { BUILDINGS, BR_MILITARY, TILE } from '../../src/sim/defs';
+import { BRIDGE_WIDTH } from '../../src/sim/map';
+import { bridgeGeo, buildingGeo, flagHeight, lookLevel, wallGeo } from '../../src/render/buildings';
+import { BRIDGE_DECK_Y, WATER_Y } from '../../src/render/terrain';
 
 const verts = (g: { getAttribute(n: string): { count: number } }): number => g.getAttribute('position').count;
 const KEYS = Object.keys(BUILDINGS).filter(k => k !== 'wall' && k !== 'palisade');
@@ -90,5 +93,36 @@ describe('建筑模型随等级', () => {
     expect(verts(wallGeo(0, true, 0, 2))).toBeGreaterThan(verts(wallGeo(0, true, 0, 1)));
     expect(verts(wallGeo(5, false, 1, 2))).toBeGreaterThan(verts(wallGeo(5, false, 1, 1)));
     expect(verts(wallGeo(5, false, 0, 2))).toBe(verts(wallGeo(5, false, 0, 1)));
+  });
+});
+
+describe('浮桥模型', () => {
+  it.each([5, 10])('跨 %i 格的整座桥有平直桥面，桥下浮筒入水', cells => {
+    const length = cells * TILE, halfWidth = BRIDGE_WIDTH * TILE / 2;
+    const geometry = bridgeGeo(length);
+    const material = new MeshBasicMaterial();
+    const mesh = new Mesh(geometry, material);
+    const ray = new Raycaster();
+    const down = new Vector3(0, -1, 0);
+    try {
+      geometry.computeBoundingBox();
+      expect(geometry.boundingBox!.min.y).toBeLessThan(WATER_Y);
+      for (const x of [-length / 2 + 3, -length / 4, 0, length / 4, length / 2 - 3]) {
+        for (const z of [-halfWidth + 2, 0, halfWidth - 2]) {
+          // 木板接缝允许透光，接缝旁应当仍能落在同一水平面上。
+          const hasDeck = [-0.25, 0, 0.25].some(offset => {
+            ray.set(new Vector3(x + offset, BRIDGE_DECK_Y + TILE, z), down);
+            const hit = ray.intersectObject(mesh)[0];
+            return hit !== undefined && Math.abs(hit.point.y - BRIDGE_DECK_Y) < 0.01;
+          });
+          expect(hasDeck, `桥面 (${x}, ${z})`).toBe(true);
+        }
+      }
+      ray.set(new Vector3(0, BRIDGE_DECK_Y + TILE, halfWidth + 1), down);
+      expect(ray.intersectObject(mesh).some(hit => hit.point.y >= BRIDGE_DECK_Y - 0.01)).toBe(false);
+    } finally {
+      geometry.dispose();
+      material.dispose();
+    }
   });
 });

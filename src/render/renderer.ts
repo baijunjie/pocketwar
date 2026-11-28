@@ -5,7 +5,7 @@ import {
   RULES, SITE_INFO, TILE, T_BRIDGE, UNITS,
 } from '../sim/defs';
 import { ZOOM_MAX, ZOOM_MIN } from '../camInput';
-import { CHUNK } from '../sim/map';
+import { BRIDGE_WIDTH, CHUNK } from '../sim/map';
 import { rallyPoint } from '../sim/rally';
 import {
   Building, FX_ARROW_HIT, FX_BUILT, FX_COLLAPSE, FX_DEATH, FX_EXPLODE, FX_FIRE, FX_HIT, FX_IMPACT, FX_LEVEL, FX_SMOKE, FX_UPGRADE,
@@ -15,7 +15,7 @@ import { bridgeGeo, buildingGeo, flagHeight, lookLevel, propGeo, rubbleGeo, wall
 import { litMaterial, shared } from './materials';
 import { box, cone, cyl, join } from './prims';
 import { Atlas, Q_AXIS, Q_BILLBOARD, Q_GROUND, Q_SCREEN, Quads, Sprite } from './quads';
-import { Terrain, WATER_Y } from './terrain';
+import { BRIDGE_DECK_Y, Terrain, WATER_Y } from './terrain';
 import { buildUnitModel } from './models/spec';
 import { ATTACK_VARIANTS, CLIP_FALLBACK, STD_ACTIONS, TWIST_CLIPS } from './models/actions';
 import { Clip, clipOf } from './rig';
@@ -403,19 +403,14 @@ export class Renderer {
       this.scene.add(mesh);
       this.disposables.push(mesh);
     }
-    // 桥
-    const cells: number[] = [];
-    for (let i = 0; i < map.terrain.length; i++) if (map.terrain[i] === T_BRIDGE) cells.push(i);
-    if (cells.length) {
-      const g = bridgeGeo();
-      const mesh = new THREE.InstancedMesh(g, mat, cells.length);
-      cells.forEach((c, i) => {
-        mesh.setMatrixAt(i, m.makeTranslation(((c % map.w) + 0.5) * TILE, 0.4, (((c / map.w) | 0) + 0.5) * TILE));
-      });
+    for (const span of map.bridges ?? []) {
+      const g = bridgeGeo(span.length * TILE);
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.position.set(span.x * TILE, 0, span.y * TILE);
+      mesh.rotation.y = -Math.atan2(span.dy, span.dx);
       mesh.castShadow = mesh.receiveShadow = true;
-      mesh.frustumCulled = false;
       this.scene.add(mesh);
-      this.disposables.push(g, mesh);
+      this.disposables.push(g);
     }
   }
 
@@ -517,11 +512,22 @@ export class Renderer {
     edge(x0, z1, x0, z0);
   }
 
+  private onBridge(x: number, z: number): boolean {
+    const map = this.world.map;
+    const gx = x / TILE, gy = z / TILE;
+    if (gx < 0 || gy < 0 || gx >= map.w || gy >= map.h) return false;
+    if (map.terrain[(gy | 0) * map.w + (gx | 0)] === T_BRIDGE) return true;
+    for (const span of map.bridges ?? []) {
+      const ox = gx - span.x, oy = gy - span.y, halfLength = span.length / 2;
+      if (Math.abs(ox) > halfLength + BRIDGE_WIDTH / 2 || Math.abs(oy) > halfLength + BRIDGE_WIDTH / 2) continue;
+      if (Math.abs(ox * span.dx + oy * span.dy) <= halfLength && Math.abs(-ox * span.dy + oy * span.dx) <= BRIDGE_WIDTH / 2) return true;
+    }
+    return false;
+  }
+
   /** 单位脚下的高度：桥面抬到水面以上，浅滩里只没到小腿 */
   groundY(x: number, z: number): number {
-    const map = this.world.map;
-    const tx = (x / TILE) | 0, tz = (z / TILE) | 0;
-    if (tx >= 0 && tz >= 0 && tx < map.w && tz < map.h && map.terrain[tz * map.w + tx] === T_BRIDGE) return 1.6;
+    if (this.onBridge(x, z)) return BRIDGE_DECK_Y;
     const h = this.terrain.heightAt(x, z);
     return h < WATER_Y - 2.2 ? WATER_Y - 2.2 : h;
   }
@@ -569,7 +575,7 @@ export class Renderer {
     const map = this.world.map;
     const tx = (x / TILE) | 0, tz = (z / TILE) | 0;
     const c = tx >= 0 && tz >= 0 && tx < map.w && tz < map.h ? tz * map.w + tx : -1;
-    if (c >= 0 && (map.terrain[c] === T_BRIDGE || this.world.nav.bld[c] >= 0)) this.raised.add(Q_GROUND, s, x, y + 0.5, z, w, h, r, g, b, a);
+    if (this.onBridge(x, z) || (c >= 0 && this.world.nav.bld[c] >= 0)) this.raised.add(Q_GROUND, s, x, y + 0.5, z, w, h, r, g, b, a);
     else this.ground.add(Q_GROUND, s, x, y, z, w, h, r, g, b, a);
   }
 
@@ -609,10 +615,19 @@ export class Renderer {
       z = o.z + dz * t;
       gy = Math.max(WATER_Y, this.terrain.heightAt(x, z));
     }
-    // 视线在落地之前先碰到墙顶 / 楼顶：落点算在墙上
+    // 视线可能先碰到桥面或更高的墙顶、楼顶。
     const len = Math.hypot(dx, dy, dz);
     if (dy < -1e-4) {
-      const tg = (gy - o.y) / dy;
+      let tg = (gy - o.y) / dy;
+      const bridgeT = (BRIDGE_DECK_Y - o.y) / dy;
+      if (bridgeT >= 0 && bridgeT < tg) {
+        const bx = o.x + dx * bridgeT, bz = o.z + dz * bridgeT;
+        if (this.onBridge(bx, bz)) {
+          x = bx;
+          z = bz;
+          tg = bridgeT;
+        }
+      }
       const back = (this.maxTop + 8) / -dy;
       const stepT = 6 / len;
       for (let t = Math.max(0, tg - back); t < tg; t += stepT) {

@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { InstancedBufferGeometry, Mesh, Scene } from 'three';
 import { Renderer } from '../../src/render/renderer';
+import { BRIDGE_DECK_Y } from '../../src/render/terrain';
+import { TILE, T_BRIDGE, T_SHALLOW } from '../../src/sim/defs';
 import { FACTIONS } from '../../src/sim/content/factions';
 import type { FactionId } from '../../src/sim/content/types';
 import { flatWorld } from '../helpers';
@@ -51,7 +53,7 @@ it('addMarker 返回新插入的标记，调用者可以用同一引用找到它
   expect(marker).not.toBe(previous);
 });
 
-it('起风时气流顺着世界风向移动，转镜头后仍沿世界风向，停风时消失', () => {
+function terrainRenderer(world: ReturnType<typeof flatWorld>): Renderer {
   const noop = () => {};
   const canvasContext = {
     save: noop, restore: noop, translate: noop, scale: noop, fillRect: noop,
@@ -61,14 +63,50 @@ it('起风时气流顺着世界风向移动，转镜头后仍沿世界风向，�
   };
   vi.stubGlobal('document', { createElement: () => ({ getContext: () => canvasContext }) });
   vi.stubGlobal('window', { devicePixelRatio: 1 });
-  vi.spyOn(Math, 'random').mockReturnValue(0.5);
-  const world = flatWorld();
-  // 空场景使用没有单位模型的阵营，免去加载与天气无关的角色资源。
-  world.factions[1] = world.factions[2] = { ...FACTIONS.china, id: 'weather-test' as FactionId };
+  // 空场景使用没有单位模型的阵营，免去加载角色资源。
+  world.factions[1] = world.factions[2] = { ...FACTIONS.china, id: 'renderer-test' as FactionId };
   const canvas = { clientWidth: 1000, clientHeight: 700 } as HTMLCanvasElement;
   const renderer = new Renderer(canvas, world);
   renderer.cam.x = world.W / 2;
   renderer.cam.y = world.H / 2;
+  return renderer;
+}
+
+it('斜桥擦过浅水格时，桥板上的高度和屏幕拾取都落在桥面', () => {
+  const size = 24, bridgeCell = 12 * size + 11;
+  const world = flatWorld(size, 7, terrain => {
+    terrain.fill(T_SHALLOW);
+    terrain[bridgeCell] = T_BRIDGE;
+  });
+  const { map } = world;
+  map.bridges = [{
+    x: 12, y: 12, dx: Math.SQRT1_2, dy: -Math.SQRT1_2, length: 8,
+    bed: [[bridgeCell, T_SHALLOW]],
+  }];
+  const renderer = terrainRenderer(world);
+  try {
+    const inside = 13.05 * TILE, outside = 13.5 * TILE;
+    expect(map.terrain[world.cellAt(inside, inside)]).toBe(T_SHALLOW);
+    expect(world.cellAt(inside, inside)).toBe(world.cellAt(outside, outside));
+    expect(renderer.groundY(inside, inside)).toBeCloseTo(BRIDGE_DECK_Y, 4);
+    expect(renderer.groundY(outside, outside)).toBeCloseTo(renderer.groundY(14 * TILE, 14 * TILE), 4);
+    expect(renderer.groundY(outside, outside)).toBeLessThan(BRIDGE_DECK_Y);
+
+    renderer.updateCamera();
+    const screen = renderer.worldToScreen(inside, inside);
+    expect(screen).not.toBeNull();
+    const hit = renderer.screenToWorld(screen!.x, screen!.y);
+    expect(hit.x).toBeCloseTo(inside, 3);
+    expect(hit.y).toBeCloseTo(inside, 3);
+  } finally {
+    renderer.dispose();
+  }
+});
+
+it('起风时气流顺着世界风向移动，转镜头后仍沿世界风向，停风时消失', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const world = flatWorld();
+  const renderer = terrainRenderer(world);
   const selection = new Uint8Array(0);
   const render = (dt = 0) => {
     renderer.render(0, dt, selection);
