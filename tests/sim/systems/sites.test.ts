@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BR_COMMON, BR_DEFENSE, BR_MILITARY, FACTIONS, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_INFO, UNITS, UNIT_BY_KEY, headcount } from '../../../src/sim/defs';
+import { BR_COMMON, BR_DEFENSE, BR_MILITARY, FACTIONS, SITE_CAMP, SITE_CITY, SITE_FARM, SITE_INFO, TILE, UNITS, UNIT_BY_KEY, headcount } from '../../../src/sim/defs';
 import { createGame } from '../../../src/sim/setup';
-import { campBatch, defenseLocked, factionUnits, initPicks, militaryLeft, pickedUnit, reinfPaused } from '../../../src/sim/systems/sites';
+import { campBatch, defenseLocked, factionUnits, initPicks, militaryLeft, pickedUnit, reinfPaused, updateSites } from '../../../src/sim/systems/sites';
 import type { Site, World } from '../../../src/sim/world';
 import { BASE, contentUnits } from '../../../tools/measure/units';
 import { flatWorld, run } from '../../helpers';
@@ -15,6 +15,47 @@ const clear = (w: World): void => {
 };
 const roleOf = (w: World, s: Site, role: number) => s.buildings.map(id => w.buildings[id]).filter(b => b.def.role === role);
 const ownSite = (w: World, type: number, tm: number): Site => w.sites.find(s => s.type === type && s.owner === tm)!;
+
+describe('据点休整的回血反馈', () => {
+  it('每次实际回血都记录本帧，回满后的休整不再刷新', () => {
+    const w = flatWorld();
+    const s = w.addSite(SITE_CAMP, '营寨', 20 * TILE, 20 * TILE, 1);
+    const u = w.spawnUnit(idx('dao'), 1, s.x, s.y);
+    w.hp[u] *= 0.5;
+    const woundedHp = w.hp[u];
+    w.tickCount = 15;
+    updateSites(w);
+    expect(w.hp[u]).toBeGreaterThan(woundedHp);
+    expect(w.lastHealTick[u]).toBe(15);
+
+    w.hp[u] = w.maxHp[u] * 0.999;
+    w.tickCount = 30;
+    updateSites(w);
+    expect(w.hp[u]).toBe(w.maxHp[u]);
+    expect(w.lastHealTick[u]).toBe(30);
+
+    w.tickCount = 45;
+    updateSites(w);
+    expect(w.lastHealTick[u]).toBe(30);
+  });
+
+  it('战斗中和据点外的伤员不会触发回血反馈', () => {
+    const w = flatWorld();
+    const s = w.addSite(SITE_CAMP, '营寨', 20 * TILE, 20 * TILE, 1);
+    const fighting = w.spawnUnit(idx('dao'), 1, s.x, s.y);
+    const outside = w.spawnUnit(idx('dao'), 1, s.x + s.radius + TILE, s.y);
+    w.combatT[fighting] = 1;
+    const woundedHp = Math.fround(w.maxHp[fighting] * 0.5);
+    w.hp[fighting] = w.hp[outside] = woundedHp;
+    w.tickCount = 15;
+    updateSites(w);
+
+    for (const u of [fighting, outside]) {
+      expect(w.hp[u]).toBe(woundedHp);
+      expect(w.lastHealTick[u]).toBe(-1);
+    }
+  });
+});
 
 describe('占领前的守备：defenseLocked', () => {
   it('敌方据点：军事建筑有一座立着就锁着；全拆光才解锁，城防与普通建筑不用拆', () => {

@@ -28,6 +28,7 @@ const TAN = Math.tan((FOV / 2) * (Math.PI / 180));
 const DULL = new THREE.Color(0.42, 0.45, 0.48);
 const PALE = new THREE.Color(0.78, 0.81, 0.86);
 const WIND_STREAKS = 108;
+const HEAL_EFFECT_LIFE = 0.5;
 
 interface WindStreak {
   x: number;
@@ -119,6 +120,7 @@ export class Renderer {
   /** 贴在桥面、墙顶上的标记（要做深度测试，不然会被模型盖住） */
   private readonly raised: Quads;
   private readonly routIcon: Sprite;
+  private readonly healIcon: Sprite;
   private readonly cmdFlags: THREE.InstancedMesh;
   private readonly atlas = new Atlas(1024);
   private readonly white: Sprite;
@@ -246,6 +248,18 @@ export class Renderer {
       c.beginPath();
       c.moveTo(4, 15);
       c.lineTo(4, 2);
+      c.stroke();
+    });
+    this.healIcon = at.add(16, 16, 3, c => {
+      c.lineCap = 'round';
+      c.beginPath();
+      c.moveTo(8, 3); c.lineTo(8, 13);
+      c.moveTo(3, 8); c.lineTo(13, 8);
+      c.strokeStyle = '#163d2a';
+      c.lineWidth = 5.5;
+      c.stroke();
+      c.strokeStyle = '#b7ffbc';
+      c.lineWidth = 3;
       c.stroke();
     });
     const label = (name: string): Sprite => {
@@ -1169,6 +1183,15 @@ export class Renderer {
         // 溃兵保持本队颜色，头顶插一面小白旗
         const sz = Math.max(8, d * 0.0075);
         S.add(Q_BILLBOARD, this.routIcon, x, y + top + 2, z, sz, sz, 1, 1, 1, 1, 0.5, 1);
+      }
+      const healTick = w.lastHealTick[i];
+      if (healTick >= 0) {
+        const progress = (tick + alpha - healTick) * DT / HEAL_EFFECT_LIFE;
+        if (progress >= 0 && progress < 1) {
+          const size = Math.max(9, d * 0.008);
+          S.add(Q_BILLBOARD, this.healIcon, x, y + top + size * (0.9 + progress * 0.6), z,
+            size, size, 1, 1, 1, Math.min(1, (1 - progress) * 2));
+        }
       }
       if (sel[i]) {
         const r = def.radius * 2.6 + 5;

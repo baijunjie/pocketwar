@@ -172,6 +172,8 @@ export class World {
   readonly vx = new Float32Array(MAX_UNITS);
   readonly vy = new Float32Array(MAX_UNITS);
   readonly hp = new Float32Array(MAX_UNITS);
+  /** 最近一次实际回血的帧号，-1 表示还没回血 */
+  readonly lastHealTick = new Int32Array(MAX_UNITS).fill(-1);
   readonly maxHp = new Float32Array(MAX_UNITS);
   readonly facing = new Int8Array(MAX_UNITS);
   /** 朝向角（弧度，atan2(dy, dx)），供立体渲染使用；平滑转向 */
@@ -502,6 +504,7 @@ export class World {
     this.level[i] = level;
     this.xp[i] = LEVELS.thresholds[level];
     this.hp[i] = this.maxHp[i] = d.lvHp[level];
+    this.lastHealTick[i] = -1;
     this.facing[i] = tm === 1 ? 1 : -1;
     this.dir[i] = tm === 1 ? 0 : Math.PI;
     this.order[i] = O_IDLE;

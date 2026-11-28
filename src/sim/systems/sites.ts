@@ -30,7 +30,11 @@ export function updateSites(w: World): void {
       if (s.owner === w.team[i] && SITE_INFO[s.type].haven && inside) {
         w.sheltered[i] = 1;
         w.shelterSite[i] = s.id;
-        if (w.combatT[i] <= 0 && w.target[i] === NONE && w.hp[i] < w.maxHp[i]) w.hp[i] = Math.min(w.maxHp[i], w.hp[i] + w.maxHp[i] * heal);
+        if (w.combatT[i] <= 0 && w.target[i] === NONE && w.hp[i] < w.maxHp[i]) {
+          const hp = Math.fround(Math.min(w.maxHp[i], w.hp[i] + w.maxHp[i] * heal));
+          if (hp > w.hp[i]) w.lastHealTick[i] = w.tickCount;
+          w.hp[i] = hp;
+        }
       }
       if (d2 < flag2) s.flag[w.team[i]]++;
     }

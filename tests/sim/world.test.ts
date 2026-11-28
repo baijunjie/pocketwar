@@ -5,6 +5,17 @@ import { flatWorld } from '../helpers';
 
 const idx = (k: string): number => UNIT_BY_KEY[k].idx;
 
+it('复用被移除单位的槽位时，新单位没有旧的回血反馈', () => {
+  const w = flatWorld();
+  const a = w.spawnUnit(idx('dao'), 1, 10 * TILE, 10 * TILE);
+  expect(w.lastHealTick[a]).toBe(-1);
+  w.lastHealTick[a] = 15;
+  w.removeUnit(a);
+  const b = w.spawnUnit(idx('dao'), 1, 12 * TILE, 12 * TILE);
+  expect(b).toBe(a);
+  expect(w.lastHealTick[b]).toBe(-1);
+});
+
 describe('spawnUnit：新生成的单位没有上一任留下的追击状态', () => {
   it('复用被移除单位的槽位：wayUid、wayMode、wayNoT、wallUid 清零', () => {
     const w = flatWorld();
