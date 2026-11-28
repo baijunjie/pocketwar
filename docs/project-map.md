@@ -51,7 +51,7 @@
 | [`public/audio/`](../public/audio/) | 对局使用的实录、拟音与授权配乐剪辑，另含备用素材。[`sampler.mp3`](../public/audio/sampler.mp3) 可连续试听一段混音后的战场场景 |
 | `src/dev/viewer.ts` | 开发用预览页（兵种与动画、静态素材、glTF） |
 | [`tools/measure/`](../tools/measure/README.md) | 对战测量工具（开发用，游戏运行时不引用）：无头对战量出兵种与阵营的实战强弱，只作参考、不写文件；另有不跑对战的点数明细与补级命令（计算在 `content/budget.ts`，`--write` 写回 `content/factions.ts`） |
-| `tests/` | 无头测试（模拟层与测量工具；`tests/ui/` 是界面类测试，项目没有 jsdom，共用 `tests/ui/fakeDom.ts` 的极简假 DOM 在 node 环境里跑） |
+| `tests/` | 无头测试（模拟层与测量工具；`tests/ui/` 是界面类测试，项目没有 jsdom，共用 `tests/ui/fakeDom.ts` 的极简假 DOM 在 node 环境里跑；`tests/bench/` 放不是测试文件的测量脚本，`tests/sim.test.ts` 的性能用例把它打包后在单独的 node 进程里跑并读其输出） |
 
 ## 层间约定
 

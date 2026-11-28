@@ -9,7 +9,29 @@ export function rectOf(left: number, top: number, width: number, height: number)
   return { left, top, width, height, right: left + width, bottom: top + height };
 }
 
-export class FakeEl extends EventTarget {
+type ListenerOpts = boolean | AddEventListenerOptions | undefined;
+
+/** 第三个参数写成布尔值的换成 { capture }，其余原样 */
+function captureOpts(o: ListenerOpts): AddEventListenerOptions | undefined {
+  return typeof o === 'boolean' ? { capture: o } : o;
+}
+
+/**
+ * 假 DOM 的事件目标。浏览器里监听的第三个参数写 true 与写 { capture: true } 等价，挂上、摘掉都认；
+ * Node 自带的 EventTarget 有的版本摘监听时不认布尔值（用 true 挂上的捕获监听，再用 true 摘不掉），
+ * 被测代码照浏览器的写法用布尔值时，监听就一直留着。这里统一换成对象再交给它，行为才与浏览器一致、不随 Node 版本变
+ */
+export class FakeTarget extends EventTarget {
+  override addEventListener(type: string, fn: EventListenerOrEventListenerObject | null, opts?: ListenerOpts): void {
+    super.addEventListener(type, fn, captureOpts(opts));
+  }
+
+  override removeEventListener(type: string, fn: EventListenerOrEventListenerObject | null, opts?: ListenerOpts): void {
+    super.removeEventListener(type, fn, captureOpts(opts));
+  }
+}
+
+export class FakeEl extends FakeTarget {
   readonly classList: { add(...c: string[]): void; remove(...c: string[]): void; toggle(c: string, force?: boolean): boolean; contains(c: string): boolean };
   /** 普通属性（transform 等）直接读写；CSS 变量走 setProperty / getPropertyValue（不进可枚举属性） */
   readonly style: Record<string, string> & { setProperty(k: string, v: string): void; getPropertyValue(k: string): string } = (() => {
@@ -166,7 +188,7 @@ export function installFakeDom(vi: { stubGlobal(name: string, v: unknown): unkno
   hit: { fn: (x: number, y: number) => unknown };
 } {
   const hit = { fn: (_x: number, _y: number): unknown => null };
-  const win = Object.assign(new EventTarget(), {
+  const win = Object.assign(new FakeTarget(), {
     setTimeout: ((f: () => void, ms?: number) => globalThis.setTimeout(f, ms)) as unknown as typeof setTimeout,
   });
   vi.stubGlobal('window', win);
