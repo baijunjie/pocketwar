@@ -1,9 +1,80 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  CARD_SCROLL_BIAS, CARD_SLOP, DROP_ARM, DROP_REACH, DROP_TURN_BAND, HOLD_MS, STICK_CURVE, STICK_DEAD, SWIPE_MIN, TAP_SLOP, TouchGestures,
-  asUiMode, cardIntent, dropOffset, inInscribedCircle, isMobileUi, pinchOf, stickVector, swipeDir,
+  CARD_SCROLL_BIAS, CARD_SLOP, DROP_ARM, DROP_REACH, DROP_TURN_BAND, GroundTaps, HOLD_MS, STICK_CURVE, STICK_DEAD, SWIPE_MIN, TAP_SLOP, TouchGestures,
+  asUiMode, cardIntent, dropOffset, isMobileUi, pinchOf, stickVector, swipeDir,
 } from '../src/touchInput';
 import type { Pinch, TouchHandlers } from '../src/touchInput';
+
+describe('GroundTaps 移动版地面点按', () => {
+  const firstScreen = { x: 100, y: 200 };
+  const firstWorld = { x: 400, y: 700 };
+  const secondWorld = { x: 430, y: 660 };
+  const move = vi.fn();
+  let taps: GroundTaps;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    move.mockClear();
+    taps = new GroundTaps(move);
+  });
+
+  afterEach(() => {
+    taps.cancel();
+    vi.useRealTimers();
+  });
+
+  it('首点立即对点按的世界坐标发出攻击移动，随后不迟发', () => {
+    taps.tap(firstScreen, firstWorld);
+    expect(move).toHaveBeenCalledExactlyOnceWith(firstWorld, true);
+    vi.advanceTimersByTime(500);
+    expect(move).toHaveBeenCalledTimes(1);
+  });
+
+  it('恰好间隔 260 ms、相距 24 px 的次点立即发出普通移动', () => {
+    taps.tap(firstScreen, firstWorld);
+    expect(move).toHaveBeenCalledExactlyOnceWith(firstWorld, true);
+    vi.advanceTimersByTime(260);
+    taps.tap({ x: 100, y: 224 }, secondWorld);
+    expect(move.mock.calls).toEqual([[firstWorld, true], [secondWorld, false]]);
+    vi.advanceTimersByTime(500);
+    expect(move).toHaveBeenCalledTimes(2);
+  });
+
+  it('窗口内但相距超过 24 px 时，两点各自立即攻击移动', () => {
+    taps.tap(firstScreen, firstWorld);
+    vi.advanceTimersByTime(100);
+    taps.tap({ x: 100, y: 225 }, secondWorld);
+    expect(move.mock.calls).toEqual([[firstWorld, true], [secondWorld, true]]);
+  });
+
+  it('超过 260 ms 的同处点按立即发出新的攻击移动', () => {
+    taps.tap(firstScreen, firstWorld);
+    vi.advanceTimersByTime(261);
+    taps.tap(firstScreen, secondWorld);
+    expect(move.mock.calls).toEqual([[firstWorld, true], [secondWorld, true]]);
+  });
+
+  it('同处连续三次点按时，第三点作为下一组的首点攻击移动', () => {
+    const thirdWorld = { x: 410, y: 720 };
+    taps.tap(firstScreen, firstWorld);
+    vi.advanceTimersByTime(60);
+    taps.tap(firstScreen, secondWorld);
+    vi.advanceTimersByTime(60);
+    taps.tap(firstScreen, thirdWorld);
+    expect(move.mock.calls).toEqual([[firstWorld, true], [secondWorld, false], [thirdWorld, true]]);
+  });
+
+  it('取消只清掉配对，下一次同处点按立即攻击移动且没有迟发命令', () => {
+    taps.tap(firstScreen, firstWorld);
+    expect(move).toHaveBeenCalledExactlyOnceWith(firstWorld, true);
+    vi.advanceTimersByTime(70);
+    taps.cancel();
+    taps.tap(firstScreen, secondWorld);
+    expect(move.mock.calls).toEqual([[firstWorld, true], [secondWorld, true]]);
+    vi.advanceTimersByTime(500);
+    expect(move).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('常量', () => {
   it('抖动容差约 10px、长按 0.5 秒、卡片起手约 8px、滑动约 28px', () => {
@@ -401,58 +472,6 @@ describe('stickVector 摇杆读数', () => {
   });
 });
 
-describe('inInscribedCircle 矩形内切圆', () => {
-  const sq = { left: 100, top: 200, width: 80, height: 80 };
-
-  it('圆心（矩形中心）与圆内的点在里面', () => {
-    expect(inInscribedCircle(140, 240, sq)).toBe(true);
-    expect(inInscribedCircle(110, 240, sq)).toBe(true);
-    expect(inInscribedCircle(160, 260, sq)).toBe(true);
-  });
-
-  it('圆周上算在里面，刚过圆周在外面', () => {
-    expect(inInscribedCircle(180, 240, sq)).toBe(true);
-    expect(inInscribedCircle(100, 240, sq)).toBe(true);
-    expect(inInscribedCircle(140, 200, sq)).toBe(true);
-    expect(inInscribedCircle(140, 280, sq)).toBe(true);
-    expect(inInscribedCircle(180.01, 240, sq)).toBe(false);
-    expect(inInscribedCircle(99.99, 240, sq)).toBe(false);
-    expect(inInscribedCircle(140, 280.01, sq)).toBe(false);
-  });
-
-  it('方形的四角在圆外', () => {
-    for (const [x, y] of [[100, 200], [180, 200], [100, 280], [180, 280], [105, 205]]) {
-      expect(inInscribedCircle(x, y, sq), `${x},${y}`).toBe(false);
-    }
-  });
-
-  it('矩形外的点在圆外', () => {
-    expect(inInscribedCircle(0, 0, sq)).toBe(false);
-    expect(inInscribedCircle(140, 500, sq)).toBe(false);
-    expect(inInscribedCircle(-1000, 240, sq)).toBe(false);
-  });
-
-  it('非正方形按短边的一半作半径，圆心在矩形中心', () => {
-    const wide = { left: 0, top: 0, width: 200, height: 100 };
-    expect(inInscribedCircle(100, 50, wide)).toBe(true);
-    expect(inInscribedCircle(149, 50, wide)).toBe(true);
-    expect(inInscribedCircle(151, 50, wide)).toBe(false);
-    expect(inInscribedCircle(100, 0, wide)).toBe(true);
-    expect(inInscribedCircle(100, 101, wide)).toBe(false);
-    expect(inInscribedCircle(10, 50, wide)).toBe(false);
-    const tall = { left: 0, top: 0, width: 100, height: 300 };
-    expect(inInscribedCircle(50, 150, tall)).toBe(true);
-    expect(inInscribedCircle(50, 199, tall)).toBe(true);
-    expect(inInscribedCircle(50, 201, tall)).toBe(false);
-    expect(inInscribedCircle(50, 20, tall)).toBe(false);
-  });
-
-  it('没有大小的矩形里只有圆心算（半径 0）', () => {
-    expect(inInscribedCircle(5, 5, { left: 5, top: 5, width: 0, height: 0 })).toBe(true);
-    expect(inInscribedCircle(6, 5, { left: 5, top: 5, width: 0, height: 0 })).toBe(false);
-  });
-});
-
 describe('swipeDir 抽屉滑动方向', () => {
   it('位移没到滑动距离不算滑动', () => {
     expect(swipeDir(0, 0)).toBeNull();
@@ -477,6 +496,7 @@ describe('swipeDir 抽屉滑动方向', () => {
 describe('TouchGestures 画面手势', () => {
   const calls: string[] = [];
   const pinches: Pinch[] = [];
+  const pinchStart = vi.fn();
   const boxes: { x0: number; y0: number; x1: number; y1: number; done: boolean; commit: boolean }[] = [];
   let canBox = true;
   let g: TouchGestures;
@@ -485,6 +505,7 @@ describe('TouchGestures 画面手势', () => {
     vi.useFakeTimers();
     calls.length = 0;
     pinches.length = 0;
+    pinchStart.mockClear();
     boxes.length = 0;
     canBox = true;
     const h: TouchHandlers = {
@@ -495,6 +516,7 @@ describe('TouchGestures 画面手势', () => {
         boxes.push({ x0, y0, x1, y1, done, commit });
         calls.push('box');
       },
+      pinchStart,
       pinch: p => {
         pinches.push(p);
         calls.push('pinch');
@@ -606,6 +628,18 @@ describe('TouchGestures 画面手势', () => {
   });
 
   describe('第二根手指', () => {
+    it('第二根手指一按下即通知双指起手，移动与此后按下的第三指不重复通知', () => {
+      g.down(1, 100, 200);
+      expect(pinchStart).not.toHaveBeenCalled();
+      g.down(2, 200, 200);
+      expect(pinchStart).toHaveBeenCalledTimes(1);
+      expect(pinches).toHaveLength(0);
+      g.down(3, 300, 200);
+      g.move(2, 200, 230);
+      expect(pinchStart).toHaveBeenCalledTimes(1);
+      expect(pinches).toHaveLength(1);
+    });
+
     it('按下时作废待定的单指手势：不触发点、长按', () => {
       g.down(1, 100, 200);
       g.down(2, 200, 200);

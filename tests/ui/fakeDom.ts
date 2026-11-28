@@ -117,6 +117,7 @@ export class FakeEl extends FakeTarget {
     this.parent.children.splice(this.parent.children.indexOf(this), 1);
     this.parent = null;
   }
+  getAttribute(k: string): string | null { return this.attrs[k] ?? null; }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
   removeAttribute(k: string): void { delete this.attrs[k]; }
   /** 自己或子孙节点 */

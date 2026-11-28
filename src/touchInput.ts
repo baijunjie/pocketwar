@@ -1,6 +1,6 @@
 /**
  * 触屏输入的纯判定，不碰 DOM：移动版界面何时启用、画面上单指 / 双指手势的分类（`TouchGestures`）、
- * 卡片带上起手的方向判定、拖卡片时落点相对手指的偏移、摇杆的读数、小地图圆内的判定、抽屉的滑动方向。
+ * 卡片带上起手的方向判定、拖卡片时落点相对手指的偏移、摇杆的读数、抽屉的滑动方向。
  * 由 `game.ts`、`hud.ts`、`ui/cardBar.ts`、`ui/joystick.ts` 接到事件上。
  */
 
@@ -99,19 +99,35 @@ export function stickVector(dx: number, dy: number, radius: number, dead = STICK
   return { x: dx * k, y: dy * k };
 }
 
-/**
- * 点 (x, y) 在不在矩形 r 的内切圆里。小地图的画布是方的、地图画成圆的（圆外的角上还画着风向标，不能把画布裁圆）：
- * 移动版里方形的四角紧挨着摇杆，手指落在圆外不该算点中小地图
- */
-export function inInscribedCircle(x: number, y: number, r: { left: number; top: number; width: number; height: number }): boolean {
-  return Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)) <= Math.min(r.width, r.height) / 2;
-}
-
 /** 一次滑动的方向：横向或纵向占主导且位移够 min，否则 null */
 export function swipeDir(dx: number, dy: number, min = SWIPE_MIN): 'left' | 'right' | 'up' | 'down' | null {
   if (Math.max(Math.abs(dx), Math.abs(dy)) < min) return null;
   if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'left' : 'right';
   return dy < 0 ? 'up' : 'down';
+}
+
+/** 两次松手的最长时间与画布上的最大距离 */
+const GROUND_DOUBLE_MS = 260;
+const GROUND_DOUBLE_SLOP = 24;
+
+/** 每次点按立即下令，只用首点的位置与时间判断下一点能否切换指令。 */
+export class GroundTaps {
+  private first: { screen: Pt; time: number } | null = null;
+
+  constructor(private readonly move: (target: Pt, attackMove: boolean) => void) {}
+
+  tap(screen: Pt, target: Pt): void {
+    const now = performance.now(), first = this.first;
+    const double = first !== null && now - first.time <= GROUND_DOUBLE_MS
+      && Math.hypot(screen.x - first.screen.x, screen.y - first.screen.y) <= GROUND_DOUBLE_SLOP;
+    this.first = double ? null : { screen, time: now };
+    this.move(target, !double);
+  }
+
+  /** 打断连点，让下一次点按作为新的首点。 */
+  cancel(): void {
+    this.first = null;
+  }
 }
 
 export interface TouchHandlers {
@@ -123,7 +139,8 @@ export interface TouchHandlers {
   canBox(): boolean;
   /** 框选拖动中 / 结束：commit 为 false 是被打断（来了第二根手指、取消），不该选 */
   box(x0: number, y0: number, x1: number, y1: number, done: boolean, commit: boolean): void;
-  /** 双指：两根手指每次移动 */
+  /** 双指起手，以及之后两根手指每次移动 */
+  pinchStart?(): void;
   pinch(p: Pinch): void;
 }
 
@@ -164,6 +181,7 @@ export class TouchGestures {
       this.multi = true;
       const [a, b] = [...this.pts.keys()];
       this.pair = [a, b];
+      this.h.pinchStart?.();
     }
   }
 

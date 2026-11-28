@@ -149,7 +149,7 @@ export class Hud {
   readonly minimap: HTMLCanvasElement;
   /** 移动版的编队按钮一排（观战时没有） */
   private slotRow: GroupSlots | null = null;
-  /** 移动版卡片带最前面的「取消选择」（观战时没有） */
+  /** 移动版摇杆与小地图之间的「取消选择」（观战时没有） */
   private deselBtn: HTMLButtonElement | null = null;
   /** 移动版的镜头摇杆（与小地图并排）：game 每帧读它的读数卷屏 */
   readonly stick = new Joystick();
@@ -170,7 +170,7 @@ export class Hud {
   private readonly settings: HTMLDivElement;
   /** 选中单个单位 / 据点时的详情（兵种栏上方） */
   private readonly selBox: HTMLDivElement;
-  /** 小地图那一块（编队按钮、缩放条、摇杆、小地图）：移动版详情盖住它时设 inert，键盘与读屏也够不着 */
+  /** 小地图那一块（缩放条、摇杆、取消选择、小地图）：移动版详情盖住它时设 inert，键盘与读屏也够不着 */
   private readonly miniBox: HTMLDivElement;
   /** 详情的内容（定时重建），与关闭按钮分开放 */
   private readonly selBody: HTMLDivElement;
@@ -186,7 +186,7 @@ export class Hud {
   /** 卡片带（移动版的升级选择以它的上沿为底） */
   private readonly cardwrap: HTMLDivElement;
   private readonly topbar: HTMLDivElement;
-  private upChoices: UpgradeChoice[] = [];
+  private upChoices: { run(): void }[] = [];
   /** 升级选择是为哪张卡片弹的（开着时刷新用）与上次写入的内容 */
   /**
    * 长按的是哪张卡；dx / dy / w 是弹出时那张卡相对卡片带（cardwrap）的位置与宽度。
@@ -253,6 +253,7 @@ export class Hud {
   private sitesHtml = '';
   /** 有可取消的选择（部队或据点）、正处于指令模式：两个「取消选择」据此可按 */
   private hasSel = false;
+  private hasSelectedUnits = false;
   private inMode = false;
   /** 挂在 window 上的监听，销毁时摘掉 */
   private readonly disposers: (() => void)[] = [];
@@ -383,20 +384,38 @@ export class Hud {
     // ---- 小地图 ----
     const mm = (this.miniBox = el('div', 'panel mini'));
     this.minimap = el('canvas');
-    // 移动版：最上面一排编队按钮，下面一边是缩放条叠在摇杆上方、一边是小地图
     if (human) {
-      const row = new GroupSlots(g => cb.groupSlot(g));
+      const row = new GroupSlots((g, occupied, picked) => {
+        if (this.cards.busy) return;
+        if (!occupied) cb.groupSlot(g);
+        else if (cb.cardCount('group', g)) {
+          if (picked) cb.unpickCard('group', g);
+          else cb.selectGroup(g, false);
+        }
+      });
       this.slotRow = row;
       row.el.classList.add('mobile-only');
       this.disposers.push(() => row.destroy());
-      mm.appendChild(row.el);
     } else host.classList.add('watch');
     const mmRow = el('div', 'minirow');
     const joyCol = el('div', 'joycol mobile-only');
     this.zoom = new ZoomSlider(f => cb.zoomTo(f));
     this.disposers.push(() => this.stick.destroy());
     joyCol.append(this.zoom.el, this.stick.el);
-    mmRow.append(joyCol, this.minimap);
+    mmRow.appendChild(joyCol);
+    if (human) {
+      // 移动版里点空地是下令，取消选择靠按钮：常用，所以在指令面板之外，在摇杆和小地图之间再放一个
+      const b = (this.deselBtn = el('button', 'desel mobile-only', '<b>✕</b>取消<br>选择'));
+      b.setAttribute('aria-label', '取消选择');
+      // 手指由卡片带受理（与卡片共用「一次只认一根手指」：拖卡片时另一指按它不响应，先按住它时也拖不了卡片），见 CardBar 的 tapButton；
+      // 键盘（Enter / 空格）与读屏软件的激活只发 click（detail 为 0）
+      b.addEventListener('click', e => {
+        if (e.detail === 0 && !b.disabled && !this.cards.busy) cb.command('deselect');
+      });
+      b.addEventListener('contextmenu', e => e.preventDefault());
+      mmRow.appendChild(b);
+    }
+    mmRow.appendChild(this.minimap);
     mm.appendChild(mmRow);
     root.appendChild(mm);
 
@@ -404,7 +423,7 @@ export class Hud {
     const bottom = el('div', 'bottom');
     this.selBox = el('div', 'panel detail');
     this.selBox.hidden = true;
-    // 移动版里详情占掉卡片带以下的操控区，右上角的关闭只收起详情、不改选择（再点那个单位 / 据点重新打开）
+    // 移动版里详情覆盖编队行下方的操控区，右上角的关闭只收起详情、不改选择（再点那个单位 / 据点重新打开）
     const close = el('button', 'dclose mobile-only', '✕');
     close.setAttribute('aria-label', '关闭详情');
     this.disposers.push(bindPress(close, {
@@ -418,10 +437,14 @@ export class Hud {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-act]');
       if (b && !b.disabled && (e.detail <= 1 || b.dataset.act === 'pick')) cb.siteAction(b.dataset.act as 'upgrade' | 'tower' | 'pick', Number(b.dataset.site), b.dataset.unit === undefined ? undefined : Number(b.dataset.unit));
     });
-    // 两排卡片包在一个容器里：移动版里它是横向滚动的卡片带，编队卡片与兵种卡片排成一行
+    // 桌面版的两排卡片包在同一个容器里；移动版只在这里显示横向滚动的全选屏幕与兵种卡片
     const cardwrap = (this.cardwrap = el('div', 'cardwrap'));
     this.cards = new CardBar(world, (t, team) => this.portrait(t, team), this.minimap, root,
-      { ...cb, holdCard: (kind, id, rect) => this.showUpgradeMenu(kind, id, rect), tapButton: () => cb.command('deselect') }, cardwrap, top);
+      {
+        ...cb,
+        holdCard: (kind, id, rect) => this.showUpgradeMenu(kind, id, rect),
+        tapButton: b => b.dataset.g === undefined ? cb.command('deselect') : cb.groupSlot(Number(b.dataset.g)),
+      }, cardwrap, top, this.deselBtn, this.slotRow?.el);
     // 长按卡片弹出的升级选择：点它以外的地方收起
     this.upMenu = el('div', 'panel upmenu');
     this.upMenu.hidden = true;
@@ -576,21 +599,11 @@ export class Hud {
     window.addEventListener('pointerdown', closeUp, true);
     this.disposers.push(() => window.removeEventListener('pointerdown', closeUp, true));
     this.disposers.push(() => this.cards.destroy());
-    if (human) {
-      // 移动版里点空地是下令移动，取消选择靠按钮：常用，所以在指令面板之外，卡片带最前面再放一个伸手就到的
-      const b = (this.deselBtn = el('button', 'desel mobile-only', '<b>✕</b>取消<br>选择'));
-      b.setAttribute('aria-label', '取消选择');
-      // 手指由卡片带受理（与卡片共用「一次只认一根手指」：拖卡片时另一指按它不响应，先按住它时也拖不了卡片），见 CardBar 的 tapButton；
-      // 键盘（Enter / 空格）与读屏软件的激活只发 click（detail 为 0）
-      b.addEventListener('click', e => {
-        if (e.detail === 0 && !b.disabled && !this.cards.busy) cb.command('deselect');
-      });
-      b.addEventListener('contextmenu', e => e.preventDefault());
-      cardwrap.appendChild(b);
-    }
     cardwrap.append(this.cards.groupRow, this.cards.roster);
     bottom.append(this.selBox, cardwrap);
-    root.append(bottom, this.upMenu);
+    root.appendChild(bottom);
+    if (this.slotRow) root.appendChild(this.slotRow.el);
+    root.appendChild(this.upMenu);
 
     // ---- 右下：指令面板，分「部队」「援军」「升级」三栏 ----
     const cmds = el('div', 'panel cmds');
@@ -619,7 +632,7 @@ export class Hud {
         btn('扎营', 'B', 'outpost', `派所选部队到指定位置搭一座临时据点（木材 ${RULES.economy.outpostCost}，最多 ${RULES.economy.outpostMax} 座）：部队在里面休整回血，被毁不会重生`),
         btn('跟随', 'C', 'follow', '镜头平滑地跟着所选部队走；再按一次、或手动移动镜头即取消'),
         btn('全军', 'Ctrl+A', 'all', '选中全图的全部部队'),
-        btn('取消选择', 'Esc', 'deselect', '退出指令模式并取消选择（部队和据点）；移动版里点空地是下令移动，取消选择靠它'),
+        btn('取消选择', 'Esc', 'deselect', '退出指令模式并取消选择（部队和据点）；移动版里点空地是下令，取消选择靠它'),
       );
       this.cmdBtns.get('deselect')!.classList.add('mobile-only');
       const reinf = el('div', 'cgrid');
@@ -690,28 +703,30 @@ export class Hud {
           <h2 id="help-title">快速上手</h2>
           <p class="help-goal">丢光城池和营寨的一方战败：攻占敌方所有城池与营寨即可获胜。</p>
           <table class="mobile-only" aria-label="触屏基本操作">
-            <tr><th scope="row">点单位 / 据点</th><td>选中</td></tr>
+            <tr><th scope="row">点己方单位 / 据点</th><td>点己方单位选中它；没选部队时，点据点选中据点</td></tr>
             <tr><th scope="row">单指拖动</th><td>框选部队</td></tr>
-            <tr><th scope="row">点地面 / 敌人 / 据点</th><td>已选部队移动 / 攻击 / 派去占领（没选部队时点据点是选中它）</td></tr>
+            <tr><th scope="row">单击 / 双击地面</th><td>已选部队攻击移动 / 普通移动</td></tr>
+            <tr><th scope="row">点敌军 / 可攻击的建筑</th><td>已选部队直接攻击目标</td></tr>
             <tr><th scope="row">长按地面</th><td>攻击移动</td></tr>
             <tr><th scope="row">双指捏合 / 拧转</th><td>缩放 / 旋转镜头</td></tr>
             <tr><th scope="row">推摇杆 / 拖动或点小地图</th><td>移动镜头</td></tr>
             <tr><th scope="row">摇杆上方的缩放条</th><td>拖动滑块或点在条上缩放镜头（往右拉近）；点两端的 − / + 缩放一档</td></tr>
             <tr><th scope="row">卡片拖到地图上</th><td>剑尖指着的地方是落点：这批人攻击移动过去，松在敌军身上则攻击它</td></tr>
             <tr><th scope="row">点亮着的卡片 / 长按卡片</th><td>取消选中它代表的人 / 弹出升级选择（花黄金升为高级形态）</td></tr>
-            <tr><th scope="row">编队按钮 1～${GROUP_SLOTS}</th><td>把所选部队编为这一队（原来的这一队作废）；选中一队点卡片带里的编队卡片</td></tr>
+            <tr><th scope="row">编队 1～${GROUP_SLOTS}</th><td>空队点一下编入所选部队；已有队伍点一下选中或取消选中，双击跳到队伍，长按可重编队或升级，拖到画面或小地图下令</td></tr>
             <tr><th scope="row">两侧边缘的把手</th><td>拉出据点列表 / 指令面板</td></tr>
           </table>
           <table class="desktop-only" aria-label="基本操作">
-            <tr><th scope="row">左键点击 / 拖框</th><td>选择部队</td></tr>
+            <tr><th scope="row">左键点己方单位 / 拖框</th><td>选择部队</td></tr>
+            <tr><th scope="row">左键单击 / 双击地面</th><td>已选部队立即攻击移动 / 普通移动</td></tr>
             <tr><th scope="row">右键点地面</th><td>命令部队移动</td></tr>
-            <tr><th scope="row">右键点敌军或敌方建筑</th><td>命令部队攻击</td></tr>
+            <tr><th scope="row">左键或右键点敌军 / 可攻击的建筑</th><td>命令部队直接攻击目标</td></tr>
             <tr><th scope="row">WASD / 滚轮</th><td>移动镜头 / 缩放</td></tr>
           </table>
           <details>
             <summary>详细操作与规则</summary>
             <table class="desktop-only">
-              <tr><td>左键点击 / 拖框</td><td>选择部队（Shift 加选，双击选中同类）</td></tr>
+              <tr><td>左键点己方单位 / 拖框</td><td>选择部队（Shift 加选，双击单位选中同类）</td></tr>
               <tr><td>底部兵种卡片</td><td>没选中的卡片写屏幕内的人数，选中后改写选中的人数、不再随镜头变化。点击：选中屏幕内这个兵种（已选中的卡片则取消选中）；Shift 加选 / 去掉；双击：选中全图的这个兵种；按住不动：弹出升级选择；按住拖到地面或小地图上松开：这个兵种攻击移动过去，松在敌军身上则攻击它（右键或 Esc 取消）。从画面上拉框扫过卡片：一并选中这些兵种。选中的兵种卡片会上前一步</td></tr>
               <tr><td>全选卡片</td><td>兵种栏最左一张，写屏幕内的总人数；屏幕内的人全都选着时上前一步，改写选中的人数、不再随镜头变化。点击：选中屏幕内的全部部队（已选中时取消选择）；Shift 加选；按住不动：弹出升级选择；双击：选中全图的部队；拖动、框扫同兵种卡片</td></tr>
               <tr><td>右键地面</td><td>移动（编队行军，自动列阵：近战在前、远程居后、器械殿后）</td></tr>
@@ -723,7 +738,7 @@ export class Hud {
               <tr><td>Shift + R</td><td>取消集结点，新出的援军留在据点里：选中己方据点时只取消它的，没选据点时全部取消</td></tr>
               <tr><td>T</td><td>点燃 / 熄灭所选部队的火把（夜间）</td></tr>
               <tr><td>B + 左键</td><td>扎营：派所选部队去搭一座临时据点（耗木材）</td></tr>
-              <tr><td>左键点据点</td><td>选中据点：升级城池、营寨，或给资源点建哨塔；己方营寨还可以选出哪个兵种</td></tr>
+              <tr><td>没选部队时左键点据点</td><td>选中据点：升级城池、营寨，或给资源点建哨塔；己方营寨还可以选出哪个兵种</td></tr>
               <tr><td>Ctrl 或 Alt+数字 / 数字</td><td>编队 / 选中编队（连按两次跳转镜头）</td></tr>
               <tr><td>编队卡片</td><td>兵种卡片上方一排，每个编队一张。点击选中这一队（已选中时取消选中），双击镜头跳过去；按住不动：弹出升级选择；拖到地面或小地图上松开：整队攻击移动过去，松在敌军身上则攻击它</td></tr>
               <tr><td>Shift+数字</td><td>追加编队：把当前选中的部队并入该队</td></tr>
@@ -1076,31 +1091,43 @@ export class Hud {
   private renderUpgradeMenu(): boolean {
     const f = this.upFor;
     if (!f) return false;
-    const choices = this.cb.upgradeChoices(f.kind, f.id);
-    if (!choices.length) return false;
-    this.upChoices = choices;
+    const groupMenu = f.kind === 'group' && this.mobile;
+    if (groupMenu && !this.cb.cardCount('group', f.id)) return false;
+    const upgrades = this.cb.upgradeChoices(f.kind, f.id);
+    if (!upgrades.length && !groupMenu) return false;
     const title = f.kind === 'type' ? UNITS[f.id].name : f.kind === 'group' ? `第 ${f.id} 队` : '全选';
-    const none = choices.every(c => !c.total && c.size > 0);
+    const none = upgrades.length > 0 && upgrades.every(c => !c.total && c.size > 0);
     const sub = (c: UpgradeChoice): string => (!c.size ? '当前没有人' : !c.total ? '已是高级形态'
       : c.offer ? `${c.offer.count}${c.offer.count < c.total ? ` / ${c.total}` : ''} 人 · 金 ${Math.round(c.offer.cost)}`
       : `${c.total} 人 · 黄金不足，升 1 人需 ${Math.round(c.need)}`);
-    // 只是人数、金额变了（各项还是那几项）：原地改按钮上的字与可用状态，不重建按钮——重建会丢掉键盘焦点，按下与抬起之间换掉按钮也会丢掉这一下
-    const shape = `${title}|${none}|${choices.map(c => c.label).join('|')}`;
+    const choices = none ? [] : upgrades.map(c => ({
+      label: c.label, detail: sub(c), enabled: !!c.offer, run: () => c.run(),
+    }));
+    if (groupMenu) choices.unshift({
+      label: '用所选部队重编队', detail: this.hasSelectedUnits ? '替换此队的成员' : '请先选中部队',
+      enabled: this.hasSelectedUnits, run: () => {
+        // 确认期间如果选择换了，松手也不能用另一批人覆盖编队。
+        if (!this.upStale && this.cb.cardCount('group', f.id)) this.cb.groupSlot(f.id);
+      },
+    });
+    this.upChoices = choices;
+    // 项目不变时就地刷新价格和可用状态，以免丢失焦点或正在确认的指针。
+    const heading = groupMenu ? title : `${title} · 升级`;
+    const shape = `${heading}|${none}|${choices.map(c => c.label).join('|')}`;
     const btns = [...this.upMenu.querySelectorAll<HTMLButtonElement>('button[data-i]')];
     if (shape === this.upShape && btns.length === choices.length) {
       choices.forEach((c, i) => {
-        const i2 = btns[i].querySelector('i'), text = sub(c);
-        if (i2 && i2.textContent !== text) i2.textContent = text;
-        if (btns[i].disabled === !!c.offer) {
-          // 正有键盘焦点的这一项变得不能点：焦点先留在弹出框上，不掉回页面（否则下一下空格成了游戏的暂停 / 继续）
-          if (!c.offer && btns[i] === document.activeElement) this.upMenu.focus();
-          btns[i].disabled = !c.offer;
+        const detail = btns[i].querySelector('i');
+        if (detail && detail.textContent !== c.detail) detail.textContent = c.detail;
+        if (btns[i].disabled === c.enabled) {
+          if (!c.enabled && btns[i] === document.activeElement) this.upMenu.focus();
+          btns[i].disabled = !c.enabled;
         }
       });
       return true;
     }
-    const html = `<h3>${title} · 升级</h3>${none ? '<p>没有可升级的人（都已是高级形态）</p>' : choices.map((c, i) =>
-      `<button data-i="${i}"${c.offer ? '' : ' disabled'}><b>${c.label}</b><i>${sub(c)}</i></button>`).join('')}`;
+    const html = `<h3>${heading}</h3>${choices.map((c, i) =>
+      `<button data-i="${i}"${c.enabled ? '' : ' disabled'}><b>${c.label}</b><i>${c.detail}</i></button>`).join('')}${none ? '<p>没有可升级的人（都已是高级形态）</p>' : ''}`;
     if (html === this.upHtml) return true;
     // 各项变了要重建：焦点原在哪一项（按这一项是什么，不按第几行——去重后行号会挪），重建后放回那一项；
     // 那一项没了或不能点，焦点留在弹出框上，不交给别的项（不能把确认转给另一批人）
@@ -1110,7 +1137,7 @@ export class Hud {
     this.upMenu.innerHTML = this.upHtml = html;
     this.upShape = shape;
     if (hadFocus) {
-      const at = focusedLabel === null ? -1 : choices.findIndex(c => c.label === focusedLabel && c.offer);
+      const at = focusedLabel === null ? -1 : choices.findIndex(c => c.label === focusedLabel && c.enabled);
       const target = at >= 0 ? this.upMenu.querySelector<HTMLButtonElement>(`button[data-i="${at}"]`) : null;
       (target ?? this.upMenu).focus();
     }
@@ -1221,7 +1248,7 @@ export class Hud {
     this.upStale = false;
   }
 
-  /** 两个「取消选择」（指令面板里与卡片带最前面）：有可取消的选择、或处于指令模式时可按 */
+  /** 两个「取消选择」（指令面板里与小地图旁）：有可取消的选择、或处于指令模式时可按 */
   private syncDeselect(): void {
     const off = !this.hasSel && !this.inMode;
     for (const b of [this.cmdBtns.get('deselect'), this.deselBtn]) if (b && b.disabled !== off) b.disabled = off;
@@ -1600,7 +1627,8 @@ export class Hud {
     }
     this.syncInert();
     // ---- 指令按钮：没选部队时部队指令不可用；没设集结点时「取消集结」不可用 ----
-    this.hasSel = sel.length > 0 || site >= 0;
+    this.hasSelectedUnits = sel.length > 0;
+    this.hasSel = this.hasSelectedUnits || site >= 0;
     for (const [cmd, b] of this.cmdBtns) {
       if (cmd === 'deselect') continue;
       const off = cmd === 'unrally' ? !this.rallySet(site) : cmd === 'follow' ? !sel.length && !this.following

@@ -78,10 +78,10 @@ export class BackGuard {
 export const EDGE_SWIPE_ZONE = 24;
 
 /**
- * 这些界面自己用 pointer 事件处理手指（把手、画面、卡片带，小地图容器里的控制按钮、摇杆与小地图），在屏幕边缘起手时可以放心拦下触摸的默认行为；
+ * 这些界面自己用 pointer 事件处理手指（把手、画面、卡片带、编队卡片，小地图容器里的控制按钮、摇杆与小地图），在屏幕边缘起手时可以放心拦下触摸的默认行为；
  * 靠 click 的按钮与面板不在此列：拦下 touchstart 的默认行为，浏览器就不再发 click
  */
-export const EDGE_SWIPE_SURFACES = '.handle, canvas.view, .cardwrap, .mini';
+export const EDGE_SWIPE_SURFACES = '.handle, canvas.view, .cardwrap, .groupslots, .mini';
 
 /** 触摸在 x（视口坐标）起手、视口宽 width：是不是边缘起手 */
 export function inEdgeZone(x: number, width: number, zone = EDGE_SWIPE_ZONE): boolean {

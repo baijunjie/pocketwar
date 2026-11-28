@@ -46,34 +46,38 @@ export class Minimap {
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
   }
 
+  /** 按地图的对角线留出旋转空间，各个角度共用同一边长 */
+  private get mapSize(): number {
+    return this.size * Math.SQRT1_2;
+  }
+
   /** 小地图上的像素位置 → 世界坐标 */
   toWorld(mx: number, my: number): { x: number; y: number } {
-    const S = this.size, h = S / 2;
+    const h = this.size / 2, side = this.mapSize;
     const cs = Math.cos(this.yaw), sn = Math.sin(this.yaw);
     // 把 draw() 里的「绕中心转 yaw」反过来
     const px = mx - h, py = my - h;
-    const x = px * cs + py * sn + h, y = -px * sn + py * cs + h;
+    const x = px * cs + py * sn + side / 2, y = -px * sn + py * cs + side / 2;
     const w = this.world;
-    return { x: Math.min(w.W, Math.max(0, (x / S) * w.W)), y: Math.min(w.H, Math.max(0, (y / S) * w.H)) };
+    return { x: Math.min(w.W, Math.max(0, (x / side) * w.W)), y: Math.min(w.H, Math.max(0, (y / side) * w.H)) };
   }
 
   /** @param view 屏幕四角落在地面上的位置 */
   draw(view: { x: number; y: number }[], dt: number): void {
     const c = this.ctx, w = this.world, S = this.size;
-    const k = S / w.W;
+    const side = this.mapSize, k = side / w.W;
     c.imageSmoothingEnabled = true;
-    c.clearRect(0, 0, S, S);
-    c.save();
-    // 圆形的小地图：随镜头旋转时不用缩小，四角落在圆外的部分裁掉
-    c.beginPath();
-    c.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
-    c.clip();
     c.fillStyle = '#14110d';
     c.fillRect(0, 0, S, S);
+    c.save();
     c.translate(S / 2, S / 2);
     c.rotate(this.yaw);
-    c.translate(-S / 2, -S / 2);
-    c.drawImage(this.base, 0, 0, S, S);
+    c.translate(-side / 2, -side / 2);
+    // 视野框可能伸出地图边界，留白与角标不参与地图图层的绘制。
+    c.beginPath();
+    c.rect(0, 0, side, side);
+    c.clip();
+    c.drawImage(this.base, 0, 0, side, side);
     // 建筑
     const fog = w.fog && w.humanTeam !== 0;
     for (const b of w.buildings) {
@@ -93,7 +97,7 @@ export class Minimap {
         d[i * 4 + 3] = vis[i] ? 0 : ex[i] ? 100 : 165;
       }
       this.fogCtx.putImageData(this.fogImg, 0, 0);
-      c.drawImage(this.fogCv, 0, 0, S, S);
+      c.drawImage(this.fogCv, 0, 0, side, side);
     }
     // 单位
     const human = w.humanTeam;
@@ -162,8 +166,8 @@ export class Minimap {
   }
 
   /**
-   * 圆外空角里的角标底圆（right：右上角，否则左上角），画完把原点挪到圆心并缩放到半径 13 的坐标，接着按这个尺度画图标（调用方负责 save / restore）。
-   * 角上的空地沿对角线只有半径的 √2−1 倍：小地图小时角标跟着缩小、往角里收，不压到地图圆面上
+   * 角标底圆（right：右上角，否则左上角），画完把原点挪到圆心并缩放到半径 13 的坐标，接着按这个尺度画图标（调用方负责 save / restore）。
+   * 角上的空地沿对角线只有半径的 √2−1 倍：小地图小时角标跟着缩小、往角里收，避开地图旋转时的范围
    */
   private cornerBadge(right: boolean, fill = 'rgba(12, 10, 8, 0.78)'): void {
     const c = this.ctx, S = this.size;
@@ -181,7 +185,7 @@ export class Minimap {
     c.scale(r / 13, r / 13);
   }
 
-  /** 左上角（圆外的空角）画天气：雪、雨、晴（白天太阳、夜里月亮），夜里底色偏蓝 */
+  /** 左上角画天气：雪、雨、晴（白天太阳、夜里月亮），夜里底色偏蓝 */
   private drawWeather(): void {
     const env = this.world.env, c = this.ctx;
     c.save();
@@ -237,7 +241,7 @@ export class Minimap {
     c.restore();
   }
 
-  /** 右上角（圆外的空角）画风向：箭头指向风吹去的方向，随小地图一起转；无风不画 */
+  /** 右上角画风向：箭头指向风吹去的方向，随小地图一起转；无风不画 */
   private drawWind(): void {
     const env = this.world.env, k = env.wind;
     if (k <= 0.02) return;

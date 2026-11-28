@@ -39,6 +39,18 @@ function submittedStreaks() {
   });
 }
 
+it('addMarker 返回新插入的标记，调用者可以用同一引用找到它', () => {
+  const renderer = Object.create(Renderer.prototype) as Renderer;
+  renderer.markers = [];
+  const previous = renderer.addMarker(10, 20, 0, 1, 0);
+  const marker = renderer.addMarker(30, 40, 1, 0, 0);
+
+  expect(renderer.markers).toHaveLength(2);
+  expect(renderer.markers[0]).toBe(previous);
+  expect(renderer.markers[1]).toBe(marker);
+  expect(marker).not.toBe(previous);
+});
+
 it('起风时气流顺着世界风向移动，转镜头后仍沿世界风向，停风时消失', () => {
   const noop = () => {};
   const canvasContext = {

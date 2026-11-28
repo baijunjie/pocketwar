@@ -69,7 +69,8 @@ export function orderMove(w: World, all: number[], tx: number, ty: number, amove
   const g = n > 1 && g0 >= 0 ? w.marches[g0] : null;
   const whole = !!g && g.alive && !g.arrived && g.n === n && units.every(s => w.grp[s] === g0);
   // 同一队人重复收到去同一处的命令（电脑指挥官常这样）：沿用现有的编队，不重新整队
-  if (whole && (g.destX - tx) ** 2 + (g.destY - ty) ** 2 < 48 * 48) {
+  // 从攻击移动切到普通移动时，要清除主动索敌留下的目标。
+  if (whole && (!g.amove || amove) && (g.destX - tx) ** 2 + (g.destY - ty) ** 2 < 48 * 48) {
     g.amove = amove;
     for (const s of units) if (w.order[s] === O_MOVE || w.order[s] === O_AMOVE) w.order[s] = amove ? O_AMOVE : O_MOVE;
     return;

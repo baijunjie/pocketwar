@@ -1,8 +1,4 @@
-/**
- * 移动版下半屏的一排编队按钮 1～8，补手机上没有键盘的编队（桌面版 Ctrl+数字）。按钮只管编队，选中一队靠卡片带里的编队卡片。
- * 按钮自己用 pointer 事件处理手指（见 bindPress），不靠 click。
- */
-import { bindPress } from './pressable';
+/** 移动版的编队卡片。保留每个队号的元素，刷新人数时不丢键盘焦点。 */
 import { compactNum } from './unitText';
 
 /** 放几个编队按钮（队号 1 起） */
@@ -10,21 +6,28 @@ export const GROUP_SLOTS = 8;
 
 export class GroupSlots {
   readonly el: HTMLDivElement;
-  /** 编队按钮，下标 + 1 是队号 */
+  /** 常用的 1～8 队一直可见；切到移动版时也能使用桌面已编好的 9、0 队。 */
   private readonly slots: HTMLButtonElement[] = [];
   private groups: { g: number; slots: number[] }[] = [];
   private readonly unbind: (() => void)[] = [];
 
-  /** assign：点了第 g 队的按钮，把所选部队编为这一队 */
-  constructor(assign: (g: number) => void) {
+  constructor(activate: (g: number, occupied: boolean, picked: boolean) => void) {
     this.el = document.createElement('div');
     this.el.className = 'groupslots';
-    for (let g = 1; g <= GROUP_SLOTS; g++) {
+    for (const g of [...Array.from({ length: GROUP_SLOTS }, (_, i) => i + 1), 9, 0]) {
       const b = document.createElement('button');
-      b.className = 'slot';
+      b.type = 'button';
+      b.className = 'ucard slot';
+      b.dataset.g = String(g);
+      b.hidden = g === 0 || g > GROUP_SLOTS;
       b.innerHTML = `<b>${g}</b><i></i>`;
       b.setAttribute('aria-label', `编为第 ${g} 队`);
-      this.unbind.push(bindPress(b, { tap: () => assign(g) }));
+      // 指针走卡片的手势处理，键盘和读屏用原生按钮的 click。
+      const click = (e: MouseEvent): void => {
+        if (e.detail === 0) activate(g, b.classList.contains('has'), b.classList.contains('on'));
+      };
+      b.addEventListener('click', click);
+      this.unbind.push(() => b.removeEventListener('click', click));
       this.slots.push(b);
       this.el.appendChild(b);
     }
@@ -38,13 +41,22 @@ export class GroupSlots {
   /** sel：当前选中的单位。有人的队在队号下面写人数（上千缩写），整队都选着时点亮 */
   update(sel: number[]): void {
     const picked = new Set(sel);
-    this.slots.forEach((b, i) => {
-      const grp = this.groups.find(x => x.g === i + 1);
+    this.slots.forEach(b => {
+      const g = Number(b.dataset.g);
+      const grp = this.groups.find(x => x.g === g);
+      const hidden = !grp && (g === 0 || g > GROUP_SLOTS);
+      if (b.hidden !== hidden) b.hidden = hidden;
       const n = grp ? compactNum(grp.slots.length) : '';
       const count = b.lastElementChild!;
       if (count.textContent !== n) count.textContent = n;
+      const on = !!grp && grp.slots.every(s => picked.has(s));
       b.classList.toggle('has', !!grp);
-      b.classList.toggle('on', !!grp && grp.slots.every(s => picked.has(s)));
+      b.classList.toggle('on', on);
+      const label = grp ? `第 ${g} 队，${grp.slots.length} 人` : `编为第 ${g} 队`;
+      if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
+      const pressed = b.getAttribute('aria-pressed');
+      if (grp && pressed !== String(on)) b.setAttribute('aria-pressed', String(on));
+      if (!grp && pressed !== null) b.removeAttribute('aria-pressed');
     });
   }
 

@@ -654,8 +654,10 @@ export class Renderer {
   }
 
   /** @param flag 是否插令旗：集结点本身就有一面常驻的旗，再插一面就成了两面 */
-  addMarker(x: number, y: number, r: number, g: number, b: number, flag = true): void {
-    this.markers.push({ x, y, t: 0, r, g, b, flag });
+  addMarker(x: number, y: number, r: number, g: number, b: number, flag = true): Marker {
+    const marker = { x, y, t: 0, r, g, b, flag };
+    this.markers.push(marker);
+    return marker;
   }
 
   private spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, size: number, grow: number,

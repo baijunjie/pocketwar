@@ -1,28 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HOLD_MS } from '../../src/touchInput';
 import { GroupSlots, GROUP_SLOTS } from '../../src/ui/groupSlots';
-import { FakeEl, firePointer, installFakeDom } from './fakeDom';
+import { FakeEl, installFakeDom } from './fakeDom';
 
 describe('GroupSlots 移动版编队按钮排', () => {
-  let assign: ReturnType<typeof vi.fn>;
+  let activate: ReturnType<typeof vi.fn>;
   let row: GroupSlots;
   let root: FakeEl;
-  const slot = (g: number): FakeEl => root.children[g - 1];
+  const slot = (g: number): FakeEl => root.children.find(b => b.dataset.g === String(g))!;
+  const visible = (): FakeEl[] => root.children.filter(b => !b.hidden);
   const count = (g: number): string => slot(g).lastElementChild!.textContent;
-  const tapOn = (b: FakeEl, id = 1): void => { firePointer(b, 'pointerdown', { pointerId: id }); firePointer(b, 'pointerup', { pointerId: id }); };
+  const click = (g: number, detail = 0): void => {
+    const e = new Event('click');
+    Object.defineProperty(e, 'detail', { value: detail });
+    slot(g).dispatchEvent(e);
+  };
 
   beforeEach(() => {
-    vi.useFakeTimers();
     installFakeDom(vi);
-    assign = vi.fn();
-    row = new GroupSlots(assign);
+    activate = vi.fn();
+    row = new GroupSlots(activate);
     root = row.el as unknown as FakeEl;
   });
 
   afterEach(() => {
     row.destroy();
     vi.unstubAllGlobals();
-    vi.useRealTimers();
   });
 
   describe('结构', () => {
@@ -30,12 +32,13 @@ describe('GroupSlots 移动版编队按钮排', () => {
       expect(GROUP_SLOTS).toBe(8);
     });
 
-    it('el 是 class slots 的一排：8 个编队按钮，没有别的按钮（没有「取消选择」）', () => {
+    it('默认显示 1～8 队按钮，没有取消选择按钮', () => {
       expect(root.className).toBe('groupslots');
-      expect(root.children).toHaveLength(8);
-      for (const b of root.children) {
+      expect(visible()).toHaveLength(8);
+      for (const [index, b] of visible().entries()) {
         expect(b.tagName).toBe('button');
-        expect(b.className).toBe('slot');
+        expect(b.classList.contains('slot')).toBe(true);
+        expect(b.dataset.g).toBe(String(index + 1));
       }
       expect(root.querySelector('.desel')).toBeNull();
       expect(root.children.some(b => b.textContent === '取消选择')).toBe(false);
@@ -54,43 +57,33 @@ describe('GroupSlots 移动版编队按钮排', () => {
   });
 
   describe('按钮回调', () => {
-    it('点一下回调 assign(队号)，每个按钮对应自己的队号', () => {
+    it('键盘或读屏激活空队时回调队号，状态是未占用、未选中', () => {
       for (let g = 1; g <= 8; g++) {
-        tapOn(slot(g));
-        expect(assign).toHaveBeenLastCalledWith(g);
+        click(g);
+        expect(activate).toHaveBeenLastCalledWith(g, false, false);
       }
-      expect(assign).toHaveBeenCalledTimes(8);
+      expect(activate).toHaveBeenCalledTimes(8);
     });
 
-    it('点的时候这一队有没有人、选没选中都不影响：照样回调 assign', () => {
+    it('键盘或读屏激活已有队伍时，回调包含当前的占用与选中状态', () => {
       row.setGroups([{ g: 2, slots: [10, 11] }]);
+      row.update([]);
+      click(2);
       row.update([10, 11]);
-      tapOn(slot(2));
-      tapOn(slot(3));
-      expect(assign.mock.calls).toEqual([[2], [3]]);
+      click(2);
+      expect(activate.mock.calls).toEqual([[2, true, false], [2, true, true]]);
     });
 
-    it('没有长按：按住很久再抬起仍只回调一次，也不会在按住期间回调', () => {
-      firePointer(slot(3), 'pointerdown');
-      vi.advanceTimersByTime(HOLD_MS * 4);
-      expect(assign).not.toHaveBeenCalled();
-      firePointer(slot(3), 'pointerup');
-      vi.advanceTimersByTime(HOLD_MS * 4);
-      expect(assign.mock.calls).toEqual([[3]]);
-    });
-
-    it('键盘 / 读屏激活（detail 为 0 的 click）也编队', () => {
-      const e = new Event('click');
-      Object.defineProperty(e, 'detail', { value: 0 });
-      slot(5).dispatchEvent(e);
-      expect(assign.mock.calls).toEqual([[5]]);
+    it('非键盘 click 不重复激活已由指针处理的按钮', () => {
+      click(2, 1);
+      expect(activate).not.toHaveBeenCalled();
     });
 
     it('destroy() 后按钮不再回调', () => {
       row.destroy();
-      tapOn(slot(1));
-      tapOn(slot(8));
-      expect(assign).not.toHaveBeenCalled();
+      click(1);
+      click(8);
+      expect(activate).not.toHaveBeenCalled();
     });
   });
 
@@ -173,15 +166,60 @@ describe('GroupSlots 移动版编队按钮排', () => {
       expect(count(2)).toBe('');
     });
 
-    it('队号超出 1～8 的编队不影响这排按钮', () => {
-      row.setGroups([{ g: 0, slots: [1] }, { g: 9, slots: [2] }, { g: 12, slots: [3] }]);
-      row.update([1, 2, 3]);
-      expect(root.children).toHaveLength(8);
-      for (let g = 1; g <= 8; g++) {
-        expect(slot(g).classList.contains('has')).toBe(false);
-        expect(slot(g).classList.contains('on')).toBe(false);
-        expect(count(g)).toBe('');
-      }
+    it('更新队伍状态时保留按钮节点，读屏可读到人数与选中状态', () => {
+      const original = slot(1);
+      row.setGroups([{ g: 1, slots: [10, 11] }]);
+      row.update([10, 11]);
+      expect(slot(1)).toBe(original);
+      expect(original.attrs['aria-label']).toBe('第 1 队，2 人');
+      expect(original.attrs['aria-pressed']).toBe('true');
+      row.update([10]);
+      expect(original.attrs['aria-pressed']).toBe('false');
+      row.setGroups([]);
+      row.update([]);
+      expect(slot(1)).toBe(original);
+      expect(original.attrs['aria-label']).toBe('编为第 1 队');
+      expect(original.attrs['aria-pressed']).toBeUndefined();
+    });
+
+    it('同一编队状态重复刷新时不重写辅助功能属性', () => {
+      const button = slot(1);
+      row.setGroups([{ g: 1, slots: [10, 11] }]);
+      row.update([10, 11]);
+      const writeAttribute = vi.spyOn(button, 'setAttribute');
+      row.update([10, 11]);
+      expect(writeAttribute).not.toHaveBeenCalled();
+      row.update([]);
+      expect(writeAttribute).toHaveBeenCalledExactlyOnceWith('aria-pressed', 'false');
+    });
+
+    it('9 和 0 队有成员时可见且可激活，失去成员后恢复隐藏', () => {
+      expect(slot(9).hidden).toBe(true);
+      expect(slot(0).hidden).toBe(true);
+      row.setGroups([{ g: 9, slots: [10, 11] }, { g: 0, slots: [20] }]);
+      row.update([20]);
+      expect(visible().map(b => b.dataset.g)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']);
+      expect(count(9)).toBe('2');
+      expect(count(0)).toBe('1');
+      click(9);
+      click(0);
+      expect(activate.mock.calls).toEqual([[9, true, false], [0, true, true]]);
+
+      row.setGroups([{ g: 0, slots: [20] }]);
+      row.update([20]);
+      expect(slot(9).hidden).toBe(true);
+      expect(slot(0).hidden).toBe(false);
+      row.setGroups([]);
+      row.update([]);
+      expect(slot(0).hidden).toBe(true);
+      expect(visible()).toHaveLength(8);
+    });
+
+    it('不支持的队号不会新增按钮', () => {
+      row.setGroups([{ g: 12, slots: [3] }]);
+      row.update([3]);
+      expect(visible()).toHaveLength(8);
+      expect(root.children.some(b => b.dataset.g === '12')).toBe(false);
     });
   });
 });

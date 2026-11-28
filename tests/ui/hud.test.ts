@@ -334,9 +334,9 @@ describe('Hud 移动版新增的界面', () => {
     return { left, right };
   };
   const tapOn = (b: FakeEl): void => { firePointer(b, 'pointerdown'); firePointer(b, 'pointerup'); };
-  /** 取消选择按钮的手指由卡片带（cardwrap）受理：事件派发在 cardwrap 上，目标是按钮 */
+  /** 取消选择从按钮起手，指针捕获后由卡片带接收后续事件 */
   const cardwrap = (): FakeEl => find(x => x.classList.contains('cardwrap'))!;
-  const padDown = (id = 1, target: FakeEl = desel()): Event => firePointer(cardwrap(), 'pointerdown', { clientX: 20, clientY: 10, pointerId: id, buttons: 1 }, target);
+  const padDown = (id = 1): Event => firePointer(desel(), 'pointerdown', { clientX: 20, clientY: 10, pointerId: id, buttons: 1 });
   const padUp = (id = 1): Event => firePointer(cardwrap(), 'pointerup', { clientX: 20, clientY: 10, pointerId: id, buttons: 0 });
   const tapDesel = (id = 1): void => { padDown(id); padUp(id); };
   /** 键盘（Enter / 空格）与读屏软件的激活：只发 click，detail 为 0 */
@@ -512,14 +512,107 @@ describe('Hud 移动版新增的界面', () => {
     });
   });
 
+  describe('移动版卡片带与编队行', () => {
+    const groups = (): FakeEl => find(x => x.classList.contains('groupslots'))!;
+    const activate = (b: FakeEl): void => {
+      const e = new Event('click');
+      Object.defineProperty(e, 'detail', { value: 0 });
+      b.dispatchEvent(e);
+    };
+
+    it('常驻全选屏幕卡片和兵种卡片排在卡片带，1～8 队另起一行', () => {
+      const h = mk();
+      h.setMobile(true);
+      h.setGroups([{ g: 3, slots: [0, 1] }]);
+      h.updateSelection([], -1, [0, 1]);
+      const roster = h.cards.roster.innerHTML;
+      expect(roster.indexOf('全选屏幕')).toBeGreaterThan(-1);
+      expect(roster.indexOf('data-t=')).toBeGreaterThan(roster.indexOf('全选屏幕'));
+      expect(roster).not.toContain('data-g=');
+      expect(cardwrap().contains(h.cards.roster)).toBe(true);
+      expect(cardwrap().contains(groups())).toBe(false);
+      expect(groups().children.filter(b => !b.hidden).map(b => b.dataset.g)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+      expect(groups().classList.contains('mobile-only')).toBe(true);
+
+      h.updateSelection([]);
+      expect(h.cards.roster.innerHTML).toMatch(/acard off[^>]*>[\s\S]*全选屏幕/);
+      h.setMobile(false);
+      h.updateSelection([], -1, [0, 1]);
+      expect(h.cards.groupRow.innerHTML).toContain('data-g="3"');
+      expect(h.cards.roster.innerHTML).not.toContain('全选屏幕');
+    });
+
+    it('单个部队详情打开时，点独立行的空队仍可编入所选部队', () => {
+      const h = mk();
+      h.setMobile(true);
+      h.updateSelection([0]);
+      expect(h.detailShown).toBe(true);
+      expect(groups().parent).toBe(h.root);
+      const empty = groups().children[2];
+      firePointer(groups(), 'pointerdown', { clientX: 50, clientY: 500, buttons: 1 }, empty);
+      firePointer(cardwrap(), 'pointerup', { clientX: 50, clientY: 500, buttons: 0 });
+      expect(cb.groupSlot).toHaveBeenCalledExactlyOnceWith(3);
+    });
+
+    it('键盘点编队按队伍状态选中、取消或编入当前所选', () => {
+      const h = mk();
+      h.setMobile(true);
+      h.setGroups([{ g: 2, slots: [0, 1] }]);
+      cb.cardCount.mockReturnValue(2);
+      h.updateSelection([]);
+      activate(groups().children[1]);
+      expect(cb.selectGroup).toHaveBeenCalledExactlyOnceWith(2, false);
+      h.updateSelection([0, 1]);
+      activate(groups().children[1]);
+      expect(cb.unpickCard).toHaveBeenCalledExactlyOnceWith('group', 2);
+      activate(groups().children[7]);
+      expect(cb.groupSlot).toHaveBeenCalledExactlyOnceWith(8);
+
+      cb.cardCount.mockReturnValue(0);
+      activate(groups().children[1]);
+      expect(cb.unpickCard).toHaveBeenCalledTimes(1);
+      expect(cb.groupSlot).toHaveBeenCalledTimes(1);
+    });
+
+    it('从桌面切到移动版后仍可通过编队行选择已有的 9 和 0 队', () => {
+      const h = mk();
+      h.setGroups([{ g: 9, slots: [0] }, { g: 0, slots: [1] }]);
+      cb.cardCount.mockReturnValue(1);
+      h.updateSelection([]);
+      h.setMobile(true);
+      for (const g of [9, 0]) {
+        const b = groups().children.find(el => el.dataset.g === String(g));
+        expect(b?.hidden).toBe(false);
+        activate(b!);
+      }
+      expect(cb.selectGroup.mock.calls).toEqual([[9, false], [0, false]]);
+    });
+
+    it('观战时没有编队行', () => {
+      const h = mk(watchWorld);
+      h.setMobile(true);
+      expect(groups()).toBeNull();
+    });
+  });
+
   describe('取消选择按钮', () => {
-    it('有玩家时卡片带（cardwrap）最前面是一个 mobile-only 的 button.desel', () => {
-      mk();
+    it('有玩家时，移动版取消选择按钮夹在摇杆列与小地图画布之间', () => {
+      const h = mk();
       const b = desel();
       expect(b).toBeTruthy();
       expect(b.classList.contains('mobile-only')).toBe(true);
-      expect(b.parent!.classList.contains('cardwrap')).toBe(true);
-      expect(b.parent!.children[0]).toBe(b);
+      expect(b.parent!.classList.contains('minirow')).toBe(true);
+      const [stick, cancel, map] = b.parent!.children;
+      expect(stick.classList.contains('joycol')).toBe(true);
+      expect(cancel).toBe(b);
+      expect(map).toBe(h.minimap);
+    });
+
+    it('观战时摇杆列与小地图之间没有取消选择按钮', () => {
+      const h = mk(watchWorld);
+      const row = find(x => x.classList.contains('minirow'))!;
+      expect(row.children).toHaveLength(2);
+      expect(row.children[1]).toBe(h.minimap);
     });
 
     it('点一下回调 command(\'deselect\')', () => {
@@ -552,7 +645,11 @@ describe('Hud 移动版新增的界面', () => {
       padDown();
       expect(hud!.cards.busy).toBe(true);
       expect(desel().classList.contains('down')).toBe(true);
+      expect(cardwrap().captured).toBe(1);
+      firePointer(cardwrap(), 'pointerdown', { clientX: 100, clientY: 10, pointerId: 2, buttons: 1 }, new HudEl());
+      expect(cardwrap().captured).toBe(1);
       padUp();
+      expect(cardwrap().captured).toBeNull();
       expect(hud!.cards.busy).toBe(false);
       expect(desel().classList.contains('down')).toBe(false);
     });
@@ -654,7 +751,7 @@ describe('Hud 移动版新增的界面', () => {
       expect(both()).toEqual([true, true]);
     });
 
-    it('指令模式里没选东西也能点卡片带的「取消选择」：回调 command(\'deselect\')', () => {
+    it('指令模式里没选东西也能点小地图旁的「取消选择」：回调 command(\'deselect\')', () => {
       mk();
       hud!.updateSelection([]);
       hud!.setMode('指令模式');
@@ -1578,6 +1675,66 @@ describe('Hud 移动版新增的界面', () => {
       hold('all', -1);
       expect(cb.upgradeChoices).toHaveBeenLastCalledWith('all', -1);
       expect(title()).toBe('全选 · 升级');
+    });
+
+    it('移动版已有编队的菜单可重编队并升级，无所选部队时禁用重编队', () => {
+      const h = mk();
+      h.setMobile(true);
+      const upgrade = vi.fn();
+      cb.cardCount.mockReturnValue(2);
+      cb.upgradeChoices.mockReturnValue([choice('升级这些人', { count: 1, cost: 10 }, 1, upgrade)]);
+      hold('group', 2);
+      expect(title()).toBe('第 2 队');
+      expect(items()).toMatchObject([
+        { label: '用所选部队重编队', disabled: true },
+        { label: '升级这些人', disabled: false },
+      ]);
+      clickItem(0, 0);
+      expect(cb.groupSlot).not.toHaveBeenCalled();
+      clickItem(1, 0);
+      expect(upgrade).toHaveBeenCalledOnce();
+
+      h.updateSelection([0, 1]);
+      hold('group', 2);
+      expect(items()[0]).toMatchObject({ label: '用所选部队重编队', disabled: false });
+      clickItem(0, 0);
+      expect(cb.groupSlot).toHaveBeenCalledExactlyOnceWith(2);
+    });
+
+    it('按着重编队确认时，选择发生变化便取消这次重编队', () => {
+      const h = mk();
+      h.setMobile(true);
+      h.updateSelection([0, 1]);
+      cb.cardCount.mockReturnValue(2);
+      cb.upgradeChoices.mockReturnValue([]);
+      hold('group', 2);
+      const action = btnNodes()[0];
+      expect(action.disabled).toBe(false);
+      press(action);
+      h.selectionChanged();
+      h.updateSelection([2, 3]);
+      expect(upMenu().hidden).toBe(false);
+      release(1, action);
+      expect(cb.groupSlot).not.toHaveBeenCalled();
+      expect(upMenu().hidden).toBe(true);
+    });
+
+    it('按着编队菜单的升级确认时，选择变化后仍按原报价成交', () => {
+      const h = mk();
+      h.setMobile(true);
+      cb.cardCount.mockReturnValue(2);
+      const upgrade = vi.fn();
+      cb.upgradeChoices.mockReturnValue([choice('升级这些人', { count: 1, cost: 10 }, 1, upgrade)]);
+      hold('group', 2);
+      const action = btnNodes()[1];
+      press(action);
+      h.selectionChanged();
+      h.updateSelection([2, 3]);
+      expect(upMenu().hidden).toBe(false);
+      release(1, action);
+      expect(upgrade).toHaveBeenCalledOnce();
+      expect(cb.groupSlot).not.toHaveBeenCalled();
+      expect(upMenu().hidden).toBe(true);
     });
 
     it('每项一个按钮：label 写粗体，副行按黄金够升几人写「count 人 · 金 cost」，不够全升写「count / total 人 · 金 cost」', () => {

@@ -69,8 +69,8 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .site b { font-weight: 500; color: #bfe6a8; font-variant-numeric: tabular-nums; }
 .site i { font-style: normal; color: var(--dim); }
 .site u { position: absolute; left: 0; bottom: 0; height: 2px; }
-.mini { left: 0; bottom: 0; padding: 6px; line-height: 0; border-radius: 50%; }
-.mini canvas { width: 220px; height: 220px; } /* 圆形由画布自己裁，右上角留给风向标 */
+.mini { left: 0; bottom: 0; padding: 6px; line-height: 0; }
+.mini canvas { width: 220px; height: 220px; }
 /* 上边不越过顶栏（--topbar 是顶栏底边再留一点，由脚本给）：卡片排得多时详情在里面压低、自己滚动 */
 .bottom { left: 240px; right: 228px; bottom: 0; max-height: calc(100% - var(--topbar, 44px)); display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none !important; }
 .bottom > * { pointer-events: auto; }
@@ -357,9 +357,12 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
   /* --card：卡片高（--img 加名字行、血条、内边距与边框，见下面「三种卡片一样大」）；--strip：卡片带 = 顶边 2px（不缩放）+ 上下内边距 2×9 + 卡片；
      --rowh：编队按钮高，--row 再加与下面一排的间距 6 */
   --bar: calc(32 * var(--u)); --card: calc(71 * var(--u)); --map-min: 110px; --strip: calc(var(--card) + calc(18 * var(--u)) + 2px); --pad: calc(6 * var(--u)); --rowh: calc(36 * var(--u)); --row: calc(var(--rowh) + calc(6 * var(--u)));
-  /* 小地图边长：屏高四成减去卡片带与编队排，限在 110～154px，并给左边的摇杆一列留出至少 150px 宽 */
-  /* 下限不随 --u 缩小，摇杆在最窄的屏上也不小于约 70px */
-  --map0: clamp(var(--map-min), min(40cqh - var(--strip) - var(--row) - 2 * var(--pad), 100cqw - calc(150 * var(--u))), calc(154 * var(--u)));
+  --mini-gap: calc(10 * var(--u)); --desel-width: calc(44 * var(--u));
+  --desel-space: calc(var(--desel-width) + var(--mini-gap));
+  --mini-width: calc(100cqw - var(--desel-space) - var(--mini-gap) - 2 * var(--pad));
+  /* 给摇杆列预留约 150px，超窄时至少给两端按钮和滑块留出拖动空间 */
+  --map0: clamp(min(var(--map-min), var(--mini-width) - calc(104 * var(--u))),
+    min(40cqh - var(--strip) - var(--row) - 2 * var(--pad), var(--mini-width) - calc(150 * var(--u))), calc(154 * var(--u)));
   --map: var(--map0);
   /* 摇杆一列与小地图等高：上面缩放条 30 + 间距 6，下面摇杆 */
   --joy: calc(var(--map) - calc(36 * var(--u)));
@@ -386,7 +389,7 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
   #app.mobile .acard b { font-size: calc(15 * var(--u)); }
 }
 /* 观战时没有编队按钮那一排 */
-#app.mobile.watch > * { --row: 0px; }
+#app.mobile.watch > * { --row: 0px; --desel-space: 0px; }
 .mobile .desktop-only { display: none !important; }
 .mobile .mobile-only { display: revert !important; }
 .mobile .cmds button.mobile-only { display: flex !important; }
@@ -430,9 +433,9 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .help .card { max-height: 100%; }
 .mobile .help h2 { font-size: calc(22 * var(--u)); }
 .mobile .help-content { touch-action: pan-y; }
-/* 详情替换卡片带以下的操控区 */
+/* 详情盖住编队行下方的操控区 */
 .mobile .bottom { display: contents; }
-.mobile .detail { display: block; position: absolute; left: 0; right: 0; top: calc(var(--split) + var(--strip)); bottom: 0; width: auto; max-width: none; overflow: hidden;
+.mobile .detail { display: block; position: absolute; left: 0; right: 0; top: calc(var(--split) + var(--strip) + var(--row)); bottom: 0; width: auto; max-width: none; overflow: hidden;
   padding: 0; border: none; border-radius: 0; background: rgba(20, 16, 12, 0.98); backdrop-filter: none; }
 /* 滚动放在内容上、不放在面板上：面板滚动时绝对定位的关闭按钮会跟着内容滚出去。右上角让出关闭按钮的只有第一行 */
 .mobile .detail .dbody { height: 100%; overflow-y: auto; touch-action: pan-y; padding: calc(8 * var(--u)) calc(10 * var(--u)); }
@@ -443,7 +446,7 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .detail .dclose::after { content: ''; position: absolute; inset: calc(-5 * var(--u) - 1px); } /* 命中范围扩到约 40px（从边框内沿算，再加上 1px 边框） */
 .mobile .detail .dclose:hover { background: rgba(255, 255, 255, 0.06); }
 .mobile .detail .dclose.down { background: rgba(216, 176, 96, 0.3); }
-/* 详情占掉卡片带以下的操控区（编队按钮、摇杆与小地图），关掉才露出来 */
+/* 详情覆盖摇杆、小地图和取消选择按钮 */
 .mobile .udetail, .mobile .sdetail { min-width: 0; font-size: max(10px, calc(11 * var(--u))); }
 .mobile .sdetail { flex-direction: column; align-items: stretch; gap: calc(2 * var(--u)); line-height: 1.4; }
 .mobile .sdetail .who { width: auto; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start; gap: calc(2 * var(--u)) calc(8 * var(--u)); text-align: left; }
@@ -467,21 +470,21 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .sdetail .picks button img { width: calc(36 * var(--u)); height: calc(36 * var(--u)); }
 .mobile .sdetail .picks button i { font-size: max(10px, calc(10 * var(--u))); }
 .mobile .sdetail .acts { min-width: 0; flex-direction: row; flex-wrap: wrap; }
-/* 卡片带：最前面是「取消选择」，然后编队卡片、兵种卡片，排成一行横向滑动（滚动由 CardBar 按手指位移驱动，手势方向区分滚动与拖卡片） */
+/* 卡片带：全选屏幕与兵种卡片，排成一行横向滑动（滚动由 CardBar 按手指位移驱动，手势方向区分滚动与拖卡片） */
 .mobile .cardwrap { position: absolute; left: 0; right: 0; top: var(--split); height: var(--strip); flex-direction: row; align-items: stretch; justify-content: flex-start; gap: 0;
   max-width: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; touch-action: none; pointer-events: auto !important; background: rgba(22, 18, 13, 0.96); border-top: 2px solid var(--gold); }
 .mobile .cardwrap::-webkit-scrollbar { display: none; }
-/* 「取消选择」与卡片同高，自己处理手指（见 bindPress）；按住时是 .down */
-.mobile .cardwrap > .desel { flex: none; align-self: center; display: flex !important; flex-direction: column; align-items: center; justify-content: center; width: calc(44 * var(--u)); height: var(--card); min-height: 0; margin-left: calc(4 * var(--u)); padding: 0;
+/* 「取消选择」按住时是 .down */
+.mobile .minirow > .desel { flex: none; align-self: center; display: flex !important; flex-direction: column; align-items: center; justify-content: center; width: var(--desel-width); height: var(--card); min-height: 0; padding: 0;
   font-size: max(10px, calc(11 * var(--u))); line-height: 1.25; touch-action: none; }
-.mobile .cardwrap > .desel b { font-size: calc(16 * var(--u)); line-height: 1.2; color: var(--gold); }
-.mobile .cardwrap > .desel:hover { background: rgba(255, 255, 255, 0.06); }
-.mobile .cardwrap > .desel.down { background: rgba(216, 176, 96, 0.3); }
-.mobile .cardwrap > .desel:disabled { opacity: 0.38; }
+.mobile .minirow > .desel b { font-size: calc(16 * var(--u)); line-height: 1.2; color: var(--gold); }
+.mobile .minirow > .desel:hover { background: rgba(255, 255, 255, 0.06); }
+.mobile .minirow > .desel.down { background: rgba(216, 176, 96, 0.3); }
+.mobile .minirow > .desel:disabled { opacity: 0.38; }
 .mobile .cardrow { flex: none; flex-wrap: nowrap; width: max-content; max-width: none; min-height: 0; padding: calc(9 * var(--u)) calc(4 * var(--u)); gap: calc(4 * var(--u)); pointer-events: auto !important; }
-.mobile .groups { padding-right: calc(6 * var(--u)); margin-right: calc(2 * var(--u)); border-right: 1px solid var(--line); }
+.mobile .cardwrap > .groups { display: none; }
 .mobile .unitbar .hint { white-space: normal; width: min(calc(260 * var(--u)), 70vw); padding: calc(4 * var(--u)) calc(8 * var(--u)); font-size: calc(12 * var(--u)); }
-/* 三种卡片一样大，比桌面版小 */
+/* 第一行卡片比桌面版小 */
 .mobile .ucard { --img: calc(42 * var(--u)); width: calc(62 * var(--u)); padding: calc(3 * var(--u)) calc(2 * var(--u)) calc(4 * var(--u)); border-radius: calc(5 * var(--u)); }
 .mobile .ucard.on { transform: translateY(calc(-7 * var(--u))); }
 .mobile .ucard .nm { font-size: max(10px, calc(11 * var(--u))); }
@@ -496,28 +499,29 @@ button.primary:hover, button.primary.hover { filter: brightness(1.1); }
 .mobile .ucard.ghost { opacity: 1; background: #1c1610; }
 .mobile .ucard.ghost.elite { background: #2e2412; }
 .mobile .ucard.ghost.nodrop { opacity: 0.55; }
-/* 卡片带以下：最上面一排编队按钮（观战时没有这一排），下面一边是摇杆（上叠缩放条）、一边是小地图，摇杆一侧与小地图上下对齐 */
-.mobile .mini { left: 0; right: 0; top: calc(var(--split) + var(--strip)); bottom: 0; padding: var(--pad); display: flex; flex-direction: column; gap: calc(6 * var(--u)); border: none; border-radius: 0; background: none; backdrop-filter: none; }
-.mobile .minirow { flex: none; height: var(--map); display: flex; align-items: stretch; gap: calc(10 * var(--u)); }
+/* 编队行以下是摇杆、取消选择与小地图 */
+.mobile .mini { left: 0; right: 0; top: calc(var(--split) + var(--strip) + var(--row)); bottom: 0; padding: var(--pad); display: flex; flex-direction: column; gap: calc(6 * var(--u)); border: none; border-radius: 0; background: none; backdrop-filter: none; }
+.mobile .minirow { flex: none; height: var(--map); display: flex; align-items: stretch; gap: var(--mini-gap); }
 /* 设置里把摇杆放到右侧（惯用左手）：小地图换到左侧 */
 .mobile.stick-right .minirow { flex-direction: row-reverse; }
 .mobile .mini canvas { flex: none; width: var(--map); height: var(--map); touch-action: none; }
-/* 编队按钮自己处理手指（点一下），按住时是 .down；触屏上 :hover 点完会一直挂着，这里不用它 */
-.mobile .groupslots.mobile-only { display: flex !important; flex: none; gap: calc(4 * var(--u)); height: var(--rowh); }
+.mobile .groupslots.mobile-only { display: flex !important; top: calc(var(--split) + var(--strip) + var(--pad));
+  left: var(--pad); right: var(--pad); gap: calc(4 * var(--u)); height: var(--rowh); touch-action: none; }
 .mobile .groupslots button { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; padding: 0 calc(2 * var(--u)); line-height: 1.2; white-space: nowrap; touch-action: none; }
-/* 命中范围上下各多伸 3px（从边框内沿算，再加上不缩放的 1px 边框；上面是 .mini 的 6px 内边距，下面与缩放条之间 6px，缩放条也只往上伸 3px） */
+/* 命中范围向上下间隙各伸 3px，给相邻控件留出各自的触区 */
+.mobile .groupslots button[hidden] { display: none; }
 .mobile .groupslots button::after { content: ''; position: absolute; inset: calc(-3 * var(--u) - 1px) 0; }
 .mobile .groupslots button:hover { background: rgba(255, 255, 255, 0.06); }
-.mobile .groupslots button.down { background: rgba(216, 176, 96, 0.3); }
+.mobile .groupslots button.down, .mobile .groupslots button.hot { background: rgba(216, 176, 96, 0.3); }
 .mobile .groupslots button.on, .mobile .groupslots button.on:hover { background: var(--gold); }
-.mobile .groupslots button.on.down { filter: brightness(0.8); }
+.mobile .groupslots button.on.hot { filter: brightness(0.8); }
 /* 编队按钮：队号，有人的队描金边、队号下面写人数 */
 .mobile .groupslots .slot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; line-height: 1; color: var(--dim); }
 .mobile .groupslots .slot b { font-size: calc(15 * var(--u)); }
 .mobile .groupslots .slot i { font-style: normal; font-size: max(10px, calc(10 * var(--u))); }
 .mobile .groupslots .slot i:empty { display: none; }
 .mobile .groupslots .slot.has { color: var(--text); border-color: var(--gold); }
-.mobile .groupslots .slot.on { color: #1c150b; }
+.mobile .groupslots .slot.on { color: #1c150b; transform: none; }
 /* 摇杆一列：占满小地图旁边的宽度，上面是横贯整列的缩放条，下面摇杆居中；上下与小地图对齐 */
 .mobile .joycol.mobile-only { display: flex !important; flex: 1 1 0; min-width: 0; flex-direction: column; align-items: center; justify-content: space-between; gap: calc(6 * var(--u)); }
 /* 缩放条：左 − 右 +（点一下各一档），中间长条按住拖滑块 */

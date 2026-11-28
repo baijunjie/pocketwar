@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BUILDINGS, TILE, T_MOUNTAIN, UNIT_BY_KEY } from '../../../src/sim/defs';
-import { O_AMOVE } from '../../../src/sim/state';
+import { NONE, O_AMOVE, O_MOVE } from '../../../src/sim/state';
 import type { World } from '../../../src/sim/world';
 import { flatWorld } from '../../helpers';
 
@@ -198,6 +198,37 @@ describe('行军途中又收到移动命令：什么时候沿用编队、什么�
     expect(g.map(s => [w.destX[s], w.destY[s]])).toEqual(dest);
     expect(m.amove).toBe(true);
     expect(g.every(s => w.order[s] === O_AMOVE)).toBe(true);
+  });
+
+  it('同队先攻击移动再普通移动到相邻落点，清除锁敌和旧路线记录', () => {
+    const w = flatWorld();
+    const troops = w.spawnGroup(1, [idx('dao'), idx('dao')], mid(30), mid(60), 1, 0);
+    const enemy = w.spawnUnit(idx('legion'), 2, mid(37), mid(60));
+    const tx = mid(80), ty = mid(60);
+    w.orderMove(troops, tx, ty, true);
+    const attackMarch = w.marches[w.grp[troops[0]]];
+    expect(attackMarch).toMatchObject({ alive: true, arrived: false, n: troops.length, amove: true });
+    for (const unit of troops) {
+      expect(w.order[unit]).toBe(O_AMOVE);
+      w.target[unit] = w.otarget[unit] = enemy;
+      w.stuck[unit] = w.noGain[unit] = 1;
+      w.bestD[unit] = 40;
+    }
+
+    const moveX = tx + TILE;
+    w.orderMove(troops, moveX, ty, false);
+
+    const march = w.marches[w.grp[troops[0]]];
+    expect(march).toMatchObject({ destX: moveX, destY: ty, amove: false });
+    for (const unit of troops) {
+      expect(w.order[unit]).toBe(O_MOVE);
+      expect(w.target[unit]).toBe(NONE);
+      expect(w.otarget[unit]).toBe(NONE);
+      expect(w.destCell[unit]).toBe(w.cellAt(moveX, ty));
+      expect(w.stuck[unit]).toBe(0);
+      expect(w.noGain[unit]).toBe(0);
+      expect(w.bestD[unit]).toBeGreaterThan(40);
+    }
   });
 
   describe('夹角：新路线的起始方向与最前排朝向的夹角不超过阈值（rerouteCos，现为 90°）才沿用，掉头的重新整队', () => {

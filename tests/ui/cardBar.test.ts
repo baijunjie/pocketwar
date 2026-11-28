@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { World } from '../../src/sim/world';
 import { CardBar, allCardPicked } from '../../src/ui/cardBar';
 import type { CardBarCallbacks } from '../../src/ui/cardBar';
-import { TAP_SLOP } from '../../src/touchInput';
+import { HOLD_MS, TAP_SLOP } from '../../src/touchInput';
 import { FakeCanvas, FakeEl, firePointer, installFakeDom, rectOf } from './fakeDom';
 
 /*
@@ -21,6 +21,7 @@ describe('CardBar 拖卡片', () => {
   /** cardCount 被调了几次 */
   let countCalls = 0;
   let area: FakeEl, overlay: FakeEl, view: FakeCanvas, mini: FakeCanvas;
+  let mobileGroups: FakeEl;
   let bar: CardBar;
   let card: FakeEl, groupCard: FakeEl, allCard: FakeEl, offCard: FakeEl;
   let dom: ReturnType<typeof installFakeDom>;
@@ -76,7 +77,7 @@ describe('CardBar 拖卡片', () => {
   /** 建 CardBar 并把两排卡片放进 area（真实的 hud 也是这样挂的）；topbar 是传给构造函数的顶栏 */
   const build = (topbar: FakeEl | null = null): void => {
     bar = new CardBar(world, () => '', mini as unknown as HTMLCanvasElement, overlay as unknown as HTMLElement, cbs,
-      area as unknown as HTMLElement, topbar as unknown as HTMLElement | null);
+      area as unknown as HTMLElement, topbar as unknown as HTMLElement | null, null, mobileGroups as unknown as HTMLElement);
     area.appendChild(bar.groupRow as unknown as FakeEl);
     area.appendChild(bar.roster as unknown as FakeEl);
     card = mkCard({ t: '3' });
@@ -108,13 +109,14 @@ describe('CardBar 拖卡片', () => {
     countCalls = 0;
     area = new FakeEl();
     area.rect = rectOf(0, 500, 400, 100);
+    mobileGroups = new FakeEl();
     overlay = new FakeEl();
     overlay.rect = rectOf(0, 0, 400, 800);
     view = new FakeCanvas();
     view.className = 'view';
     mini = new FakeCanvas();
     mini.className = 'minimap';
-    // 小地图画布是方的：左上 (120, 620)、边长 180，内切圆圆心 (210, 710)、半径 90
+    // 小地图画布是方的：左上 (120, 620)、边长 180
     mini.rect = rectOf(120, 620, 180, 180);
     dom.hit.fn = (_x, y) => (y < 500 ? view : y > 600 && y <= 800 ? mini : area);
     cbs = {
@@ -142,6 +144,116 @@ describe('CardBar 拖卡片', () => {
   describe('移动版', () => {
     beforeEach(() => {
       bar.mobile = true;
+    });
+
+    describe('独立一行的移动版编队卡片', () => {
+      let slot: FakeEl;
+      let empty: FakeEl;
+      const press = (b: FakeEl): void => {
+        firePointer(mobileGroups, 'pointerdown', { clientX: 150, clientY: 610, buttons: 1 }, b);
+      };
+      const tap = (b: FakeEl): void => { press(b); up(150, 610); };
+
+      beforeEach(() => {
+        slot = new FakeEl('button');
+        slot.className = 'ucard slot has';
+        slot.dataset.g = '2';
+        empty = new FakeEl('button');
+        empty.className = 'ucard slot';
+        empty.dataset.g = '3';
+        mobileGroups.append(slot, empty);
+      });
+
+      it('点已有队伍选中，连续点同队两次跳转', () => {
+        tap(slot);
+        tap(slot);
+        expect(calls).toEqual(['group 2 false', 'group 2 true']);
+        expect(taps).toEqual([]);
+      });
+
+      it('点已经选中的队伍取消选择，再点一下可双击跳转', () => {
+        select([2, 3]);
+        tap(slot);
+        tap(slot);
+        expect(calls).toEqual(['unpick group 2', 'group 2 true']);
+      });
+
+      it('按空队不会长按或开始拖动，抬起只触发该空队按钮', () => {
+        press(empty);
+        expect(area.captured).toBe(1);
+        vi.advanceTimersByTime(HOLD_MS);
+        move(153, 612);
+        expect(ghost()).toBeUndefined();
+        up(153, 612);
+        expect(taps).toEqual([empty]);
+        expect(holds).toEqual([]);
+        expect(drops).toEqual([]);
+      });
+
+      it('按着空队时它获得成员，松手不会覆盖刚编好的队伍', () => {
+        press(empty);
+        empty.classList.add('has');
+        up(150, 610);
+        expect(taps).toEqual([]);
+        expect(calls).toEqual([]);
+        expect(area.captured).toBeNull();
+      });
+
+      it('按着已选中的队伍时它失去成员，松手不取消选择或编队', () => {
+        select([2, 3]);
+        press(slot);
+        slot.classList.remove('has');
+        up(150, 610);
+        expect(calls).toEqual([]);
+        expect(taps).toEqual([]);
+        expect(area.captured).toBeNull();
+      });
+
+      it('队员已全部阵亡、按钮状态尚未刷新时，松手保留当前选择', () => {
+        select([2, 3]);
+        press(slot);
+        count = 0;
+        expect(slot.classList.contains('has')).toBe(true);
+        up(150, 610);
+        expect(calls).toEqual([]);
+        expect(taps).toEqual([]);
+      });
+
+      it('拖动编队时切成桌面布局会释放指针并取消下令', () => {
+        press(slot);
+        move(190, 400);
+        expect(ghost()).toBeDefined();
+        expect(area.captured).toBe(1);
+        bar.mobile = false;
+        expect(ghost()).toBeUndefined();
+        expect(area.captured).toBeNull();
+        up(190, 400);
+        expect(drops).toEqual([]);
+        expect(calls).toEqual([]);
+      });
+
+      it('已有队伍的轻微抖动仍算点按，纵向或横向拉开才会拖队伍下令', () => {
+        press(slot);
+        move(153, 612);
+        expect(ghost()).toBeUndefined();
+        up(153, 612);
+        expect(calls).toEqual(['group 2 false']);
+        press(slot);
+        move(190, 610);
+        expect(ghost()).toBeDefined();
+        expect(area.scrollLeft).toBe(0);
+        move(190, 400);
+        up(190, 400);
+        expect(drops).toEqual([{ kind: 'group', id: 2, x: 190, y: 300, target: 'view' }]);
+      });
+
+      it('长按已有队伍打开该队菜单，松手不再点选', () => {
+        press(slot);
+        vi.advanceTimersByTime(HOLD_MS);
+        up(150, 610);
+        expect(holds).toMatchObject([{ kind: 'group', id: 2 }]);
+        expect(calls).toEqual([]);
+      });
     });
 
     describe('按中反馈', () => {
@@ -541,7 +653,7 @@ describe('CardBar 拖卡片', () => {
         move(110, 300);
         expect(ghost()!.classList.contains('nodrop')).toBe(false);
         expect(sword()!.classList.contains('nodrop')).toBe(false);
-        // 手指贴着屏幕底：落点在手指右边，落在小地图圆内
+        // 手指贴着屏幕底：落点在手指右边，落在小地图画布内
         move(110, 790);
         expect(ghost()!.classList.contains('nodrop')).toBe(false);
         expect(sword()!.classList.contains('nodrop')).toBe(false);
@@ -571,8 +683,8 @@ describe('CardBar 拖卡片', () => {
         expect(y).toBeCloseTo(200);
       });
 
-      it('手指贴着屏幕底也指得到小地图圆的下半截：落点是 mini，没有 nodrop', () => {
-        // 手指 y=790 时落点约 (x + 99, 780)，在小地图圆内
+      it('手指贴着屏幕底也指得到小地图的下半部：落点是 mini，没有 nodrop', () => {
+        // 手指 y=790 时落点约 (x + 99, 780)，在小地图画布内
         down(card, 110, 550);
         move(110, 790);
         expect(ghost()!.classList.contains('nodrop')).toBe(false);
@@ -582,29 +694,21 @@ describe('CardBar 拖卡片', () => {
         expect(drops[0].y).toBeGreaterThan(770);
       });
 
-      it('落点在小地图画布方形的角上（内切圆外）不算小地图：影子和剑 nodrop，松手不下令', () => {
-        // 同一个落点（约 (209, 780)）：小地图画布在它右边（落点在画布左下角）、在它左边（落点在右下角）都在圆外
-        for (const r of [rectOf(210, 620, 180, 180), rectOf(30, 620, 180, 180)]) {
-          mini.rect = r;
-          down(card, 110, 550);
-          move(110, 790);
-          expect(ghost()!.classList.contains('nodrop'), `${r.left}`).toBe(true);
-          expect(sword()!.classList.contains('nodrop'), `${r.left}`).toBe(true);
-          up(110, 790);
-          expect(drops, `${r.left}`).toEqual([]);
-          expect(overlay.children).toHaveLength(0);
-        }
-      });
-
-      it('小地图不是正方形时按短边的一半作半径、圆心在矩形中心', () => {
-        mini.rect = rectOf(0, 600, 400, 200);
-        // 手指 (110, 700)：落点约 (160, 613)，离圆心 (200, 700) 约 95 < 100：圆内
+      it.each([true, false])('剑尖靠近小地图左下角时，按画布边界判定命中 (%s)', inside => {
+        // 剑尖落在约 (209, 780)，分别在画布左缘以内和以外。
+        mini.rect = rectOf(inside ? 205 : 215, 620, 180, 180);
+        dom.hit.fn = (x, y) => {
+          const r = mini.rect;
+          return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? mini : null;
+        };
         down(card, 110, 550);
-        move(110, 700);
-        expect(ghost()!.classList.contains('nodrop')).toBe(false);
-        // 手指 (40, 700)：落点约 (90, 613)，离圆心约 140：圆外（按宽的一半 200 算就成了圆内）
-        move(40, 700);
-        expect(ghost()!.classList.contains('nodrop')).toBe(true);
+        move(110, 790);
+        expect(ghost()!.classList.contains('nodrop')).toBe(!inside);
+        expect(sword()!.classList.contains('nodrop')).toBe(!inside);
+        up(110, 790);
+        if (inside) expect(drops).toMatchObject([{ kind: 'type', id: 3, target: 'mini' }]);
+        else expect(drops).toEqual([]);
+        expect(overlay.children).toHaveLength(0);
       });
 
       it('落在别的画布上（不是画面也不是小地图）是 nodrop', () => {
@@ -869,7 +973,11 @@ describe('CardBar 拖卡片', () => {
         expect(s.y).toBeCloseTo(300);
       });
 
-      it('mapSide = −1：松手的落点用向左放倒的剑尖（落在小地图圆内就是 mini）；mapSide = 1 同一手指位置落点在圆外、不下令', () => {
+      it('mapSide = −1：向左的剑尖落在小地图上，默认向右的剑尖落在画布外', () => {
+        dom.hit.fn = (x, y) => {
+          const r = mini.rect;
+          return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? mini : null;
+        };
         // 手指 (290, 750)：离屏幕底 50，转 60 度，偏移 (∓86.6, −50)
         down(card, 290, 550);
         move(290, 750);
@@ -2469,7 +2577,7 @@ describe('CardBar 拖卡片', () => {
       expect(ghost()).toBeDefined();
     });
 
-    it('不做圆内判定：落在小地图方形的四角照旧算小地图', () => {
+    it('落在小地图画布的四角也算命中', () => {
       for (const [x, y] of [[65, 625], [235, 625], [65, 790], [235, 790]]) {
         down(card, x, 550);
         move(x, y);

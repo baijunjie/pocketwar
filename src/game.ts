@@ -7,14 +7,14 @@ import { canAttackBuilding } from './sim/systems/targeting';
 import { canUpgradeSite, siteUpgradeCost, unitUpgradeCost, upgradeQueue } from './sim/systems/economy';
 import { MAX_UNITS, S_ROUT, Site, World } from './sim/world';
 import { Minimap } from './render/minimap';
-import { Renderer } from './render/renderer';
+import { Renderer, type Marker } from './render/renderer';
 import { CardKind, allCardPicked } from './ui/cardBar';
 import { Hud, UpgradeAction, UpgradeChoice, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 import { BackGuard, blocksEdgeSwipe } from './backGuard';
 import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection, fracToZoom, zoomToFrac } from './camInput';
 import { loadPref, savePref } from './prefs';
-import { Pinch, TouchGestures, UiMode, asUiMode, inInscribedCircle, isMobileUi } from './touchInput';
+import { GroundTaps, Pinch, TouchGestures, UiMode, asUiMode, isMobileUi } from './touchInput';
 import { PointerLock } from './pointerLock';
 
 type Mode = '' | 'amove' | 'rally' | 'outpost';
@@ -78,12 +78,22 @@ export class GameApp {
   private uiMode: UiMode = asUiMode(loadPref('ui'));
   private mobile = false;
   private readonly portraitQuery = window.matchMedia('(pointer: coarse) and (orientation: portrait)');
+  private groundMarker: Marker | undefined;
+  private readonly groundTaps = new GroundTaps((p, attackMove) => {
+    if (!attackMove && this.groundMarker) {
+      const index = this.renderer.markers.indexOf(this.groundMarker);
+      if (index >= 0) this.renderer.markers.splice(index, 1);
+    }
+    const marker = this.issueMove(p.x, p.y, attackMove);
+    this.groundMarker = attackMove ? marker : undefined;
+  });
   /** 移动版画面上的手指手势（点、长按、框选、双指缩放旋转） */
   private readonly touch = new TouchGestures({
-    tap: (x, y) => this.touchTap(x, y),
+    tap: (x, y) => this.primaryClick(x, y, false),
     hold: (x, y) => this.touchHold(x, y),
     canBox: () => !this.mode && !!this.world.humanTeam,
     box: (x0, y0, x1, y1, done, commit) => this.touchBox(x0, y0, x1, y1, done, commit),
+    pinchStart: () => this.groundTaps.cancel(),
     pinch: p => this.touchPinch(p),
   });
   private uiTimer = 0;
@@ -180,7 +190,7 @@ export class GameApp {
 
   destroy(): void {
     cancelAnimationFrame(this.raf);
-    this.touch.cancel();
+    this.cancelTouch();
     for (const f of this.cleanup) f();
     this.pointer.destroy();
     this.hud.destroy();
@@ -207,7 +217,10 @@ export class GameApp {
     }, { passive: false });
     this.on(cv, 'contextmenu', e => e.preventDefault());
     // 浏览器要有用户操作才允许出声
-    this.on(window, 'pointerdown', () => this.sound.unlock(), { capture: true });
+    this.on(window, 'pointerdown', e => {
+      this.sound.unlock();
+      if (e.target !== cv || e.button !== 0) this.groundTaps.cancel();
+    }, { capture: true });
     this.on(window, 'pointerup', e => { if (e.pointerType === 'touch') this.sound.unlock(); }, { capture: true });
     const syncAudio = (): void => this.syncAudioPause();
     document.addEventListener('visibilitychange', syncAudio);
@@ -274,7 +287,10 @@ export class GameApp {
       }
       const d = this.drag;
       if (d) {
-        if (!d.active && Math.hypot(p.x - d.x, p.y - d.y) > 5) d.active = true;
+        if (!d.active && Math.hypot(p.x - d.x, p.y - d.y) > 5) {
+          d.active = true;
+          this.groundTaps.cancel();
+        }
         if (d.active) {
           this.showBox(d.x, d.y, p.x, p.y);
           this.hud.cards.markCards(this.clientRect(d.x, d.y, p.x, p.y));
@@ -301,10 +317,10 @@ export class GameApp {
         this.box.style.display = 'none';
         this.hud.cards.markCards(null);
         if (d.active) this.boxSelect(d.x, d.y, p.x, p.y, e.shiftKey);
-        else this.clickSelect(p.x, p.y, e.shiftKey);
+        else this.primaryClick(p.x, p.y, e.shiftKey);
       }
     });
-    this.on(cv, 'pointercancel', () => this.touch.cancel());
+    this.on(cv, 'pointercancel', () => this.cancelTouch());
     // 鼠标位置在整个窗口上跟踪（贴边卷屏不管底下是不是界面面板）
     this.on(window, 'pointermove', e => {
       const p = this.local(e), m = this.mouse;
@@ -351,6 +367,7 @@ export class GameApp {
       const v = this.pointer.virtualPos;
       const onCanvas = v ? document.elementFromPoint(v.x, v.y) === cv : e.target === cv;
       if (!g || !scale || !onCanvas) return;
+      this.groundTaps.cancel();
       this.zoomAt(this.mouse.x, this.mouse.y, (g.zoom * scale) / this.renderer.cam.zoom);
     };
     const gestureEnd = (e: Event): void => {
@@ -371,8 +388,6 @@ export class GameApp {
     };
     this.on(mm, 'contextmenu', e => e.preventDefault());
     this.on(mm, 'pointerdown', e => {
-      // 移动版：画布方形的四角（地图圆外）紧挨着摇杆，手指落在那里不算点小地图
-      if (this.mobile && !inInscribedCircle(e.clientX, e.clientY, mm.getBoundingClientRect())) return;
       const p = mmPos(e);
       if (e.button === 2) {
         if (this.mode) this.setMode('');
@@ -414,7 +429,11 @@ export class GameApp {
       const human = this.world.humanTeam;
       if (k.startsWith('Arrow') || k === ' ' || k === 'PageUp' || k === 'PageDown') e.preventDefault();
       // 移动镜头的键一按下就取消跟随（卷屏是每帧轮询按住的键，点得太快可能一帧也没赶上）
-      if (k.startsWith('Arrow') || (!e.ctrlKey && !e.metaKey && (k === 'w' || k === 'a' || k === 's' || k === 'd'))) this.stopFollow();
+      if (k.startsWith('Arrow') || (!e.ctrlKey && !e.metaKey && (k === 'w' || k === 'a' || k === 's' || k === 'd'))) {
+        this.stopFollow();
+        this.groundTaps.cancel();
+      }
+      if (!e.ctrlKey && !e.metaKey && (k === 'q' || k === 'e' || k === 'PageUp' || k === 'PageDown')) this.groundTaps.cancel();
       if (k === 'Escape') {
         if (this.hud.helpOpen) this.hud.toggleHelp();
         else if (this.hud.settingsOpen) this.hud.closeSettings();
@@ -443,6 +462,7 @@ export class GameApp {
       else if (k === 't') this.command('torch');
       else if (k === 'b') this.command('outpost');
       else if (k === 'Home' || k === 'Backspace') {
+        this.groundTaps.cancel();
         // 镜头转回正北、恢复默认俯角
         this.renderer.cam.yaw = this.cam0.yaw;
         this.renderer.cam.pitch = this.cam0.pitch;
@@ -489,7 +509,7 @@ export class GameApp {
       this.mouse.out = null;
       this.mouse.buttons = 0;
       this.gesture = null;
-      this.touch.cancel();
+      this.cancelTouch();
       // 拖框时切走窗口可能收不到松手：收起框，也给卡片解冻（框选扫卡片期间卡片不重建）
       if (this.drag) {
         this.drag = null;
@@ -505,6 +525,7 @@ export class GameApp {
    */
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
+    this.groundTaps.cancel();
     const p = this.local(e);
     const unit = e.deltaMode === 1 ? WHEEL_LINE : e.deltaMode === 2 ? WHEEL_PAGE : 1;
     const dx = e.deltaX * unit, dy = e.deltaY * unit;
@@ -556,6 +577,7 @@ export class GameApp {
   }
 
   private setMode(m: Mode): void {
+    this.groundTaps.cancel();
     this.mode = m;
     // 样式表给整个界面设了 !important 的剑形指针，指令模式的十字准星要同样 !important 才盖得过
     this.canvas.style.setProperty('cursor', m ? 'crosshair' : '', m ? 'important' : '');
@@ -595,6 +617,7 @@ export class GameApp {
   // ------------------------------------------------------------------ 选择
   /** all：指定全选卡片的选中态（点全选卡片时），不给就按屏幕内的人是否全都选着来定 */
   private setSelection(list: number[], all?: boolean): void {
+    this.groundTaps.cancel();
     for (const s of this.selList) this.sel[s] = 0;
     this.selList = list;
     this.selUid = list.map(s => this.world.uid[s]);
@@ -834,6 +857,25 @@ export class GameApp {
     return best;
   }
 
+  /** 左键与触屏共用的点按入口，先处理选择和直接攻击，再下地面指令。 */
+  private primaryClick(x: number, y: number, add: boolean): void {
+    if (this.over || this.hud.helpOpen) return;
+    if (this.mode) return this.modeClick(x, y);
+    const human = this.world.humanTeam;
+    if (!human) return;
+    if (add || !this.selList.length || this.unitAt(x, y, human, false) >= 0) {
+      this.groundTaps.cancel();
+      this.clickSelect(x, y, add);
+      return;
+    }
+    const target = this.renderer.screenToWorld(x, y);
+    if (this.attackUnitAt(x, y) || this.attackBuildingAt(target.x, target.y, false)) {
+      this.groundTaps.cancel();
+      return;
+    }
+    this.groundTaps.tap({ x, y }, target);
+  }
+
   private clickSelect(sx: number, sy: number, add: boolean): void {
     const w = this.world;
     const human = w.humanTeam;
@@ -962,11 +1004,11 @@ export class GameApp {
     this.lastGroup = { t: now, g };
   }
 
-  /** 移动版的编队按钮（没有键盘的 Ctrl+数字）：只管编队，把所选部队编为这一队；选中一队靠编队卡片 */
+  /** 移动版点空队、或在已有队伍菜单里确认重编队 */
   private groupSlot(g: number): void {
     if (!this.world.humanTeam) return;
     if (!this.selList.length) {
-      this.hud.message('先选中部队，再点编队按钮把它们编为这一队', 'info');
+      this.hud.message('先选中要编队的部队', 'info');
       return;
     }
     this.assignGroup(g);
@@ -1066,6 +1108,7 @@ export class GameApp {
   private command(c: 'amove' | 'stop' | 'hold' | 'rally' | 'unrally' | 'all' | 'torch' | 'outpost' | 'follow' | 'deselect'): void {
     const w = this.world;
     if (!w.humanTeam) return;
+    this.groundTaps.cancel();
     if (c === 'deselect') {
       this.setMode('');
       this.setSelection([]);
@@ -1170,12 +1213,11 @@ export class GameApp {
     this.setMode('');
   }
 
-  private issueMove(x: number, y: number, amove: boolean, fx = 0, fy = 0): void {
+  private issueMove(x: number, y: number, amove: boolean, fx = 0, fy = 0): Marker | undefined {
     if (!this.selList.length) return;
     this.world.orderMove(this.selList, x, y, amove, fx, fy);
     this.sound.ui(amove ? 'attack' : 'order');
-    if (amove) this.renderer.addMarker(x, y, 1, 0.45, 0.25);
-    else this.renderer.addMarker(x, y, 0.4, 1, 0.45);
+    return amove ? this.renderer.addMarker(x, y, 1, 0.45, 0.25) : this.renderer.addMarker(x, y, 0.4, 1, 0.45);
   }
 
   /**
@@ -1237,7 +1279,7 @@ export class GameApp {
     const on = isMobileUi(this.uiMode, this.portraitQuery.matches);
     if (on === this.mobile) return;
     this.mobile = on;
-    this.touch.cancel();
+    this.cancelTouch();
     this.mouse.out = null;
     this.mouse.inside = false;
     this.hud.setMobile(on);
@@ -1247,21 +1289,15 @@ export class GameApp {
     this.minimap.resize();
   }
 
-  /**
-   * 点一下：指令模式里在那里执行；点己方单位是选中；否则有选中部队时照右键的语义下令（点地面移动、点敌军或敌方建筑攻击，
-   * 点据点处是派人过去，可占领：不能把据点优先，否则部队的选择会被清掉）；没选部队时点据点是选中据点、点空地是取消选择
-   */
-  private touchTap(x: number, y: number): void {
-    if (this.mode) return this.modeClick(x, y);
-    const human = this.world.humanTeam;
-    if (!human) return;
-    if (this.unitAt(x, y, human, false) >= 0 || !this.selList.length) this.clickSelect(x, y, false);
-    else this.rightClick(x, y, false);
+  private cancelTouch(): void {
+    this.groundTaps.cancel();
+    this.touch.cancel();
   }
 
   /** 长按：已选部队攻击移动到那里（点在敌方建筑上则直接攻打） */
   private touchHold(x: number, y: number): void {
     if (this.mode || !this.world.humanTeam || !this.selList.length) return;
+    this.groundTaps.cancel();
     const p = this.renderer.screenToWorld(x, y);
     if (!this.attackBuildingAt(p.x, p.y, false)) this.issueMove(p.x, p.y, true);
     navigator.vibrate?.(15);
@@ -1284,6 +1320,7 @@ export class GameApp {
   private touchBox(x0: number, y0: number, x1: number, y1: number, done: boolean, commit: boolean): void {
     const vw = this.renderer.viewW, vh = this.renderer.viewH;
     const cx = (v: number): number => Math.max(0, Math.min(vw, v)), cy = (v: number): number => Math.max(0, Math.min(vh, v));
+    this.groundTaps.cancel();
     if (!done) return this.showBox(cx(x0), cy(y0), cx(x1), cy(y1));
     this.box.style.display = 'none';
     if (commit) this.boxSelect(cx(x0), cy(y0), cx(x1), cy(y1), false, false);

@@ -401,9 +401,9 @@ describe('inEdgeZone 边缘起手', () => {
 });
 
 describe('EDGE_SWIPE_SURFACES', () => {
-  it('是选择器，包含把手、画面画布、卡片带、摇杆与小地图所在的容器', () => {
+  it('是选择器，包含把手、画面画布、卡片带、独立的编队行、摇杆与小地图所在的容器', () => {
     const parts = EDGE_SWIPE_SURFACES.split(',').map(s => s.trim());
-    expect(new Set(parts)).toEqual(new Set(['.handle', 'canvas.view', '.cardwrap', '.mini']));
+    expect(new Set(parts)).toEqual(new Set(['.handle', 'canvas.view', '.cardwrap', '.groupslots', '.mini']));
   });
 });
 
@@ -427,8 +427,8 @@ describe('blocksEdgeSwipe 要不要拦下 touchstart 的默认行为', () => {
     expect(blocksEdgeSwipe(ev(touch(W, surface)), W)).toBe(true);
   });
 
-  it('把手、卡片带、小地图容器上边缘起手同样要拦', () => {
-    for (const c of ['handle', 'cardwrap', 'mini']) {
+  it('把手、卡片带、编队行、小地图容器上边缘起手同样要拦', () => {
+    for (const c of ['handle', 'cardwrap', 'groupslots', 'mini']) {
       expect(blocksEdgeSwipe(ev(touch(3, el([c]))), W), c).toBe(true);
     }
   });
@@ -440,10 +440,10 @@ describe('blocksEdgeSwipe 要不要拦下 touchstart 的默认行为', () => {
   });
 
   it('在边缘、落在这些界面里的按钮上同样要拦：这些按钮自己用 pointer 事件处理手指，不靠 click', () => {
-    // 比如小地图容器 .mini 里的编队按钮、「取消选择」，卡片带里的按钮
+    // 例如小地图旁的「取消选择」和单独一行的编队按钮
     expect(blocksEdgeSwipe(ev(touch(5, el(['mini', 'button']))), W)).toBe(true);
     expect(blocksEdgeSwipe(ev(touch(W - 5, el(['mini', 'button']))), W)).toBe(true);
-    expect(blocksEdgeSwipe(ev(touch(5, el(['cardwrap', 'button']))), W)).toBe(true);
+    expect(blocksEdgeSwipe(ev(touch(5, el(['groupslots', 'button']))), W)).toBe(true);
     expect(blocksEdgeSwipe(ev(touch(5, el(['mini']))), W)).toBe(true);
   });
 
