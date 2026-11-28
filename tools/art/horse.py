@@ -7,15 +7,17 @@
 import math
 from functools import cache
 
+import bpy
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 from horse_gaits import DURATION, GAITS, STRIDE
-from horse_mesh import build_horse
+from horse_tack import STYLES, build_horse
 from horse_rig import CHEST as CHEST_REST
 from horse_rig import HEEL, JOINTS, LEGS, LIMB_X, LUMBOSACRAL, SIDE, horse_skeleton, limb_bones, limb_joints
 from mesh import Pose, bend, clip, point, turn
 
-__all__ = ("STRIDE", "animate_horse", "horse_mesh", "horse_pose", "horse_skeleton")
+__all__ = ("STRIDE", "STYLES", "animate_horse", "check_barding", "horse_mesh", "horse_pose", "horse_skeleton")
 
 FORWARD = Vector((0, 1, 0))
 CHEST = Vector(CHEST_REST)
@@ -59,8 +61,9 @@ MOTION = {
 }
 
 
-def horse_mesh(rig):
-    return build_horse(rig)
+def horse_mesh(rig, style="rome"):
+    """style 是马的样式（horse_tack.STYLES）：阵营名是初级形态，加 _e 是披甲的高级形态。"""
+    return build_horse(rig, style)
 
 
 def spline(t, keys):
@@ -402,7 +405,8 @@ def falling_pose(p, phase, surface):
     head = CHEST + Vector((.15*fall, .08*fall - .04*stagger, 0))
     delta = turn(x=5*stagger*(1 - fall) + 2*fall, f=87*fall, z=-9*fall)
     p.set("chest", head=head, delta=delta)
-    # 骑手不跟着翻到底：马落地时他仰在马背一侧，腿搭在马身上，而不是侧躺着把腿翘在半空。
+    # 鞍骨在倒地的后半段往回转一些。骑手的原点跟着鞍骨走，unhorse.py 把落马动作换算进骑手原点时用的就是它每一刻的位姿：
+    # 改这里或倒地的其它部分，四个生成脚本都要重跑，骑手的落马才对得上。
     flex(p, "saddle", f=-22*slack)
     flex(p, "loin", x=3*slack, z=-3*slack)
     flex(p, "pelvis", x=4*slack, z=-3*slack)
@@ -439,3 +443,30 @@ def animate_horse(rig, mesh):
     ground = GroundSurface(Pose(rig), mesh)
     for name, duration in DURATION.items():
         clip(rig, name, duration, lambda phase: horse_pose(rig, name, phase, ground), name != "die", step=1)
+
+
+def check_barding(rig, mesh, samples=24):
+    """挂甲不得与四肢相交：四个动作各取若干帧，把蒙皮后的挂甲与四肢求交，相交就报错。查完把骨架放回绑定姿势。"""
+    spans = list(mesh.get("hanging", ()))
+    if not spans:
+        return
+    moving = {name for pair, side in LEGS for name in limb_bones(pair, side)}
+    groups = {group.index for group in mesh.vertex_groups if group.name in moving}
+    swung = {v.index for v in mesh.data.vertices if any(g.group in groups and g.weight > .01 for g in v.groups)}
+    polygons = [tuple(polygon.vertices) for polygon in mesh.data.polygons]
+    barding = [polygons[i] for start, end in zip(spans[::2], spans[1::2]) for i in range(start, end)]
+    limbs = [polygon for polygon in polygons if swung.intersection(polygon)]
+    ground = GroundSurface(Pose(rig), mesh)
+    for name in DURATION:
+        for i in range(samples):
+            phase = i/(samples - 1) if name == "die" else i/samples
+            horse_pose(rig, name, phase, ground)
+            bpy.context.view_layer.update()
+            posed = mesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            vertices = [vertex.co.copy() for vertex in posed.to_mesh().vertices]
+            posed.to_mesh_clear()
+            crossed = BVHTree.FromPolygons(vertices, limbs).overlap(BVHTree.FromPolygons(vertices, barding))
+            assert not crossed, (name, phase, "挂甲与四肢相交", len(crossed))
+    for bone in rig.pose.bones:
+        bone.matrix_basis.identity()
+    bpy.context.view_layer.update()

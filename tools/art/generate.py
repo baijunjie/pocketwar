@@ -1,5 +1,4 @@
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -12,11 +11,13 @@ import horse
 import human_motion
 import rome
 import siege
+import unhorse
+from horse_gaits import DURATION
 from mesh import Mesh, armature, export, material, point, reset
+from registry import HORSE_LIBRARY, cavalry_spec, read_manifest, write_manifest
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "public/assets/units"
 MACHINES = ("scorpio", "onager")
-HORSE_SRC = "units/anims/horse.glb"
 
 
 def rider_offset(rig):
@@ -24,6 +25,21 @@ def rider_offset(rig):
     joint = rig.pose.bones["saddle"]
     rotation = (joint.matrix @ joint.bone.matrix_local.inverted()).to_quaternion()
     return joint.matrix.translation, rotation
+
+
+def mount_rider(rig, style, action, phase):
+    """预览里把骑手放到本阵营的马上。马待命；拍阵亡时马也播倒地、取同一时刻：骑手的落马是照马的倒地摆的。"""
+    # 倒地照动作库里那匹马的网格贴地，与游戏里、与骑手落马的取法一致：照本样式的网格贴地，披甲的马会被挂甲垫高。
+    ground = unhorse.horse_ground() if action == "die" else None
+    mount = armature("Horse", horse.horse_skeleton())
+    horse.horse_mesh(mount, style)
+    if action == "die":
+        horse.horse_pose(mount, "die", phase*human_motion.TIMING["die"]/DURATION["die"], ground)
+    else:
+        horse.horse_pose(mount, "idle", .19)
+    bpy.context.view_layer.update()
+    rig.rotation_mode = "QUATERNION"
+    rig.location, rig.rotation_quaternion = rider_offset(mount)
 
 
 def scene_lighting(kind, action):
@@ -97,14 +113,9 @@ def preview(kind, elite, action, path):
         rig = armature("Human", rome.human_skeleton())
         rome.infantry(kind, elite, rig)
         phase = human_motion.HIT_TIME / human_motion.TIMING[action] if action.startswith("attack") else .19
-        human_motion.human_pose(rig, rome.SETS[kind], action, phase)
+        human_motion.human_pose(rig, rome.SETS[kind], action, phase, lancer=True)
         if kind == "equites":
-            mount = armature("Horse", horse.horse_skeleton())
-            horse.horse_mesh(mount)
-            horse.horse_pose(mount, "idle", .19)
-            bpy.context.view_layer.update()
-            rig.rotation_mode = "QUATERNION"
-            rig.location, rig.rotation_quaternion = rider_offset(mount)
+            mount_rider(rig, "rome_e" if elite else "rome", action, phase)
     scene = scene_lighting(kind, action)
     path.parent.mkdir(parents=True, exist_ok=True)
     scene.render.filepath = str(path)
@@ -142,19 +153,25 @@ def export_horse(output):
     export(output / "anims/horse.glb", step=1)
 
 
-def update_horse_strides(manifest):
-    for name in ("equites", "equites_e"):
-        model = manifest["models"].get(name, {})
-        if model.get("mount", {}).get("src") == HORSE_SRC:
+def export_mounts(output):
+    """各阵营的马与披甲马：与 anims/horse.glb 同一副骨架，只有网格，动作从动作库取。"""
+    for style in horse.STYLES:
+        reset()
+        rig = armature("Horse", horse.horse_skeleton())
+        horse.check_barding(rig, horse.horse_mesh(rig, style))
+        export(output / f"horses/{style}.glb", step=1)
+
+
+def sync_strides(manifest):
+    """各阵营用马这套步态的骑兵，步幅都跟着 horse_gaits.py 走：改了步幅重新生成马，清单里已有的骑兵一起更新。"""
+    for model in manifest["models"].values():
+        if model.get("kind") == "mounted" and model["mount"].get("anims") == HORSE_LIBRARY:
             model["stride"] = horse.STRIDE
 
 
 def generate(output, previews, preview_only, ids, horse_frames):
-    manifest_path = output / "manifest.json"
     if not preview_only:
-        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
-            "version": 1, "libraries": {}, "models": {},
-        }
+        manifest = read_manifest(output)
         reset()
         rig = armature("Human", rome.human_skeleton())
         # 参考网格让加载器能用与兵种完全相同的导出路径读取蒙皮和骨名。
@@ -164,7 +181,7 @@ def generate(output, previews, preview_only, ids, horse_frames):
         human_motion.animate_human(rig, rome.SETS.values())
         export(output / "anims/human.glb")
         export_horse(output)
-        manifest["libraries"]["human"] = "units/anims/human.glb"
+        export_mounts(output)
         for kind in ids:
             elite = kind.endswith("_e")
             base = kind.removesuffix("_e")
@@ -181,14 +198,13 @@ def generate(output, previews, preview_only, ids, horse_frames):
                 stance = rome.SETS[base]
                 art.update(anims="human", set=stance)
                 if base == "equites":
-                    spec = {"kind": "mounted", "rider": art, "mount": {"src": HORSE_SRC},
-                            "stride": horse.STRIDE}
+                    spec = cavalry_spec(art, "rome", elite)
                 else:
                     spec = {"kind": "rig", **art, "stride": human_motion.STRIDE}
             export(output / f"rome/{kind}.glb")
             manifest["models"][kind] = spec
-        update_horse_strides(manifest)
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        sync_strides(manifest)
+        write_manifest(output, manifest)
     if previews:
         for kind in ids:
             actions = ("idle", "attack") if kind in MACHINES else ("idle", "attack", *human_motion.VARIANTS)
@@ -199,24 +215,23 @@ def generate(output, previews, preview_only, ids, horse_frames):
 
 
 def generate_mount(output):
-    manifest_path = output / "manifest.json"
-    manifest = None
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-        update_horse_strides(manifest)
     export_horse(output)
-    if manifest is not None:
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    export_mounts(output)
+    # 只更新已有的清单：这个目录里还没有兵种时不凭空造一份。
+    if (output / "manifest.json").exists():
+        manifest = read_manifest(output)
+        sync_strides(manifest)
+        write_manifest(output, manifest)
 
 
 def main():
     ids = (*rome.SETS, *(f"{name}_e" for name in rome.SETS), *MACHINES)
-    parser = argparse.ArgumentParser(description="生成罗马试点的 GLB、清单与 Blender 预览")
+    parser = argparse.ArgumentParser(description="生成罗马兵种、共用的人形与马两个动作库、各阵营的马，以及 Blender 预览")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--previews", type=Path)
     parser.add_argument("--preview-only", action="store_true")
     parser.add_argument("--horse-only", action="store_true",
-                        help="只生成马并更新已有清单中的罗马骑兵步幅")
+                        help="只生成马（动作库与各阵营的马），并同步已有清单中骑兵的步幅")
     parser.add_argument("--horse-frames", type=int, default=0,
                         help="每种马步态截取的帧数，需同时指定 --previews")
     parser.add_argument("--ids", nargs="+", choices=ids, default=ids)

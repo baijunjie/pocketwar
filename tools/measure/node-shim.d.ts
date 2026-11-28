@@ -31,6 +31,7 @@ declare module 'node:url' {
 declare module 'node:fs' {
   export function mkdirSync(p: string, o?: { recursive: boolean }): void;
   export function writeFileSync(p: string, s: string): void;
+  export function readFileSync(p: string): Uint8Array;
   export function readFileSync(p: string, enc: 'utf8'): string;
   export function readdirSync(p: string, o?: { recursive: boolean }): string[];
 }

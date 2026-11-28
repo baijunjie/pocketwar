@@ -395,12 +395,16 @@ describe('withoutAssets', () => {
 
 /** 取 GLB 里的动画名（名字带「|」的是重复动画，加载时会被忽略） */
 function glbAnimations(file: string): Set<string> {
-  // 项目没有 Node 的二进制读取类型声明：按 utf8 读成字符串，截出 JSON 块（二进制块以 BIN\0 标记开头，块之间的长度字段不是文本，丢掉）
-  const text = readFileSync(file, 'utf8');
-  expect(text.startsWith('glTF')).toBe(true);
-  const from = text.indexOf('{"asset"');
-  const json0 = text.slice(from, text.indexOf('BIN\u0000', from));
-  const json = JSON.parse(json0.slice(0, json0.lastIndexOf('}') + 1)) as { animations?: { name?: string }[] };
+  const bytes = readFileSync(file);
+  const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  expect(header.getUint32(0, true)).toBe(0x46546c67); // glTF
+  expect(header.getUint32(4, true)).toBe(2);
+  expect(header.getUint32(16, true)).toBe(0x4e4f534a); // JSON
+  const jsonEnd = 20 + header.getUint32(12, true);
+  expect(jsonEnd).toBeLessThanOrEqual(bytes.length);
+  const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, jsonEnd))) as {
+    animations?: { name?: string }[];
+  };
   return new Set((json.animations ?? []).map(a => a.name ?? '').filter(n => n && !n.includes('|')));
 }
 

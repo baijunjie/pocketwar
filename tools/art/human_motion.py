@@ -2,6 +2,8 @@ import math
 
 from mathutils import Vector
 
+import unhorse
+from horse import carried, model, turned
 from mesh import Pose, bend, clip, mix, point, turn
 from rome import HIP, LOWER_ARM, SHIN, SIDE, THIGH, UPPER_ARM
 from strikes import STRIKES, VARIANTS
@@ -35,6 +37,13 @@ CONTACT = {
     "bow": ((-.141, -.025, 1.483), (.143, .70, 1.526), (0, 0, 0), (1, 1, -3)),
     "ride_lance": ((-.24, .44, 1.26), (.24, .24, 1.14), (-7, 0, 1), (0, 0, -16)),
 }
+# 马上的骑枪收在身侧（待命、临战、行进）时再往外撇开的角度（侧倾、偏航）：照握法枪尾贴着马腹往后下方斜，
+# 会戳进马的后腿根，披甲的马外面还挂着搭后。枪绕着握点转，枪尾向外让开约 14 厘米，枪尖相应向里。
+# 平刺出手时收回原来的枪路，冲锋端平的枪不受影响。
+LANCE_SPLAY = Vector((0, -5, 7))
+# 骑枪手使出手变体时右肘的朝向：收在身侧偏下。照平时那样朝外撑开的话，肘正挡在握点后面那截枪杆的去路上，
+# 枪尖一抬一落，枪杆就从肘里穿过去。
+LANCE_ELBOW = (-.25, -.55, -.80)
 
 
 def ease(t):
@@ -93,10 +102,21 @@ def leg(p, side, foot, pitch, mounted):
     p.set(toe, local=turn(x=-.65 * max(0, pitch)))
 
 
-def human_pose(rig, stance, movement, phase):
+def human_pose(rig, stance, movement, phase, lancer=False):
+    """摆出 stance 姿态下 movement 动作在 phase 处的姿势。
+
+    lancer 给马上真拿着骑枪的骑手开：收着的枪往外撇开，让开马身（见 LANCE_SPLAY），
+    使出手变体时右肘收到身侧（见 LANCE_ELBOW）。
+    借这套坐姿摆别的骑乘者（如象夫）时不开，他们的动作不受影响。
+    """
+    mounted = stance.startswith("ride_")
+    if movement == "die" and mounted:
+        # 骑手阵亡是落马：从待命的坐姿开始，身子与两腿照 unhorse 摆，两臂与兵器按持械姿态接着摆。
+        human_pose(rig, stance, "idle", 0, lancer)
+        unhorse.fall(rig, phase * TIMING[movement], bow_fall if stance == "ride_bow" else lance_fall, lift=.02)
+        return
     p = Pose(rig)
     p.set("root")
-    mounted = stance.startswith("ride_")
     grip = "bow" if stance == "ride_bow" else stance
     t = phase * TIMING[movement]
     wave = math.tau * phase
@@ -110,10 +130,7 @@ def human_pose(rig, stance, movement, phase):
     if movement == "die":
         fall = envelope(t, ((0, 0), (.16, .04), (.54, .63), (.90, 1), (1.035, .96), (1.3, 1)))
         twist = 16 + 36 * fall
-        height = HIP - (.135 if mounted else .715) * fall
-        p.set("hips", head=((.12 if mounted else .38)*fall, -.12*fall, height),
-              delta=turn(x=(-12 if mounted else -28)*fall, f=(15 if mounted else 80)*fall, z=twist*fall))
-        body_roll = .32 if mounted else 1
+        p.set("hips", head=(.38*fall, -.12*fall, HIP - .715 * fall), delta=turn(x=-28*fall, f=80*fall, z=twist*fall))
         p.set("spine", local=turn(x=9 + 16*fall))
         p.set("chest", local=turn(x=8*fall, z=-14*fall))
         p.set("neck", local=turn(x=12*fall))
@@ -121,51 +138,58 @@ def human_pose(rig, stance, movement, phase):
         p.set("mantle", local=turn(x=9*fall))
         settle = envelope(t, ((0, 0), (.22, .12), (.54, .63), (.90, 1), (1.30, 1)))
         for side, s in SIDE.items():
-            if mounted:
-                p.set("shoulder." + side)
-                p.set("upper_arm." + side, local=turn(f=s*(11 + 44*fall)))
-                p.set("forearm." + side, local=turn(x=-(35 - 15*fall)))
-                p.set("hand." + side)
-                p.set("weapon." + side)
+            # 尸体侧卧时，靠地的手臂向外撑，另一侧让盾面或弓身贴地。
+            if side == "L":
+                wrist = (.35, .35, .105 if grip == "bow" else .18)
+                aiming = turn(*mix(l_turn, (83, 0, 8), settle))
+                arm(p, side, mix(left, wrist, settle), aiming, mix((.8, -.55, -.65), (0, .96, -.30), settle))
             else:
-                # 尸体侧卧时，靠地的手臂向外撑，另一侧让盾面或弓身贴地。
-                if side == "L":
-                    wrist = (.35, .35, .105 if grip == "bow" else .18)
-                    aiming = turn(*mix(l_turn, (83, 0, 8), settle))
-                    arm(p, side, mix(left, wrist, settle), aiming, mix((.8, -.55, -.65), (0, .96, -.30), settle))
-                else:
-                    wrist = (-.27, -.34, .098)
-                    aiming = turn(*mix(r_turn, (1, 0, -97), settle))
-                    arm(p, side, mix(right, wrist, settle), aiming, mix((-.8, -.55, -.65), (-.32, -.86, .27), settle))
-            p.set("thigh." + side, local=turn(x=-(36 if mounted else 8) - (8+10*s)*fall*body_roll,
-                                             f=s*(26 if mounted else 0)))
+                wrist = (-.27, -.34, .098)
+                aiming = turn(*mix(r_turn, (1, 0, -97), settle))
+                arm(p, side, mix(right, wrist, settle), aiming, mix((-.8, -.55, -.65), (-.32, -.86, .27), settle))
+            p.set("thigh." + side, local=turn(x=-8 - (8+10*s)*fall))
             p.set("shin." + side, local=turn(x=9 + 29*fall))
             p.set("foot." + side)
             p.set("toe." + side)
         p.set("bowstring")
-        if mounted:
-            seat_origin(p)
         return
 
     strike = envelope(t, ((0, 0), (.033, -.13), (.075, .28), (HIT_TIME, 1),
                           (.20, 1.07), (.39, .58), (.68, .04), (.84, 0))) if attack else 0
     follow = envelope(t, ((0, 0), (.10, -.50), (.18, 1), (.32, .31), (.64, 0))) if attack else 0
     right, left, r_turn, l_turn = (Vector(v) for v in (right, left, r_turn, l_turn))
+    lancer = lancer and grip == "ride_lance"
+    # 兵器离开待命握法几成：出手变体从蓄力到收回来之前都是 1。
+    away = 0
     if alternate:
-        hold = (right, left, r_turn, l_turn)
+        hold = (right, left, r_turn + LANCE_SPLAY if lancer else r_turn, l_turn)
         duration = TIMING[movement]
         if t < .045:
             start, stop, amount = hold, alternate.windup, ease(t/.045)
+            away = amount
         elif t <= HIT_TIME:
             start, stop, amount = alternate.windup, alternate.contact, ease((t-.045)/(HIT_TIME-.045))
+            away = 1
         elif t <= .24:
             start, stop, amount = alternate.contact, alternate.release, ease((t-HIT_TIME)/(.24-HIT_TIME))
+            away = 1
         else:
-            start, stop, amount = alternate.release, hold, ease((t-.24)/(duration-.24))
+            # 收势：先依次靠向 recover 里的架势，最后回到待命的握法；各段按各自的时段走，可以前后叠着。
+            spent = (t-.24)/(duration-.24)
+            start = alternate.release
+            for (a, b), pose in alternate.recover:
+                start = [mix(u, v, ease((spent-a)/(b-a))) for u, v in zip(start, pose)]
+            a, b = alternate.settle
+            stop, amount = hold, ease((spent-a)/(b-a))
+            away = 1 - amount
         right, left, r_turn, l_turn = [mix(a, b, amount) for a, b in zip(start, stop)]
     elif attack:
         contact = CONTACT[grip]
         right, left, r_turn, l_turn = [mix(a, b, strike) for a, b in zip((right, left, r_turn, l_turn), contact)]
+        if lancer:
+            r_turn += LANCE_SPLAY * (1 - min(1, max(0, strike)))
+    elif lancer:
+        r_turn += LANCE_SPLAY
     if grip == "javelin" and attack and not alternate:
         right += Vector((.091, .013, -.277)) * max(0, follow)
         r_turn.x += 31 * max(0, follow)
@@ -239,6 +263,8 @@ def human_pose(rig, stance, movement, phase):
             target.x, target.y = rotated.x, -rotated.y
             attitude.z += yaw
         elbow_pole = (s*.80, -.55, .29 if grip == "bow" and side == "R" and (attack or movement == "ready") else -.65)
+        if lancer and side == "R" and away:
+            elbow_pole = mix(elbow_pole, LANCE_ELBOW, away)
         wrist = arm(p, side, target, turn(*attitude), elbow_pole)
         if side == "R":
             draw_hand = wrist
@@ -274,6 +300,66 @@ def human_pose(rig, stance, movement, phase):
         seat_origin(p)
 
 
+# 腕到指尖的长度，指尖离地至少这么高。
+FINGERS, FINGERTIP = .12, .03
+
+
+def thrown_arm(p, side, wrist, pole, attitude=None):
+    """落马时的一条手臂：腕落在 wrist，手顺着小臂，指尖要扎进地里时把手掌放平。
+
+    attitude 是手里兵器的朝向，不给就跟着手。
+    """
+    hand = "hand." + side
+    arm(p, side, wrist, attitude or turn(), pole)
+    p.set(hand)
+    reach = model(p.transforms[hand].to_quaternion() @ Vector((0, FINGERS, 0)))
+    wrist = p.anchor(hand)
+    if wrist.z + reach.z < FINGERTIP:
+        rise = min(FINGERTIP - wrist.z, FINGERS*.8)
+        level = Vector((reach.x, reach.y, 0)).normalized()*math.sqrt(FINGERS**2 - rise**2)
+        p.set(hand, aim=level + Vector((0, 0, rise)))
+    p.set("weapon." + side, delta=attitude)
+
+
+def reaching_arm(p, t, carry=None, rest=None):
+    """落马时的右臂：离鞍后朝倒下去的那边伸出去够地，落地后顺着地面伸过头顶，头枕在上面。
+
+    carry、rest 是手里兵器待命时与落地后的朝向，空手不给。
+    """
+    wrist = mix(carried(p, "chest", (-.42, .18, 1.62)), unhorse.REACH, unhorse.ramp(t, .56, .76))
+    wrist.z = max(wrist.z, unhorse.REACH[2])
+    attitude = carry and carry.slerp(rest, unhorse.ramp(t, .22, .62))
+    thrown_arm(p, "R", wrist, unhorse.toward(p, (-.3, -.8, -.3), "chest"), attitude)
+
+
+def flung_arm(p, t, down, carry=None, rest=None):
+    """落马时的左臂：离鞍时扬起来，落地后落到 down。carry、rest 是手里的东西待命时与落地后的朝向，空手不给。"""
+    wrist = mix(carried(p, "chest", (.40, .10, 1.70)), down, unhorse.ramp(t, .60, .90))
+    attitude = carry and carry.slerp(rest, unhorse.ramp(t, .35, .85))
+    thrown_arm(p, "L", wrist, unhorse.toward(p, (.6, -.7, -.2), "chest"), attitude)
+    p.set("bowstring")
+
+
+def borne(p, held, bone):
+    """待命时拿在手里的东西跟着胸转到现在的朝向；held 是待命坐姿里各骨骼的朝向（见 unhorse.fall）。"""
+    return turned(p, "chest") @ held["chest"].inverted() @ held[bone]
+
+
+def lance_fall(p, t, held):
+    """落马时持枪、持盾的两臂：枪横握在手里，平放在头前的地上，与马身平行；左手落在胯上，盾贴着身侧盖在上面。
+
+    没有盾的骑手（中国铁骑）共用这个动作，左手一样搭在胯上。
+    """
+    reaching_arm(p, t, held["weapon.R"], turn(f=-90, z=-10))
+    flung_arm(p, t, carried(p, "hips", (.25, .03, .88)), borne(p, held, "weapon.L"), turned(p, "hips") @ turn(z=90))
+
+
+def bow_fall(p, t, held):
+    """落马时持弓的两臂：右手空着，左手连弓落在胸前，弓平躺在地上。"""
+    reaching_arm(p, t)
+    flung_arm(p, t, (-1.85, .46, .045), borne(p, held, "weapon.L"), turn(f=90, z=-10))
+
+
 def seat_origin(p):
     # 骑乘动作把髋部摆到原点，与坐骑的 saddle 重合。
     # 共享绑定姿态的 hips 仍保留站立高度，所有子骨随这一个偏移移动。
@@ -298,4 +384,4 @@ def animate_human(rig, stances):
         for movement in movements:
             name = stance + "." + movement
             clip(rig, name, TIMING[movement],
-                 lambda phase: human_pose(rig, stance, movement, phase), movement in LOOP)
+                 lambda phase: human_pose(rig, stance, movement, phase, lancer=True), movement in LOOP)

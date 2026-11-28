@@ -154,7 +154,7 @@ tests/            无头测试；VITE_BALANCE=1 npx vitest run -t 平衡 可跑�
   高级形态（`key_e`）的数值会自动生成；清单里没登记 `key_e` 时沿用初级形态的素材，代码建模则自动换上重甲。
 - **换模型**：把 GLB 放进 `public/assets/units/<阵营>/`，在 `manifest.json` 里登记或改那一项，不改代码。
   格式、染色、骨架与动作要求见 [docs/unit-art-spec.md](docs/unit-art-spec.md)；先用 `/?view=units&f=<阵营>` 看效果，
-  未登记的 GLB 用 `/?view=units&gltf=路径.glb` 预览。罗马素材由 `tools/art/` 的 Blender 脚本生成（见其 README）。
+  未登记的 GLB 用 `/?view=units&gltf=路径.glb` 预览。四个阵营的兵种与马由 `tools/art/` 的 Blender 脚本生成（见其 README）。
 - **调规则**：数值都在 `src/sim/content/rules.ts`，改完同步改 `docs/product/` 下对应的文档。
 
 ## 素材

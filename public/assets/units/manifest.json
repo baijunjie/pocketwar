@@ -1,7 +1,11 @@
 {
   "version": 1,
   "libraries": {
-    "human": "units/anims/human.glb"
+    "human": "units/anims/human.glb",
+    "horse": "units/anims/horse.glb",
+    "china": "units/anims/china.glb",
+    "japan": "units/anims/japan.glb",
+    "persia": "units/anims/persia.glb"
   },
   "models": {
     "legion": {
@@ -52,7 +56,8 @@
         "set": "ride_lance"
       },
       "mount": {
-        "src": "units/anims/horse.glb"
+        "src": "units/horses/rome.glb",
+        "anims": "horse"
       },
       "stride": {
         "walk": 2.9,
@@ -107,7 +112,8 @@
         "set": "ride_lance"
       },
       "mount": {
-        "src": "units/anims/horse.glb"
+        "src": "units/horses/rome_e.glb",
+        "anims": "horse"
       },
       "stride": {
         "walk": 2.9,
@@ -126,6 +132,448 @@
       "src": "units/rome/onager.glb",
       "stride": {
         "walk": 2.262
+      }
+    },
+    "ji": {
+      "kind": "rig",
+      "src": "units/china/ji.glb",
+      "set": "polearm",
+      "anims": "china",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "dao": {
+      "kind": "rig",
+      "src": "units/china/dao.glb",
+      "set": "sword_shield",
+      "anims": "human",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "nu": {
+      "kind": "rig",
+      "src": "units/china/nu.glb",
+      "set": "crossbow",
+      "anims": "china",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "liannu": {
+      "kind": "rig",
+      "src": "units/china/liannu.glb",
+      "set": "repeating_crossbow",
+      "anims": "china",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "tieqi": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/china/tieqi.glb",
+        "set": "ride_lance",
+        "anims": "human"
+      },
+      "mount": {
+        "src": "units/horses/china.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "huojian": {
+      "kind": "rig",
+      "src": "units/china/huojian.glb",
+      "stride": {
+        "walk": 1.948
+      }
+    },
+    "pili": {
+      "kind": "rig",
+      "src": "units/china/pili.glb",
+      "stride": {
+        "walk": 2.262
+      }
+    },
+    "ji_e": {
+      "kind": "rig",
+      "src": "units/china/ji_e.glb",
+      "set": "polearm",
+      "anims": "china",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "dao_e": {
+      "kind": "rig",
+      "src": "units/china/dao_e.glb",
+      "set": "sword_shield",
+      "anims": "human",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "nu_e": {
+      "kind": "rig",
+      "src": "units/china/nu_e.glb",
+      "set": "crossbow",
+      "anims": "china",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "liannu_e": {
+      "kind": "rig",
+      "src": "units/china/liannu_e.glb",
+      "set": "repeating_crossbow",
+      "anims": "china",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "tieqi_e": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/china/tieqi_e.glb",
+        "set": "ride_lance",
+        "anims": "human"
+      },
+      "mount": {
+        "src": "units/horses/china_e.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "huojian_e": {
+      "kind": "rig",
+      "src": "units/china/huojian_e.glb",
+      "stride": {
+        "walk": 1.948
+      }
+    },
+    "pili_e": {
+      "kind": "rig",
+      "src": "units/china/pili_e.glb",
+      "stride": {
+        "walk": 2.262
+      }
+    },
+    "yari": {
+      "kind": "rig",
+      "src": "units/japan/yari.glb",
+      "anims": "japan",
+      "set": "spear",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "yari_e": {
+      "kind": "rig",
+      "src": "units/japan/yari_e.glb",
+      "anims": "japan",
+      "set": "spear",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "samurai": {
+      "kind": "rig",
+      "src": "units/japan/samurai.glb",
+      "anims": "japan",
+      "set": "katana",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "samurai_e": {
+      "kind": "rig",
+      "src": "units/japan/samurai_e.glb",
+      "anims": "japan",
+      "set": "katana",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "yumi": {
+      "kind": "rig",
+      "src": "units/japan/yumi.glb",
+      "anims": "japan",
+      "set": "longbow",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "yumi_e": {
+      "kind": "rig",
+      "src": "units/japan/yumi_e.glb",
+      "anims": "japan",
+      "set": "longbow",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "teppo": {
+      "kind": "rig",
+      "src": "units/japan/teppo.glb",
+      "anims": "japan",
+      "set": "gun",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "teppo_e": {
+      "kind": "rig",
+      "src": "units/japan/teppo_e.glb",
+      "anims": "japan",
+      "set": "gun",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "kiba": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/japan/kiba.glb",
+        "anims": "japan",
+        "set": "ride_sword"
+      },
+      "mount": {
+        "src": "units/horses/japan.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "kiba_e": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/japan/kiba_e.glb",
+        "anims": "japan",
+        "set": "ride_sword"
+      },
+      "mount": {
+        "src": "units/horses/japan_e.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "sohei": {
+      "kind": "rig",
+      "src": "units/japan/sohei.glb",
+      "anims": "japan",
+      "set": "polearm",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "sohei_e": {
+      "kind": "rig",
+      "src": "units/japan/sohei_e.glb",
+      "anims": "japan",
+      "set": "polearm",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "ozutsu": {
+      "kind": "rig",
+      "src": "units/japan/ozutsu.glb",
+      "stride": {
+        "walk": 2.136,
+        "run": 2.136
+      }
+    },
+    "ozutsu_e": {
+      "kind": "rig",
+      "src": "units/japan/ozutsu_e.glb",
+      "stride": {
+        "walk": 2.45,
+        "run": 2.45
+      }
+    },
+    "spara": {
+      "kind": "rig",
+      "src": "units/persia/spara.glb",
+      "anims": "persia",
+      "set": "spara",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "spara_e": {
+      "kind": "rig",
+      "src": "units/persia/spara_e.glb",
+      "anims": "persia",
+      "set": "spara",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "immortal": {
+      "kind": "rig",
+      "src": "units/persia/immortal.glb",
+      "anims": "persia",
+      "set": "spear",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "immortal_e": {
+      "kind": "rig",
+      "src": "units/persia/immortal_e.glb",
+      "anims": "persia",
+      "set": "spear",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "kamandar": {
+      "kind": "rig",
+      "src": "units/persia/kamandar.glb",
+      "anims": "persia",
+      "set": "bow",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "kamandar_e": {
+      "kind": "rig",
+      "src": "units/persia/kamandar_e.glb",
+      "anims": "persia",
+      "set": "bow",
+      "stride": {
+        "walk": 1.32,
+        "run": 2.46
+      }
+    },
+    "asvaran": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/persia/asvaran.glb",
+        "anims": "persia",
+        "set": "ride_bow"
+      },
+      "mount": {
+        "src": "units/horses/persia.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "asvaran_e": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/persia/asvaran_e.glb",
+        "anims": "persia",
+        "set": "ride_bow"
+      },
+      "mount": {
+        "src": "units/horses/persia_e.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "cataphract": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/persia/cataphract.glb",
+        "anims": "persia",
+        "set": "ride_kontos"
+      },
+      "mount": {
+        "src": "units/horses/persia.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "cataphract_e": {
+      "kind": "mounted",
+      "rider": {
+        "src": "units/persia/cataphract_e.glb",
+        "anims": "persia",
+        "set": "ride_kontos"
+      },
+      "mount": {
+        "src": "units/horses/persia_e.glb",
+        "anims": "horse"
+      },
+      "stride": {
+        "walk": 2.9,
+        "run": 5.2
+      }
+    },
+    "elephant": {
+      "kind": "rig",
+      "src": "units/persia/elephant.glb",
+      "stride": {
+        "walk": 1.58,
+        "run": 2.24
+      }
+    },
+    "elephant_e": {
+      "kind": "rig",
+      "src": "units/persia/elephant_e.glb",
+      "stride": {
+        "walk": 1.58,
+        "run": 2.24
+      }
+    },
+    "mangonel": {
+      "kind": "rig",
+      "src": "units/persia/mangonel.glb",
+      "stride": {
+        "walk": 2.0860175219836226
+      }
+    },
+    "mangonel_e": {
+      "kind": "rig",
+      "src": "units/persia/mangonel_e.glb",
+      "stride": {
+        "walk": 2.0860175219836226
       }
     }
   }

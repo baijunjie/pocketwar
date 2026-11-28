@@ -45,6 +45,16 @@ HORSE_SUPPORT = {"walk": 2, "run": 3}
 HORSE_LIFT = (.06, .60)
 HORSE_GROUND_TOLERANCE = .008
 HORSE_DRIFT_TOLERANCE = .012
+HORSE_SRC = "units/anims/horse.glb"
+# 各阵营的马与披甲马的面数上限。披全身甲的（中国具装、波斯马衣）在整匹马外面多一层挂甲和衬里，放宽到 3200。
+HORSES = {"rome": 2600, "rome_e": 2600, "china": 2600, "china_e": 3200,
+          "japan": 2600, "japan_e": 2600, "persia": 2600, "persia_e": 3200}
+# 倒地后压在身下的鞍具、挂甲可以陷进地面这么深（在地面以下，看不见）；再深就是整匹马沉下去了。
+HORSE_BURIED = .09
+# 骑手落马：骨骼关节全程最多低于地面这么多（关节外面还有一圈肉，贴地时关节本来就在地面以上）。
+RIDER_SUNK = .03
+# 落马的终态：胯离鞍骨至少这么远，其中朝马背转过去的那一侧至少这么远（离开了鞍，没落在马身上），胯离地不超过这么高（躺下了）。
+RIDER_CLEAR, RIDER_ASIDE, RIDER_LYING = .9, .6, .4
 
 
 class Glb:
@@ -169,6 +179,11 @@ def compose_rotation(a, b):
     scalar = a[3]*b[3] - sum(x*y for x,y in zip(a[:3], b[:3]))
     xyz = add(cross(a[:3], b[:3]), tuple(a[3]*y+b[3]*x for x,y in zip(a[:3], b[:3])))
     return (*xyz, scalar)
+
+
+def turned_from(bind, rotation):
+    """某根骨相对绑定姿势转过的角。"""
+    return compose_rotation(rotation, tuple(-v for v in bind[:3]) + bind[3:])
 
 
 def slerp(a, b, weight):
@@ -425,10 +440,63 @@ def verify_horse(asset, strides):
         if name == "die":
             pose = motion.world(duration)
             p, q = pose[saddle]
-            inverse = tuple(-v for v in bind_rotation[:3]) + bind_rotation[3:]
-            up = rotate(compose_rotation(q, inverse), (0, 1, 0))
+            up = rotate(turned_from(bind_rotation, q), (0, 1, 0))
             bottom = ground_height(surface, pose)
             assert bottom <= .012 and p[1] < .85 and abs(up[1]) < .45, (name, "终帧倒地", bottom, p, up)
+
+
+def verify_mounts(asset, library):
+    """各阵营的马：与动作库同一副骨架，不带动作，四蹄与动作库里那匹一模一样（落蹄、锁地的校验才对它们同样成立）。"""
+    signature = library.bind_signature()
+    bind = Motion(library).world(0)
+    hooves, _ = horse_geometry(library, bind)
+    poses = []
+    for name in ("idle", "walk", "run", "die"):
+        motion = Motion(library, name)
+        duration = max(times[-1] for times, _ in motion.tracks.values())
+        steps = math.ceil(duration*30) if name == "die" else 8
+        poses.extend((name, motion.world(duration*i/steps)) for i in range(steps + 1))
+    for style, budget in HORSES.items():
+        mount = asset(f"units/horses/{style}.glb")
+        assert mount.bind_signature() == signature, (mount.path, "骨架与动作库不一致")
+        assert not mount.actions, (mount.path, "各阵营的马不带动作")
+        triangles = mount.mesh(budget, (1.9, 2.3), True)
+        feet, surface = horse_geometry(mount, bind)
+        assert feet == hooves, (mount.path, "四蹄与动作库里的不一样")
+        for name, pose in poses:
+            bottom = ground_height(surface, pose)
+            limit = HORSE_BURIED if name == "die" else HORSE_GROUND_TOLERANCE
+            assert bottom >= -limit, (mount.path, name, "网格穿地", bottom)
+        print(f"{mount.path.parent.name}/{mount.path.name:14} {triangles:4} 三角形 | "
+              f"{len(mount.names):2} 骨骼 | 套用动作库")
+
+
+def verify_unhorsed(asset, manifest, mount):
+    """骑兵阵亡：马倒地以后，骑手得离开鞍座、落在马背转过去的那一侧的地上，全程不沉进地里（按骨骼关节查）。"""
+    fall = Motion(mount, "die")
+    saddle = mount.joints[mount.names.index("saddle")]
+    bind = Motion(mount).world(0)[saddle][1]
+    seen = set()
+    for name, row in manifest["models"].items():
+        if row["kind"] != "mounted" or (row["rider"]["anims"], row["rider"]["set"]) in seen:
+            continue
+        seen.add((row["rider"]["anims"], row["rider"]["set"]))
+        library = asset(manifest["libraries"][row["rider"]["anims"]])
+        motion = Motion(library, row["rider"]["set"] + ".die")
+        end = max(fall.times[-1], motion.times[-1])
+        for step in range(math.ceil(end*30) + 1):
+            time = min(end, step/30)
+            # 骑手的原点跟鞍骨的位置，并随它相对绑定姿势的转动而转动。
+            seat, rotation = fall.world(time)[saddle]
+            turned = turned_from(bind, rotation)
+            pose = {library.nodes[i]["name"]: add(seat, rotate(turned, position))
+                    for i, (position, _) in motion.world(time).items() if i in library.joints}
+            lowest = min(pose, key=lambda bone: pose[bone][1])
+            assert pose[lowest][1] > -RIDER_SUNK, (name, "骑手沉进地里", time, lowest, pose[lowest])
+        hips = pose["hips"]
+        aside = sum((a - b)*c for a, b, c in zip(hips, seat, rotate(turned, (0, 1, 0))))
+        assert math.dist(hips, seat) > RIDER_CLEAR and aside > RIDER_ASIDE and hips[1] < RIDER_LYING, (
+            name, "骑手没有落在马背一侧的地上", hips, seat)
 
 
 def report(asset, max_faces, height, team, actions):
@@ -436,6 +504,116 @@ def report(asset, max_faces, height, team, actions):
     asset.clips(actions)
     print(f"{asset.path.parent.name}/{asset.path.name:14} {triangles:4} 三角形 | "
           f"{len(asset.names):2} 骨骼 | {len(asset.actions):2} 动作")
+
+
+CHINA_STANCES = {
+    "ji": ("china", "polearm", {"brace"}),
+    "dao": ("human", "sword_shield", {"guard", "guardWalk"}),
+    "nu": ("china", "crossbow", set()),
+    "liannu": ("china", "repeating_crossbow", set()),
+    "tieqi": ("human", "ride_lance", {"charge"}),
+}
+CHINA_MACHINES = ("huojian", "pili")
+
+
+def verify_china(asset, manifest, human):
+    path = manifest["libraries"]["china"]
+    assert path == "units/anims/china.glb", path
+    libraries = {"human": human, "china": asset(path)}
+    bind = human.bind_signature()
+    required = {f"{stance}.{action}" for lib, stance, extra in CHINA_STANCES.values() if lib == "china"
+                for action in COMMON_HOLDS | extra}
+    report(libraries["china"], 20, (.04, .06), False, required)
+    assert libraries["china"].bind_signature() == bind
+
+    rows = manifest["models"]
+    for base in (*CHINA_STANCES, *CHINA_MACHINES):
+        for model_id in (base, f"{base}_e"):
+            row = rows[model_id]
+            mounted = base == "tieqi"
+            art = row["rider"] if mounted else row
+            assert row["kind"] == ("mounted" if mounted else "rig"), model_id
+            assert art["src"] == f"units/china/{model_id}.glb", model_id
+            model = asset(art["src"])
+            assert row["stride"]["walk"] > 0, model_id
+            if base in CHINA_MACHINES:
+                report(model, 3000, (1.50, 2.05), True, {"idle", "walk", "attack", "die"})
+                continue
+            assert row["stride"]["run"] > 0, model_id
+            library, stance, extra = CHINA_STANCES[base]
+            assert (art["anims"], art["set"]) == (library, stance), model_id
+            assert model.bind_signature() == bind, model_id
+            assert {f"{stance}.{action}" for action in COMMON_HOLDS | extra} <= libraries[library].actions.keys()
+            report(model, 1800 if mounted else 2000, (1.75, 2.00), True, set())
+
+    weapon = libraries["china"].joints[libraries["china"].names.index("weapon.R")]
+    for lib, stance, _ in CHINA_STANCES.values():
+        if lib != "china":
+            continue
+        # 在命中帧检查方向和出手位置，防止变体误连到同一套关键帧。
+        poses = [Motion(libraries["china"], f"{stance}.{action}").world(8/60) for action in ATTACKS]
+        for a, b in combinations(poses, 2):
+            (origin_a, rotation_a), (origin_b, rotation_b) = a[weapon], b[weapon]
+            dot = abs(sum(x*y for x, y in zip(rotation_a, rotation_b)))
+            assert math.dist(origin_a, origin_b) > .04 or dot < .992, stance
+
+
+def verify_japan(asset, manifest, human):
+    stances = {
+        "yari": ("spear", {"brace", "charge"}),
+        "samurai": ("katana", set()),
+        "yumi": ("longbow", set()),
+        "teppo": ("gun", set()),
+        "kiba": ("ride_sword", {"charge"}),
+        "sohei": ("polearm", {"charge"}),
+    }
+    path = manifest["libraries"]["japan"]
+    assert path == "units/anims/japan.glb", path
+    library = asset(path)
+    assert library.bind_signature() == human.bind_signature(), path
+    actions = {f"{stance}.{name}" for stance, extras in stances.values() for name in COMMON_HOLDS | extras}
+    report(library, 20, (.04, .06), False, actions)
+
+    def strikes(exported, names, bones):
+        hits = []
+        for name in names:
+            motion = Motion(exported, name)
+            hit = min(motion.times, key=lambda t: abs(t-2/15))
+            assert abs(hit-2/15) < .0001, (exported.path, name, hit)
+            pose = motion.world(hit)
+            hits.append([pose[exported.joints[exported.names.index(bone)]] for bone in bones])
+        for a, b in combinations(hits, 2):
+            distance = max(math.dist(pos, other) for (pos, _), (other, _) in zip(a, b))
+            angle = max(2*math.acos(min(1, abs(sum(x*y for x, y in zip(q, r)))))
+                        for (_, q), (_, r) in zip(a, b))
+            assert distance > .08 or angle > .16, (exported.path, names, distance, angle)
+
+    for stance, _ in stances.values():
+        strikes(library, [f"{stance}.{name}" for name in ATTACKS], ("weapon.R", "weapon.L"))
+    hips = library.joints[library.names.index("hips")]
+    for movement in ("idle", "walk", "run", "charge"):
+        seat = Motion(library, f"ride_sword.{movement}")
+        assert all(abs(seat.world(t)[hips][0][1]) < .04 for t in seat.times), movement
+
+    machine_actions = {"idle", "walk", "run", "die", *ATTACKS}
+    for base in (*stances, "ozutsu"):
+        for suffix in ("", "_e"):
+            model_id = base + suffix
+            row = manifest["models"][model_id]
+            mounted = base == "kiba"
+            assert row["kind"] == ("mounted" if mounted else "rig"), model_id
+            assert all(row["stride"][action] > 0 for action in ("walk", "run")), model_id
+            part = row["rider"] if mounted else row
+            assert part["src"] == f"units/japan/{model_id}.glb", model_id
+            model = asset(part["src"])
+            if base == "ozutsu":
+                assert "anims" not in part, model_id
+                report(model, 3000, (1.1, 1.6), True, machine_actions)
+                strikes(model, ATTACKS, ("barrel",))
+                continue
+            assert (part["anims"], part["set"]) == ("japan", stances[base][0]), model_id
+            assert model.bind_signature() == human.bind_signature(), model_id
+            report(model, 1800 if mounted else 2000, (1.7, 2.25), True, set())
 
 
 def verify(root):
@@ -465,7 +643,16 @@ def verify(root):
     report(mount, 2600, (1.9, 2.2), True, {"idle", "walk", "run", "die"})
 
     models = manifest["models"]
-    verify_horse(mount, {name: models[name]["stride"] for name in ("equites", "equites_e")})
+    assert manifest["libraries"]["horse"] == HORSE_SRC
+    cavalry = {name: row for name, row in models.items() if row["kind"] == "mounted"}
+    for name, row in cavalry.items():
+        # 骑手的素材在 units/<阵营>/ 下，骑的就得是这个阵营的马，高级形态骑披甲的那匹。
+        steed = row["rider"]["src"].split("/")[1] + ("_e" if name.endswith("_e") else "")
+        assert steed in HORSES, (name, row["rider"]["src"])
+        assert row["mount"] == {"src": f"units/horses/{steed}.glb", "anims": "horse"}, (name, row["mount"])
+    verify_horse(mount, {name: row["stride"] for name, row in cavalry.items()})
+    verify_mounts(asset, mount)
+    verify_unhorsed(asset, manifest, mount)
     ids = list(HOLDS) + [name + "_e" for name in HOLDS] + sorted(TOOLS)
     assert set(ids) <= models.keys()
     for model_id in ids:
@@ -481,14 +668,135 @@ def verify(root):
         if machine:
             report(exported, 3000, (1.0, 2.2), False, {"idle", "walk", "attack", "die"})
             continue
-        if mounted:
-            assert row["mount"]["src"] == "units/anims/horse.glb", model_id
         assert row["stride"]["run"] > 0, model_id
         assert art["anims"] == "human" and art["set"] == HOLDS[base][0], model_id
         for standard, custom in art.get("clips", {}).items():
             assert standard in LIBRARY | set(ATTACKS) and custom in actions and custom.startswith(art["set"] + "."), model_id
         assert exported.bind_signature() == human.bind_signature(), model_id
         report(exported, 1800 if mounted else 2000, (1.7, 2.0), True, set())
+
+    verify_china(asset, manifest, human)
+    verify_japan(asset, manifest, human)
+    verify_persia(asset, manifest, human)
+
+
+PERSIA_STANCES = {
+    "spara": ("spara", {"brace", "charge"}),
+    "immortal": ("spear", {"brace"}),
+    "kamandar": ("bow", set()),
+    "asvaran": ("ride_bow", {"attackMove", "attackMoveL", "attackMoveR", "attackMoveBL", "attackMoveBR"}),
+    "cataphract": ("ride_kontos", {"charge"}),
+}
+
+
+def verify_persia_strikes(asset, prefix, joints):
+    hits = [Motion(asset, prefix + name).world(2/15) for name in ATTACKS]
+    for a, b in combinations(hits, 2):
+        distance = max(math.dist(a[i][0], b[i][0]) for i in joints)
+        angle = max(2*math.acos(min(1, abs(sum(x*y for x,y in zip(a[i][1], b[i][1]))))) for i in joints)
+        assert distance > .09 or angle > .19, (asset.path, prefix, distance, angle)
+
+
+def verify_persia_bows(library, joints):
+    for stance in ("bow", "ride_bow"):
+        shots = dict.fromkeys(ATTACKS, 0)
+        if stance == "ride_bow":
+            shots.update(attackMoveL=90, attackMoveR=-90, attackMoveBL=140, attackMoveBR=-140)
+        for action, yaw in shots.items():
+            clip = Motion(library, f"{stance}.{action}")
+            wound = clip.world(.1)
+            left = wound[joints["weapon.L"]][0]
+            string = wound[joints["bowstring"]][0]
+            right = wound[joints["weapon.R"]][0]
+            assert math.dist(left, string) > .42 and math.dist(right, string) < .045, (stance, action)
+            heading = math.degrees(math.atan2(left[0]-string[0], left[2]-string[2]))
+            assert abs(math.remainder(heading-yaw, 360)) <= 24, (stance, action, heading)
+            released = clip.world(.15)
+            assert math.dist(released[joints["weapon.L"]][0], released[joints["bowstring"]][0]) < .10, (stance, action)
+
+
+def verify_persia_lances(library, joints):
+    rest = Motion(library).world(0)
+    right, left = (joints[f"weapon.{side}"] for side in ("R", "L"))
+    inverse = {j: tuple(-v for v in rest[j][1][:3]) + (rest[j][1][3],) for j in (right, left)}
+    for stance, actions in (("spear", ATTACKS), ("ride_kontos", (*ATTACKS, "charge"))):
+        for action in actions:
+            clip = Motion(library, f"{stance}.{action}")
+            for time in clip.times:
+                frame = clip.world(time)
+                rotations = {j: compose_rotation(frame[j][1], inverse[j]) for j in inverse}
+                grips = {j: add(frame[j][0], rotate(rotations[j], (0, -.027, 0))) for j in inverse}
+                separation = tuple(b-a for a, b in zip(grips[right], grips[left]))
+                shaft = rotate(rotations[right], (0, 0, 1))
+                assert math.sqrt(sum(v*v for v in cross(separation, shaft))) < .017, (stance, action, time)
+                assert .12 < sum(a*b for a, b in zip(separation, shaft)) < .46, (stance, action, time)
+
+
+def verify_elephant_feet(asset, stride):
+    pads = [asset.joints[asset.names.index(f"pad.{leg}")] for leg in ("hind.L", "fore.L", "hind.R", "fore.R")]
+    assert HUMAN <= set(asset.names), asset.path
+    for action, lift_height in (("walk", .12), ("run", .17)):
+        clip = Motion(asset, action)
+        duration = clip.times[-1]
+        count = 100
+        poses = [clip.world(duration*i/count) for i in range(count)]
+        samples = [[pose[j][0] for j in pads] for pose in poses]
+        assert all(any(p[1] < .211 for p in row) for row in samples), (asset.path, action)
+        arrivals = []
+        for j in range(len(pads)):
+            tracked = [row[j] for row in samples]
+            assert max(pos[1] for pos in tracked) > .20+lift_height-.015, (asset.path, action, j)
+            landings = [i for i in range(count) if tracked[i-1][1] > .207 >= tracked[i][1]]
+            assert len(landings) == 1, (asset.path, action, j, landings)
+            arrivals.append(landings[0])
+            for i in range(1, count):
+                a, b = tracked[i-1], tracked[i]
+                if max(a[1], b[1]) <= .2002:
+                    assert abs(b[2]-a[2]+stride[action]/count) < .004, (asset.path, action, j, i)
+        gaps = [(b-a) % count for a, b in zip(arrivals, arrivals[1:]+arrivals[:1])]
+        assert all(18 <= gap <= 32 for gap in gaps), (asset.path, action, gaps)
+
+
+def verify_persia(asset, manifest, reference):
+    units = manifest["models"]
+    models = (*PERSIA_STANCES, "elephant", "mangonel")
+    ids = [model + suffix for model in models for suffix in ("", "_e")]
+    path = manifest["libraries"]["persia"]
+    assert path == "units/anims/persia.glb", path
+    library = asset(path)
+    actions = {f"{stance}.{action}" for stance, extras in PERSIA_STANCES.values() for action in COMMON_HOLDS | extras}
+    assert library.bind_signature() == reference.bind_signature()
+    report(library, 20, (.04, .06), False, actions)
+    joints = dict(zip(library.names, library.joints))
+    verify_persia_bows(library, joints)
+    verify_persia_lances(library, joints)
+    for stance, _ in PERSIA_STANCES.values():
+        verify_persia_strikes(library, stance + ".", [joints["weapon.L"], joints["weapon.R"]])
+        if stance.startswith("ride_"):
+            idle = Motion(library, f"{stance}.idle")
+            assert all(abs(idle.world(t)[joints["hips"]][0][1]) < .04 for t in idle.times), stance
+
+    for name in ids:
+        base = name.removesuffix("_e")
+        row = units[name]
+        mounted = base in ("asvaran", "cataphract")
+        art = row["rider"] if mounted else row
+        assert row["kind"] == ("mounted" if mounted else "rig"), name
+        assert art["src"] == f"units/persia/{name}.glb", name
+        assert row["stride"]["walk"] > 0, name
+        model = asset(art["src"])
+        if base in PERSIA_STANCES:
+            assert art["anims"] == "persia" and art["set"] == PERSIA_STANCES[base][0], name
+            assert model.bind_signature() == reference.bind_signature(), name
+            assert row["stride"]["run"] > 0, name
+            report(model, 1800 if mounted else 2000, (1.7, 2), True, set())
+        elif base == "elephant":
+            report(model, 5000, (3.5, 4.9), True, {"idle", "walk", "run", "die", *ATTACKS})
+            verify_elephant_feet(model, row["stride"])
+            verify_persia_strikes(model, "", [model.joints[model.names.index(n)] for n in ("skull", "trunk.0")])
+        else:
+            report(model, 3000, (1.0, 2.2), True, {"idle", "walk", "die", *ATTACKS})
+            verify_persia_strikes(model, "", [model.joints[model.names.index(n)] for n in ("throw", "sling")])
 
 
 if __name__ == "__main__":
