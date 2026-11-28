@@ -77,7 +77,7 @@ export class ZoomSlider {
     if (!this.press && Math.abs(f - this.frac) > 1e-4) this.show(f);
   }
 
-  /** 放掉正按着的手指（不改位置、不回调）：缩放条被盖住、变成不可交互时调，免得收不到抬起 */
+  /** 放掉正按着的手指（不改位置、不回调）：切换桌面 / 移动布局时调（桌面版缩放条被隐藏），免得按着的手指收不到抬起 */
   release(): void {
     if (this.press) this.end();
   }

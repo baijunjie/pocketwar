@@ -1,5 +1,5 @@
 /**
- * 底部的卡片：兵种栏最左的全选卡片（屏幕内的全部己方部队）、兵种卡片（屏幕内以及已选中的每个己方兵种一张）与其上方一排编队卡片（每个还有活人的编队一张）。
+ * 底部的卡片：兵种栏最左的全选卡片（屏幕内的全部己方部队）与兵种卡片（屏幕内以及已选中的每个己方兵种一张）；其上方的编队卡片由 GroupSlots 提供，这里只接管它们的指针。
  * 没选中的卡片按屏幕内的人数，选中后改按选中的人、不再随屏幕变化：移动镜头不会让选中的人从卡片上掉出去。
  * 卡片直接浮在画面底部、不包外框，卡片之间的空隙就是画面：从画面上拉的框扫到卡片时，game 用 `cardsIn` 把这些兵种 / 编队并进框选。
  * 点击选择；按住拖动时卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）。
@@ -16,16 +16,16 @@ export interface CardBarCallbacks {
   pickTypes(types: number[], mode: 'replace' | 'toggle' | 'map'): void;
   /** 点全选卡片：replace = 改选它代表的人（选中态时是选中的人，否则是屏幕内的全部己方部队）；add = 加选屏幕内的；map = 选中全图的己方部队（双击） */
   pickAll(mode: 'replace' | 'add' | 'map'): void;
-  /** 点编队卡片：选中这一队；jump = 双击，镜头再跳到这队 */
+  /** 点编队卡片：选中这一队；jump = 镜头再跳到这队（点击卡片时为 true） */
   selectGroup(g: number, jump: boolean): void;
   /** 单击已选中（亮着）的卡片：把这张卡片代表的人从选择里去掉（全选卡片是清空选择） */
-  unpickCard(kind: CardKind, id: number): void;
+  unpickCard(kind: 'all' | 'type', id: number): void;
   /** 这张卡片此刻代表多少人（拖卡片下令会出动的人）：拖拽中的影子按它写人数，0 时不能投放 */
   cardCount(kind: CardKind, id: number): number;
   /** 点了移动版的「取消选择」或空队按钮，与卡片共用手指归属 */
   tapButton?(btn: HTMLElement): void;
-  /** 长按卡片（按住不动 HOLD_MS）：在 rect（卡片的视口矩形）附近弹出升级选择 */
-  holdCard(kind: CardKind, id: number, rect: DOMRect): void;
+  /** 长按全选或兵种卡片（按住不动 HOLD_MS）：在 rect（卡片的视口矩形）附近弹出升级选择；编队卡片长按走 holdGroup */
+  holdCard(kind: 'all' | 'type', id: number, rect: DOMRect): void;
   holdGroup?(g: number): void;
   /**
    * 把卡片拖到地面（view）或小地图（mini）上松开，(x, y) 是落点的视口坐标（桌面版是鼠标位置，移动版是手指外面的剑尖）：这批人去松开处——松在敌军身上是攻击它（同右键），否则攻击移动。
@@ -88,11 +88,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLEle
 }
 
 export class CardBar {
-  readonly groupRow: HTMLDivElement;
   readonly roster: HTMLDivElement;
   private rosterKey = '?';
-  private groupKey = '?';
-  private groups: { g: number; slots: number[] }[] = [];
   /** 按住一张卡片期间（还没拖出去也算）：不重建卡片，免得按住的那张被换掉、捕获落到脱离页面的旧节点上 */
   private held = false;
   /** 画面上的框选正扫着卡片：不重建，免得高亮丢掉 */
@@ -128,10 +125,8 @@ export class CardBar {
    */
   constructor(private readonly world: World, private readonly portrait: (defIdx: number, team: number) => string,
     private readonly minimap: HTMLCanvasElement, private readonly overlay: HTMLElement, private readonly cb: CardBarCallbacks,
-    area: HTMLElement, private readonly topbar: HTMLElement | null = null, pressButton: HTMLButtonElement | null = null,
-    private readonly groupButtons: HTMLElement | null = null) {
-    this.groupRow = el('div', 'cardrow groups');
-    this.groupRow.hidden = true;
+    area: HTMLElement, private readonly topbar: HTMLElement | null, pressButton: HTMLButtonElement | null,
+    private readonly groupButtons: HTMLElement) {
     this.roster = el('div', 'cardrow unitbar');
     this.bind(area, pressButton);
   }
@@ -158,12 +153,6 @@ export class CardBar {
     this.allPicked = allPicked;
     if (this.frozen) return;
     this.renderRoster(sel, screen, allPicked);
-    this.renderGroups(sel);
-  }
-
-  /** 编队（只含还有活人的，按队号排）；下一次 update 时画出来 */
-  setGroups(groups: { g: number; slots: number[] }[]): void {
-    this.groups = groups;
   }
 
   destroy(): void {
@@ -252,49 +241,9 @@ export class CardBar {
     this.roster.innerHTML = html;
   }
 
-  private renderGroups(sel: number[]): void {
-    const w = this.world;
-    const picked = new Set(sel);
-    let key = `${w.humanTeam}|`;
-    const cards: string[] = [];
-    for (const { g, slots } of this.groups) {
-      const count = new Map<number, number>();
-      let hp = 0, on = slots.length > 0;
-      for (const s of slots) {
-        count.set(w.type[s], (count.get(w.type[s]) ?? 0) + 1);
-        hp += w.hp[s] / w.maxHp[s];
-        if (!picked.has(s)) on = false;
-      }
-      // 头像与名字用人最多的兵种
-      const kinds = [...count].sort((a, b) => b[1] - a[1] || UNITS[a[0]].row - UNITS[b[0]].row);
-      const main = UNITS[kinds[0][0]];
-      const pct = Math.round((hp / slots.length) * 100);
-      key += `${g}:${slots.length}:${kinds[0][0]}:${kinds.length}:${Math.round(pct / 5)}:${on},`;
-      const tip = `第 ${g} 队，共 ${slots.length} 人：${kinds.map(([t, n]) => `${UNITS[t].name} ${n}`).join('、')}`
-        + `\n—\n${on ? '点击：取消选中这一队' : '点击：选中这一队（同按数字键）'}　双击：镜头跳到这一队`
-        + '\n拖到地面或小地图上松开：整队攻击移动过去，松在敌军身上则攻击它　从画面上拉框扫过卡片：一并选中这一队\n按住不动：弹出升级选择';
-      cards.push(`<div class="ucard gcard${on ? ' on' : ''}" data-g="${g}" title="${tip}">
-        <img src="${this.portrait(main.idx, w.humanTeam)}" draggable="false">
-        <span class="gno">${g}</span>
-        <span class="n">${slots.length}</span>
-        <span class="nm">${main.name}${kinds.length > 1 ? ' 等' : ''}</span>
-        <span class="hp"><u style="width:${pct}%"></u></span></div>`);
-    }
-    if (key === this.groupKey) return;
-    this.groupKey = key;
-    this.groupRow.innerHTML = cards.join('');
-    this.groupRow.hidden = !cards.length;
-  }
-
-  /**
-   * 这张卡片此刻是否选中（亮着）：按选择本身判断，不读卡片元素上的 on 类——同一按里选择可能刚变过、卡片还没重建
-   * （全选卡片看选中态，兵种卡片看选中的人里有没有这个兵种，编队卡片看这一队是否全都选着）
-   */
-  private isLit(kind: CardKind, id: number): boolean {
-    if (kind === 'all') return this.allPicked && this.sel.length > 0;
-    if (kind === 'type') return this.sel.some(s => this.world.type[s] === id);
-    const grp = this.groups.find(x => x.g === id), picked = new Set(this.sel);
-    return !!grp && grp.slots.length > 0 && grp.slots.every(s => picked.has(s));
+  /** 这一按期间选择可能已经变过，直接判断全选或兵种卡片的选中状态。 */
+  private isLit(kind: 'all' | 'type', id: number): boolean {
+    return kind === 'all' ? this.allPicked && this.sel.length > 0 : this.sel.some(s => this.world.type[s] === id);
   }
 
   /** 画面上拉的框扫到了哪些卡片（框是视口坐标）；all：扫到了全选卡片 */
@@ -314,15 +263,15 @@ export class CardBar {
   markCards(r: Rect | null): void {
     const hot = new Set(r ? this.cardsHit(r) : []);
     for (const c of this.cards()) c.classList.toggle('hot', hot.has(c));
-    if (this.boxing && !r) this.rosterKey = this.groupKey = '?';
+    if (this.boxing && !r) this.rosterKey = '?';
     this.boxing = !!r;
   }
 
   /** 页面上这张卡片此刻的位置（卡片已不在就是 null）；全选卡片的 id 不管 */
-  cardRect(kind: CardKind, id: number): DOMRect | null {
+  cardRect(kind: 'all' | 'type', id: number): DOMRect | null {
     const key = keyOf(kind, id);
     const c = this.cards().find(x => cardKey(x) === key);
-    return c && !isEmptySlot(c) ? c.getBoundingClientRect() : null;
+    return c ? c.getBoundingClientRect() : null;
   }
 
   /** 页面上所有卡片里最高的上沿（含选中卡片的上移）；没有卡片是 Infinity */
@@ -331,25 +280,30 @@ export class CardBar {
   }
 
   private cards(): HTMLElement[] {
-    const groups = this.groupButtons?.querySelectorAll<HTMLElement>('.slot') ?? this.groupRow.querySelectorAll<HTMLElement>('.ucard');
+    const groups = this.groupButtons.querySelectorAll<HTMLElement>('.slot');
     return [...groups, ...this.roster.querySelectorAll<HTMLElement>('.ucard')];
   }
 
   /** 按卡片的布局位置判定（选中的卡片上移是 transform，不算进去：否则框的边缘压在卡片附近时，命中与否跟着上移来回跳） */
   private cardsHit(r: Rect): HTMLElement[] {
+    const row = this.groupButtons;
+    const groupClip = row.scrollWidth > row.clientWidth ? row.getBoundingClientRect() : null;
     return this.cards().filter(c => {
       // 禁用的卡片（屏幕内没人的全选卡片）扫到也不亮
       if (c.offsetParent === null || c.classList.contains('off') || isEmptySlot(c)) return false;
       const b = c.getBoundingClientRect();
       const t = new DOMMatrixReadOnly(getComputedStyle(c).transform);
       const left = b.left - t.m41, top = b.top - t.m42;
-      return left + b.width >= r.ax && left <= r.bx && top + b.height >= r.ay && top <= r.by;
+      const clip = c.classList.contains('slot') ? groupClip : null;
+      const visibleLeft = clip ? Math.max(left, clip.left) : left;
+      const visibleRight = clip ? Math.min(left + b.width, clip.right) : left + b.width;
+      return (!clip || visibleLeft < visibleRight) && visibleRight >= r.ax && visibleLeft <= r.bx && top + b.height >= r.ay && top <= r.by;
     });
   }
 
   /**
    * 点击：全选卡片、兵种卡片选它代表的人（没选中时是屏幕内的，选中后是选中的；Shift 加选 / 去掉，双击选全图），
-   * 编队卡片选这一队（双击跳镜头）；单击亮着的卡片取消选中它代表的人；按住不动满 HOLD_MS 弹出升级选择（这一按不再拖、也不算点）；
+   * 编队卡片选队并跳转镜头；单击其它亮着的卡片取消选中它代表的人；按住不动满 HOLD_MS 弹出升级选择（编队卡片长按走 holdGroup 编组；这一按不再拖、也不算点）；
    * 按住拖动：卡片缩小跟在鼠标右下方，松在地面或小地图上就让这批人过去（松在敌军身上是攻击它）；松在别处、按右键、按 Esc、窗口失去焦点都取消。
    * 移动版（手指拖）：按住后横向位移明显占主导是滚动卡片带（area 自己是滚动容器），否则是拖卡片；滚动中手指竖向离开了卡片带也改成拖卡片。
    * 落点不在手指正下方（会被手指挡住）：从手指伸出一把剑，剑尖是落点；按在卡片之间的空隙上只能滚动。
@@ -390,17 +344,16 @@ export class CardBar {
       clearTimeout(st.timer);
       st.card.classList.remove('pending');
       this.waiting = false;
-      this.rosterKey = this.groupKey = '?';
+      this.rosterKey = '?';
       if (!this.boxing) {
         this.renderRoster(this.sel, this.screen, this.allPicked);
-        this.renderGroups(this.sel);
       }
     };
     // 双击只认连续两下主键点按：在别处按下、按了非主键、按了别的键都打断（单按修饰键不算：按住 Shift 会连发 keydown）
     const interrupt = (e: Event): void => {
       if (e.type === 'keydown' && ['Shift', 'Control', 'Alt', 'Meta'].includes((e as KeyboardEvent).key)) return;
       // 卡片带上已有一根手指按着时，落在卡片带里的其它手指一律不理（同卡片带自己的处理），也不打断第一指的连点
-      if (e.type === 'pointerdown' && down && (e as PointerEvent).pointerId !== down.pid && (area.contains(e.target as Node) || pressButton?.contains(e.target as Node) || this.groupButtons?.contains(e.target as Node))) return;
+      if (e.type === 'pointerdown' && down && (e as PointerEvent).pointerId !== down.pid && (area.contains(e.target as Node) || pressButton?.contains(e.target as Node) || this.groupButtons.contains(e.target as Node))) return;
       const c = e.type === 'pointerdown' && (e as PointerEvent).button === 0 ? cardOf(e) : null;
       if (!c || cardKey(c) !== last.key) last = { t: 0, key: '' };
       if (settle && (!c || cardKey(c) !== settle.key)) endSettle();
@@ -428,8 +381,7 @@ export class CardBar {
       // 影子写此刻会出动的人数（拖拽中镜头移动、伤亡都会变）；一个人都没有就不能投放
       if (recount) dragN = this.cb.cardCount(kindOf(down.card), down.id);
       const n = dragN;
-      const num = ghost.querySelector<HTMLElement>(kindOf(down.card) === 'all' ? '.ab b' : '.n')
-        ?? (down.card.classList.contains('slot') ? ghost.querySelector<HTMLElement>('i') : null);
+      const num = ghost.querySelector<HTMLElement>(kindOf(down.card) === 'all' ? '.ab b' : '.n');
       if (num && num.textContent !== String(n)) num.textContent = String(n);
       const p = dropAt(x, y), ok = n > 0 && armed(down, x, y) && !!target(p.x, p.y);
       const scr = this.overlay.getBoundingClientRect();
@@ -463,7 +415,7 @@ export class CardBar {
       this.overlay.classList.remove('dragging');
       sword.remove();
       this.held = false;
-      this.rosterKey = this.groupKey = '?';
+      this.rosterKey = '?';
       window.removeEventListener('keydown', onKey, true);
     };
     // 拦右键菜单的监听比拖拽活得久：组合按键时 contextmenu 排在取消拖拽的那次 pointermove 之后（macOS 在按下右键时发，
@@ -510,7 +462,7 @@ export class CardBar {
     const pointerDown = (e: PointerEvent): void => {
       // 已有一根手指按着时不理别的（按在卡片上、按钮上都一样）
       if (down) return;
-      // 空队支持点按与长按；已有队员时还可以双击和拖动。
+      // 空队支持点按与长按；已有队员时单击跳转，还可以长按编组和拖动。
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
       if (btn && (!btn.classList.contains('slot') || isEmptySlot(btn))) {
         if (e.button !== 0 || btn.disabled) return;
@@ -560,8 +512,9 @@ export class CardBar {
             this.cb.holdGroup(id);
             return;
           }
-          if (isEmptySlot(live)) return;
-          this.cb.holdCard(kindOf(live), id, live.getBoundingClientRect());
+          const kind = kindOf(live);
+          if (kind === 'group') return;
+          this.cb.holdCard(kind, id, live.getBoundingClientRect());
         }, HOLD_MS);
       }
       this.held = true;
@@ -585,12 +538,12 @@ export class CardBar {
       if (this.mobile && cardOf(e)) pointerDown(e);
     };
     const preventGroupMenu = (e: Event): void => e.preventDefault();
-    this.groupButtons?.addEventListener('pointerdown', groupDown);
-    this.groupButtons?.addEventListener('contextmenu', preventGroupMenu);
+    this.groupButtons.addEventListener('pointerdown', groupDown);
+    this.groupButtons.addEventListener('contextmenu', preventGroupMenu);
     this.cleanup.push(() => {
       pressButton?.removeEventListener('pointerdown', pointerDown);
-      this.groupButtons?.removeEventListener('pointerdown', groupDown);
-      this.groupButtons?.removeEventListener('contextmenu', preventGroupMenu);
+      this.groupButtons.removeEventListener('pointerdown', groupDown);
+      this.groupButtons.removeEventListener('contextmenu', preventGroupMenu);
     });
     area.addEventListener('pointermove', e => {
       if (!down || down.held || e.pointerId !== down.pid) return;
@@ -644,11 +597,8 @@ export class CardBar {
           return;
         }
         down.card = live;
-        // 窄队列使用队号和人数，拖出的影子要容得下头像和完整人数。
-        const groupCard = live.classList.contains('slot')
-          ? this.groupRow.querySelector<HTMLElement>(`[data-g="${down.id}"]`)
-          : null;
-        ghost = (groupCard ?? live).cloneNode(true) as HTMLElement;
+        ghost = live.cloneNode(true) as HTMLElement;
+        ghost.inert = true;
         // 「选 N」角标与选中态不跟着走：松手后出动的是这张卡代表的全部人，不只是选着的那些
         ghost.removeAttribute('title');
         ghost.querySelector('.sel')?.remove();
@@ -700,8 +650,11 @@ export class CardBar {
         if (t && go && this.cb.cardCount(kind, d.id) > 0) this.cb.dropCard(kind, d.id, p.x, p.y, t);
         return;
       }
-      // 队伍可能在两次界面刷新之间失去最后一人，旧卡片仍在时也不能清空当前选择。
-      if (d.card.classList.contains('slot') && !this.cb.cardCount('group', d.id)) return;
+      // 队伍可能在两次界面刷新之间失去最后一人。
+      if (kind === 'group') {
+        if (this.cb.cardCount('group', d.id) > 0) this.cb.selectGroup(d.id, true);
+        return;
+      }
       const now = performance.now(), key = keyOf(kind, d.id);
       const double = last.key === key && now - last.t < DOUBLE_MS;
       last = double ? { t: 0, key: '' } : { t: now, key };
@@ -715,7 +668,6 @@ export class CardBar {
         return;
       }
       if (kind === 'all') this.cb.pickAll(double ? 'map' : d.add ? 'add' : 'replace');
-      else if (kind === 'group') this.cb.selectGroup(d.id, double);
       else if (double) this.cb.pickTypes([d.id], 'map');
       else this.cb.pickTypes([d.id], d.add ? 'toggle' : 'replace');
     });

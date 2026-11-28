@@ -746,10 +746,10 @@ export class GameApp {
   }
 
   /**
-   * 长按卡片时的升级选择：兵种卡片是这张卡代表的人与全图的这个兵种，编队卡片是这一队，全选卡片是它代表的人；
+   * 长按卡片时的升级选择：兵种卡片是这张卡代表的人与全图的这个兵种，全选卡片是它代表的人；
    * 有选中时再加「当前选中的部队」（可能混编）；与前面某一项是同一批人的不重复列
    */
-  private upgradeChoices(kind: CardKind, id: number): UpgradeChoice[] {
+  private upgradeChoices(kind: 'all' | 'type', id: number): UpgradeChoice[] {
     const w = this.world;
     if (!w.humanTeam) return [];
     return this.upgradeSets(kind, id).map(({ label, units }) => {
@@ -774,14 +774,13 @@ export class GameApp {
   }
 
   /** upgradeChoices 的各项与各自的人 */
-  private upgradeSets(kind: CardKind, id: number): { label: string; units: number[] }[] {
+  private upgradeSets(kind: 'all' | 'type', id: number): { label: string; units: number[] }[] {
     const w = this.world;
     const sets: { label: string; units: number[] }[] = [];
     if (kind === 'type') {
       sets.push({ label: '升级这些人', units: this.typeUnits([id]) });
       sets.push({ label: `升级全图的${UNITS[id].name}`, units: this.myUnits().filter(s => w.type[s] === id) });
-    } else if (kind === 'group') sets.push({ label: '升级这一队', units: this.groupAlive(id) });
-    else sets.push({ label: '升级这些人', units: this.allCardUnits() });
+    } else sets.push({ label: '升级这些人', units: this.allCardUnits() });
     if (this.selList.length) sets.push({ label: '升级当前选中的部队', units: this.selList.slice() });
     // 与前面某一项是同一批人的不再列（如这个兵种全在屏幕内、选中的正是这张卡的人）
     const same = (a: number[], b: number[]): boolean => {
@@ -1005,7 +1004,7 @@ export class GameApp {
     this.lastGroup = { t: now, g };
   }
 
-  /** 点空队或长按队号按键，把所选部队编入该队 */
+  /** 单击空队或长按编队卡片，把所选部队编入该队 */
   private groupSlot(g: number): void {
     if (!this.world.humanTeam) return;
     if (!this.selList.length) {
@@ -1016,7 +1015,7 @@ export class GameApp {
   }
 
   /** 编队确认时复核单位身份，避免把期间复用同一槽位的新单位编入队伍。 */
-  private groupCard(kind: CardKind, id: number): ReturnType<HudCallbacks['groupCard']> {
+  private groupCard(kind: 'all' | 'type', id: number): ReturnType<HudCallbacks['groupCard']> {
     const w = this.world;
     const units = this.cardUnits(kind, id).map(slot => ({ slot, uid: w.uid[slot] }));
     if (!units.length) return null;
@@ -1031,15 +1030,14 @@ export class GameApp {
     };
   }
 
-  /** 单击亮着的卡片：兵种卡片去掉选中的这个兵种，编队卡片去掉这一队，全选卡片清空选择 */
-  private unpickCard(kind: CardKind, id: number): void {
+  /** 单击亮着的卡片：兵种卡片去掉选中的这个兵种，全选卡片清空选择 */
+  private unpickCard(kind: 'all' | 'type', id: number): void {
     const w = this.world;
     if (kind === 'all') return this.setSelection([]);
-    const drop = kind === 'group' ? new Set(this.groupAlive(id)) : null;
-    this.setSelection(this.selList.filter(s => (drop ? !drop.has(s) : w.type[s] !== id)));
+    this.setSelection(this.selList.filter(s => w.type[s] !== id));
   }
 
-  /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键、双击编队卡片） */
+  /** 选中第 g 队；jump 时镜头再跳到这队的重心（连按两次数字键或点击编队卡片） */
   private selectGroup(g: number, jump: boolean): void {
     const w = this.world, alive = this.groupAlive(g);
     this.setSelection(alive);
@@ -1060,7 +1058,7 @@ export class GameApp {
     if (!this.world.humanTeam) return;
     // 这张卡片此刻代表的人已经没了（卡片随后会消失、或拖拽中镜头移走了）：不改选择、不下令
     if (!this.cardUnits(kind, id).length) return;
-    // 下令顺带换的选择不打开详情：原来没显示，换成单个单位后也不显示（不在下令时盖住操控区、打断正推着的摇杆）
+    // 下令顺带换的选择不打开详情：原来没显示，换成单个单位后也不显示（拖卡片下令是为了让这批人走，不该顺带在画面上突然弹出详情）
     this.quietSelect = true;
     this.hud.detailQuiet = !this.hud.detailShown;
     if (kind === 'all') this.pickAll('replace');

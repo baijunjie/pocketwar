@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { World } from '../../src/sim/world';
 import { CardBar, allCardPicked } from '../../src/ui/cardBar';
 import type { CardBarCallbacks } from '../../src/ui/cardBar';
-import { HOLD_MS, TAP_SLOP } from '../../src/touchInput';
+import { CARD_SLOP, HOLD_MS, TAP_SLOP } from '../../src/touchInput';
 import { FakeCanvas, FakeEl, firePointer, installFakeDom, rectOf } from './fakeDom';
 
 /*
@@ -28,7 +28,7 @@ describe('CardBar 拖卡片', () => {
   let dom: ReturnType<typeof installFakeDom>;
 
   const mkCard = (data: Record<string, string>, ...classes: string[]): FakeEl => {
-    const c = new FakeEl();
+    const c = new FakeEl(classes.includes('slot') ? 'button' : 'div');
     c.className = ['ucard', ...classes].join(' ');
     c.offsetWidth = 60;
     c.offsetHeight = 100;
@@ -71,23 +71,26 @@ describe('CardBar 拖卡片', () => {
   const select = (sel: number[], allPicked = false): void => {
     bar.update(sel, sel, allPicked);
     (bar.roster as unknown as FakeEl).append(allCard, card, offCard);
-    (bar.groupRow as unknown as FakeEl).append(groupCard);
   };
 
   let cbs: CardBarCallbacks;
-  /** 建 CardBar 并把两排卡片放进 area（真实的 hud 也是这样挂的）；topbar 是传给构造函数的顶栏 */
+  /**
+   * 建 CardBar：桌面版的编队卡片（GroupSlots 的 .slot 按钮，这里放一张已有队伍的 groupCard）在 groupButtons 里，
+   * groupButtons 与兵种卡片行都在 area 里（真实的 hud 也是这样挂的）；topbar 是传给构造函数的顶栏。
+   * buttons：测试自己摆放的 groupButtons（移动版在 area 外一行），这时 groupCard 不挂进去
+   */
   const build = (topbar: FakeEl | null = null, buttons: FakeEl | null = null): void => {
+    groupButtons = buttons ?? new FakeEl();
     bar = new CardBar(world, () => '', mini as unknown as HTMLCanvasElement, overlay as unknown as HTMLElement, cbs,
-      area as unknown as HTMLElement, topbar as unknown as HTMLElement | null, null, buttons as unknown as HTMLElement | null);
-    area.appendChild(bar.groupRow as unknown as FakeEl);
+      area as unknown as HTMLElement, topbar as unknown as HTMLElement | null, null, groupButtons as unknown as HTMLElement);
+    if (!buttons) area.appendChild(groupButtons);
     area.appendChild(bar.roster as unknown as FakeEl);
     card = mkCard({ t: '3' });
-    groupCard = mkCard({ g: '2' }, 'gcard');
+    groupCard = mkCard({ g: '2' }, 'ucard', 'gcard', 'slot', 'has');
+    if (!buttons) groupButtons.appendChild(groupCard);
     allCard = mkCard({ all: '1' }, 'acard');
     offCard = mkCard({ all: '1' }, 'acard', 'off');
     (bar.roster as unknown as FakeEl).append(allCard, card, offCard);
-    (bar.groupRow as unknown as FakeEl).append(groupCard);
-    bar.setGroups([{ g: 2, slots: [2, 3] }]);
   };
 
   /** 换成传了顶栏的 CardBar：CardBar 销毁时不摘 area 上的监听，所以连 area 一起换新的 */
@@ -111,7 +114,6 @@ describe('CardBar 拖卡片', () => {
     countCalls = 0;
     area = new FakeEl();
     area.rect = rectOf(0, 500, 400, 100);
-    groupButtons = new FakeEl();
     overlay = new FakeEl();
     overlay.rect = rectOf(0, 0, 400, 800);
     view = new FakeCanvas();
@@ -168,18 +170,16 @@ describe('CardBar 拖卡片', () => {
         groupButtons.append(slot, empty);
       });
 
-      it('点已有队伍选中，连续点同队两次跳转', () => {
+      it('点已有队伍同时选中并跳转', () => {
         tap(slot);
-        tap(slot);
-        expect(calls).toEqual(['group 2 false', 'group 2 true']);
+        expect(calls).toEqual(['group 2 true']);
         expect(taps).toEqual([]);
       });
 
-      it('点已经选中的队伍取消选择，再点一下可双击跳转', () => {
+      it('点已经选中的队伍也跳转，不取消选择', () => {
         select([2, 3]);
         tap(slot);
-        tap(slot);
-        expect(calls).toEqual(['unpick group 2', 'group 2 true']);
+        expect(calls).toEqual(['group 2 true']);
       });
 
       it('短按空队不会开始拖动，抬起只触发该空队按钮', () => {
@@ -242,10 +242,11 @@ describe('CardBar 拖卡片', () => {
         move(153, 612);
         expect(ghost()).toBeUndefined();
         up(153, 612);
-        expect(calls).toEqual(['group 2 false']);
+        expect(calls).toEqual(['group 2 true']);
         press(slot);
         move(190, 610);
         expect(ghost()).toBeDefined();
+        expect((ghost() as FakeEl & { inert?: boolean }).inert).toBe(true);
         expect(area.scrollLeft).toBe(0);
         move(190, 400);
         up(190, 400);
@@ -944,7 +945,7 @@ describe('CardBar 拖卡片', () => {
         up(100, 550);
         down(allCard, 100, 550);
         up(100, 550);
-        expect(calls).toEqual(['types 3 replace', 'group 2 false', 'all replace']);
+        expect(calls).toEqual(['types 3 replace', 'group 2 true', 'all replace']);
         expect(drops).toEqual([]);
       });
 
@@ -1515,7 +1516,6 @@ describe('CardBar 拖卡片', () => {
       dom.win.dispatchEvent(e);
     };
     const roster = (): FakeEl => bar.roster as unknown as FakeEl;
-    const groupRow = (): FakeEl => bar.groupRow as unknown as FakeEl;
     const pending = (c: FakeEl): boolean => c.classList.contains('pending');
     /**
      * 模拟补画：卡片行重建时旧卡片脱离页面（isConnected=false），挂上同一身份的新兵种卡片（带 data-fresh）；
@@ -1550,10 +1550,10 @@ describe('CardBar 拖卡片', () => {
         expect(calls).toEqual(['unpick type 3']);
       });
 
-      it('亮着的编队卡片：立即回调 unpickCard(group, 队号)', () => {
+      it('亮着的编队卡片：单击立即选队并跳转', () => {
         select([2, 3]);
         tap(groupCard);
-        expect(calls).toEqual(['unpick group 2']);
+        expect(calls).toEqual(['group 2 true']);
       });
 
       it('亮着的全选卡片：立即回调 unpickCard(all, -1)，不走 pickAll', () => {
@@ -1566,7 +1566,7 @@ describe('CardBar 拖卡片', () => {
         tap(card);
         tap(groupCard);
         tap(allCard);
-        expect(calls).toEqual(['types 3 replace', 'group 2 false', 'all replace']);
+        expect(calls).toEqual(['types 3 replace', 'group 2 true', 'all replace']);
         expect(pending(card)).toBe(false);
       });
 
@@ -1608,7 +1608,7 @@ describe('CardBar 拖卡片', () => {
         vi.advanceTimersByTime(349);
         bar.update([2], [2]);
         expect(card.parent).toBe(roster());
-        expect(groupCard.parent).toBe(groupRow());
+        expect(groupCard.parent).toBe(groupButtons);
         expect(pending(card)).toBe(true);
         vi.advanceTimersByTime(1);
         expect(pending(card)).toBe(false);
@@ -1672,12 +1672,12 @@ describe('CardBar 拖卡片', () => {
         expect(calls).toEqual(['unpick all -1', 'all map']);
       });
 
-      it('编队卡片：selectGroup(g, true)', () => {
+      it('连续点编队卡片：每次立即回调 selectGroup(g, true)', () => {
         select([2, 3]);
         tap(groupCard);
         vi.advanceTimersByTime(200);
         tap(groupCard);
-        expect(calls).toEqual(['unpick group 2', 'group 2 true']);
+        expect(calls).toEqual(['group 2 true', 'group 2 true']);
       });
 
       it('双击之后的第三下重新算单击', () => {
@@ -1727,13 +1727,13 @@ describe('CardBar 拖卡片', () => {
         expect(card.parent).toBe(roster());
       });
 
-      it('按在另一张卡片上：解冻补画，那张按新选择处理（亮着就取消选中）', () => {
+      it('按在另一张编队卡片上：解冻补画并跳转该队', () => {
         select([0, 1, 2, 3]);
         tap(card);
         winDown(groupCard);
         expect(pending(card)).toBe(false);
         tap(groupCard);
-        expect(calls).toEqual(['unpick type 3', 'unpick group 2']);
+        expect(calls).toEqual(['unpick type 3', 'group 2 true']);
       });
     });
 
@@ -2140,7 +2140,7 @@ describe('CardBar 拖卡片', () => {
         f('pointerup', 1, 100, 550);
         f('pointerdown', 2, 30, 550, groupCard);
         f('pointerup', 2, 30, 550);
-        expect(calls).toEqual(['types 3 replace', 'group 2 false']);
+        expect(calls).toEqual(['types 3 replace', 'group 2 true']);
       });
     });
 
@@ -2346,15 +2346,15 @@ describe('CardBar 拖卡片', () => {
       expect(holds[0].rect).toEqual(card.rect);
     });
 
-    it('编队卡片：holdCard(group, 队号)；全选卡片：holdCard(all, -1)', () => {
+    it('编队卡片长按走 holdGroup（编组），不弹升级选择；全选卡片：holdCard(all, -1)', () => {
       down(groupCard, 40, 550);
       vi.advanceTimersByTime(500);
       up(40, 550);
       down(allCard, 330, 550);
       vi.advanceTimersByTime(500);
-      expect(holds.map(h => `${h.kind} ${h.id}`)).toEqual(['group 2', 'all -1']);
-      expect(holds[0].rect).toEqual(groupCard.rect);
-      expect(holds[1].rect).toEqual(allCard.rect);
+      expect(assigned).toEqual([2]);
+      expect(holds.map(h => `${h.kind} ${h.id}`)).toEqual(['all -1']);
+      expect(holds[0].rect).toEqual(allCard.rect);
     });
 
     it('亮着的卡片同样能长按', () => {
@@ -2499,6 +2499,44 @@ describe('CardBar 拖卡片', () => {
     });
   });
 
+  describe('桌面横滚的编队行框选', () => {
+    let slot: FakeEl;
+
+    beforeEach(() => {
+      rebuild(null, false, groupButtons);
+      area.prepend(groupButtons);
+      groupButtons.rect = rectOf(100, 540, 100, 40);
+      Object.assign(groupButtons, { clientWidth: 100, scrollWidth: 240 });
+      slot = new FakeEl('button');
+      slot.className = 'ucard gcard slot has';
+      slot.dataset.g = '2';
+      groupButtons.appendChild(slot);
+      vi.stubGlobal('getComputedStyle', () => ({ transform: 'none' }));
+      vi.stubGlobal('DOMMatrixReadOnly', class { m41 = 0; m42 = 0; });
+    });
+
+    it('完全被容器裁掉的卡片不参与框选，即使卡片右缘贴着容器', () => {
+      slot.rect = rectOf(40, 540, 60, 40);
+      const box = { ax: 50, ay: 545, bx: 110, by: 570 };
+      expect(bar.cardsIn(box).groups).toEqual([]);
+      bar.markCards(box);
+      expect(slot.classList.contains('hot')).toBe(false);
+    });
+
+    it('部分被裁掉的卡片只在框选碰到可见部分时命中', () => {
+      slot.rect = rectOf(65, 540, 60, 40);
+      const outside = { ax: 72, ay: 545, bx: 95, by: 570 };
+      expect(bar.cardsIn(outside).groups).toEqual([]);
+      bar.markCards(outside);
+      expect(slot.classList.contains('hot')).toBe(false);
+
+      const inside = { ax: 110, ay: 545, bx: 120, by: 570 };
+      expect(bar.cardsIn(inside).groups).toEqual([2]);
+      bar.markCards(inside);
+      expect(slot.classList.contains('hot')).toBe(true);
+    });
+  });
+
   describe('cardRect：卡片此刻的位置', () => {
     beforeEach(() => {
       card.rect = rectOf(80, 510, 60, 100);
@@ -2506,9 +2544,8 @@ describe('CardBar 拖卡片', () => {
       allCard.rect = rectOf(300, 510, 60, 100);
     });
 
-    it('兵种卡片按 data-t、编队卡片按 data-g 匹配，返回它的 getBoundingClientRect', () => {
+    it('兵种卡片按 data-t 匹配，返回它的 getBoundingClientRect', () => {
       expect(bar.cardRect('type', 3)).toBe(card.rect);
-      expect(bar.cardRect('group', 2)).toBe(groupCard.rect);
     });
 
     it('全选卡片忽略 id', () => {
@@ -2516,10 +2553,8 @@ describe('CardBar 拖卡片', () => {
       expect(bar.cardRect('all', 99)).toBe(allCard.rect);
     });
 
-    it('找不到（id 不对、kind 与卡片种类对不上）为 null', () => {
+    it('找不到（id 不对、kind 与卡片种类对不上）为 null；编队卡片不在其内', () => {
       expect(bar.cardRect('type', 7)).toBeNull();
-      expect(bar.cardRect('group', 9)).toBeNull();
-      expect(bar.cardRect('group', 3)).toBeNull();
       expect(bar.cardRect('type', 2)).toBeNull();
     });
 
@@ -2537,13 +2572,79 @@ describe('CardBar 拖卡片', () => {
       groupCard.rect = rectOf(10, 600, 60, 100);
       expect(bar.cardsTop()).toBe(510);
       bar.update([], []);
+      groupCard.remove();
       expect(bar.cardsTop()).toBe(Infinity);
     });
 
     it('卡片被重建（脱离卡片行）后为 null', () => {
       bar.update([], []);
       expect(bar.cardRect('type', 3)).toBeNull();
-      expect(bar.cardRect('group', 2)).toBeNull();
+    });
+  });
+
+  describe('桌面版真实结构：编队卡片是 groupButtons 里的 .slot 按钮', () => {
+    beforeEach(() => {
+      bar.mobile = false;
+    });
+
+    it('单击已有队伍：选中并跳转，不取消选择、不弹升级选择', () => {
+      select([2, 3]);
+      down(groupCard, 100, 550);
+      up(100, 550);
+      expect(calls).toEqual(['group 2 true']);
+      expect(holds).toEqual([]);
+      expect(taps).toEqual([]);
+    });
+
+    it('按下时卡片亮 hot，抬起后去掉', () => {
+      down(groupCard, 100, 550);
+      expect(groupCard.classList.contains('hot')).toBe(true);
+      up(100, 550);
+      expect(groupCard.classList.contains('hot')).toBe(false);
+    });
+
+    it('长按：回调 holdGroup 编组，抬起时不当作点击', () => {
+      down(groupCard, 100, 550);
+      vi.advanceTimersByTime(HOLD_MS);
+      expect(assigned).toEqual([2]);
+      up(100, 550);
+      expect(calls).toEqual([]);
+      expect(holds).toEqual([]);
+    });
+
+    it('拖出起手距离（CARD_SLOP）才出影子，松在画面上回调 dropCard(group)', () => {
+      down(groupCard, 100, 550);
+      move(100 + CARD_SLOP - 1, 550);
+      expect(ghost()).toBeUndefined();
+      move(100, 300);
+      expect(ghost()).toBeDefined();
+      expect(ghost()!.classList.contains('slot')).toBe(false);
+      up(100, 300);
+      expect(drops).toEqual([{ kind: 'group', id: 2, x: 100, y: 300, target: 'view' }]);
+      expect(calls).toEqual([]);
+    });
+
+    it('拖到小地图上松开：target 是 mini', () => {
+      down(groupCard, 100, 550);
+      move(120, 700);
+      up(120, 700);
+      expect(drops).toEqual([{ kind: 'group', id: 2, x: 120, y: 700, target: 'mini' }]);
+    });
+
+    it('拖出后松在卡片带里：不下令也不点选', () => {
+      down(groupCard, 100, 550);
+      move(100, 300);
+      move(100, 560);
+      up(100, 560);
+      expect(drops).toEqual([]);
+      expect(calls).toEqual([]);
+    });
+
+    it('队伍已无人（cardCount 为 0）：单击不选队', () => {
+      count = 0;
+      down(groupCard, 100, 550);
+      up(100, 550);
+      expect(calls).toEqual([]);
     });
   });
 
@@ -2707,7 +2808,7 @@ describe('CardBar.update 卡片上的人数与全选卡片', () => {
     } as unknown as World;
     bar = new CardBar(w, () => '', new FakeCanvas() as unknown as HTMLCanvasElement, new FakeEl() as unknown as HTMLElement, {
       pickTypes: () => {}, pickAll: () => {}, selectGroup: () => {}, unpickCard: () => {}, cardCount: () => 0, holdCard: () => {}, dropCard: () => {},
-    }, area as unknown as HTMLElement);
+    }, area as unknown as HTMLElement, null, null, new FakeEl() as unknown as HTMLElement);
   });
 
   afterEach(() => {
@@ -2789,7 +2890,7 @@ describe('CardBar.update 卡片上的人数与全选卡片', () => {
     });
   });
 
-  describe('卡片提示（title）末尾都有「按住不动：弹出升级选择」一行', () => {
+  describe('兵种与全选卡片提示（title）末尾都有「按住不动：弹出升级选择」一行', () => {
     const HOLD_LINE = '\n按住不动：弹出升级选择';
     const titleOf = (html: string, attr: string): string => {
       const m = new RegExp(`${attr} title="([^"]*)"`).exec(html);
@@ -2809,15 +2910,6 @@ describe('CardBar.update 卡片上的人数与全选卡片', () => {
       expect(titleOf(roster(), 'data-all="1"').endsWith(HOLD_LINE)).toBe(true);
       bar.update([0, 1, 4], [0, 1, 4], true);
       expect(titleOf(roster(), 'data-all="1"').endsWith(HOLD_LINE)).toBe(true);
-    });
-
-    it('编队卡片：没选中这一队与选中了都是', () => {
-      bar.setGroups([{ g: 2, slots: [0, 1] }]);
-      const groups = (): string => (bar.groupRow as unknown as FakeEl).innerHTML;
-      bar.update([], [0, 1]);
-      expect(titleOf(groups(), 'data-g="2"').endsWith(HOLD_LINE)).toBe(true);
-      bar.update([0, 1], [0, 1]);
-      expect(titleOf(groups(), 'data-g="2"').endsWith(HOLD_LINE)).toBe(true);
     });
   });
 

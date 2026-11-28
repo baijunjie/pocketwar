@@ -440,7 +440,7 @@ describe('blocksEdgeSwipe 要不要拦下 touchstart 的默认行为', () => {
   });
 
   it('在边缘、落在这些界面里的按钮上同样要拦：这些按钮自己用 pointer 事件处理手指，不靠 click', () => {
-    // 例如小地图旁的「取消选择」和单独一行的编队按钮
+    // 例如摇杆旁的「取消选择」和单独一行的编队卡片
     expect(blocksEdgeSwipe(ev(touch(5, el(['mini', 'button']))), W)).toBe(true);
     expect(blocksEdgeSwipe(ev(touch(W - 5, el(['mini', 'button']))), W)).toBe(true);
     expect(blocksEdgeSwipe(ev(touch(5, el(['groupslots', 'button']))), W)).toBe(true);

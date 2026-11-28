@@ -597,23 +597,25 @@ describe('Hud 移动版新增的界面', () => {
       }
     });
 
-    it('键盘点编队按队伍状态选中、取消或编入当前所选', () => {
+    it('键盘激活已有编队立即选中并跳转，空队可编入所选', () => {
       const h = mk();
       h.setMobile(true);
       h.setGroups([{ g: 2, slots: [0, 1] }]);
       cb.cardCount.mockReturnValue(2);
       h.updateSelection([]);
       activate(groups().children[1]);
-      expect(cb.selectGroup).toHaveBeenCalledExactlyOnceWith(2, false);
+      expect(cb.selectGroup).toHaveBeenCalledExactlyOnceWith(2, true);
       h.updateSelection([0, 1]);
       activate(groups().children[1]);
-      expect(cb.unpickCard).toHaveBeenCalledExactlyOnceWith('group', 2);
+      expect(cb.selectGroup.mock.calls).toEqual([[2, true], [2, true]]);
+      expect(cb.unpickCard).not.toHaveBeenCalled();
       activate(groups().children[7]);
       expect(cb.groupSlot).toHaveBeenCalledExactlyOnceWith(8);
 
       cb.cardCount.mockReturnValue(0);
       activate(groups().children[1]);
-      expect(cb.unpickCard).toHaveBeenCalledTimes(1);
+      expect(cb.selectGroup).toHaveBeenCalledTimes(2);
+      expect(cb.unpickCard).not.toHaveBeenCalled();
       expect(cb.groupSlot).toHaveBeenCalledTimes(1);
     });
 
@@ -628,7 +630,7 @@ describe('Hud 移动版新增的界面', () => {
         expect(b?.hidden).toBe(false);
         activate(b!);
       }
-      expect(cb.selectGroup.mock.calls).toEqual([[9, false], [0, false]]);
+      expect(cb.selectGroup.mock.calls).toEqual([[9, true], [0, true]]);
     });
 
     it('观战时没有编队行', () => {
@@ -639,23 +641,40 @@ describe('Hud 移动版新增的界面', () => {
   });
 
   describe('取消选择按钮', () => {
-    it('有玩家时，移动版取消选择按钮夹在摇杆列与小地图画布之间', () => {
+    it('缩放条在摇杆与取消选择上方，小地图在整个操作列旁边', () => {
       const h = mk();
-      const b = desel();
-      expect(b).toBeTruthy();
-      expect(b.classList.contains('mobile-only')).toBe(true);
-      expect(b.parent!.classList.contains('minirow')).toBe(true);
-      const [stick, cancel, map] = b.parent!.children;
-      expect(stick.classList.contains('joycol')).toBe(true);
-      expect(cancel).toBe(b);
+      h.setMobile(true);
+      const row = find(x => x.classList.contains('minirow'))!;
+      const [controls, map] = row.children;
+      expect(row.children).toHaveLength(2);
+      expect(controls.classList.contains('joycol')).toBe(true);
       expect(map).toBe(h.minimap);
+      const [zoom, pad] = controls.children;
+      expect(zoom).toBe(h.zoom.el);
+      expect(pad.classList.contains('joypad')).toBe(true);
+      expect(pad.children).toEqual([h.stick.el, desel()]);
+      expect(desel().classList.contains('mobile-only')).toBe(true);
     });
 
-    it('观战时摇杆列与小地图之间没有取消选择按钮', () => {
+    it('观战时摇杆旁没有取消选择按钮', () => {
       const h = mk(watchWorld);
       const row = find(x => x.classList.contains('minirow'))!;
+      const pad = find(x => x.classList.contains('joypad'))!;
       expect(row.children).toHaveLength(2);
       expect(row.children[1]).toBe(h.minimap);
+      expect(pad.children).toEqual([h.stick.el]);
+    });
+
+    it.each(['单位', '据点'])('打开%s详情后仍可点取消选择', kind => {
+      const h = mk();
+      h.setMobile(true);
+      if (kind === '单位') h.updateSelection([0]);
+      else h.updateSelection([], 0);
+      expect(h.detailShown).toBe(true);
+      expect(desel().disabled).toBe(false);
+      expect((find(x => x.classList.contains('mini')) as FakeEl & { inert?: boolean }).inert).not.toBe(true);
+      tapDesel();
+      expect(cb.command).toHaveBeenCalledExactlyOnceWith('deselect');
     });
 
     it('点一下回调 command(\'deselect\')', () => {
@@ -794,7 +813,7 @@ describe('Hud 移动版新增的界面', () => {
       expect(both()).toEqual([true, true]);
     });
 
-    it('指令模式里没选东西也能点小地图旁的「取消选择」：回调 command(\'deselect\')', () => {
+    it('指令模式里没选东西也能点摇杆旁的「取消选择」：回调 command(\'deselect\')', () => {
       mk();
       hud!.updateSelection([]);
       hud!.setMode('指令模式');
@@ -1010,7 +1029,7 @@ describe('Hud 移动版新增的界面', () => {
       const col = find(x => x.classList.contains('joycol'))!;
       expect(col.classList.contains('mobile-only')).toBe(true);
       expect(col.children[0]).toBe(hud!.zoom.el as unknown as FakeEl);
-      expect(col.children[1]).toBe(hud!.stick.el as unknown as FakeEl);
+      expect(col.children[1].children[0]).toBe(hud!.stick.el as unknown as FakeEl);
       const zoom = hud!.zoom.el as unknown as FakeEl;
       // 长条横向 [40, 200]，滑块宽 40：手指在 x = 120 是 0.5
       const track = zoom.querySelector('.ztrack')!;
@@ -1339,48 +1358,21 @@ describe('Hud 移动版新增的界面', () => {
       });
     });
 
-    describe('小地图块变 inert 的那一刻放掉摇杆与缩放条的手指', () => {
-      it('移动版详情显示、小地图块从可交互变 inert：调 stick.reset() 与 zoom.release()', () => {
+    describe('详情与摇杆、缩放条可同时使用', () => {
+      it('移动版打开、切换或关闭详情时不重置摇杆和缩放条', () => {
         mk();
         hud!.setMobile(true);
-        const reset = vi.spyOn(hud!.stick, 'reset'), release = vi.spyOn(hud!.zoom, 'release');
-        hud!.updateSelection([u1]);
-        expect(reset).toHaveBeenCalledTimes(1);
-        expect(release).toHaveBeenCalledTimes(1);
-      });
-
-      it('已经 inert 时的重复 updateSelection 不再调', () => {
-        mk();
-        hud!.setMobile(true);
-        hud!.updateSelection([u1]);
         const reset = vi.spyOn(hud!.stick, 'reset'), release = vi.spyOn(hud!.zoom, 'release');
         hud!.updateSelection([u1]);
         hud!.updateSelection([u2]);
-        expect(reset).not.toHaveBeenCalled();
-        expect(release).not.toHaveBeenCalled();
-      });
-
-      it('inert 恢复时不调', () => {
-        mk();
-        hud!.setMobile(true);
-        hud!.updateSelection([u1]);
-        const reset = vi.spyOn(hud!.stick, 'reset'), release = vi.spyOn(hud!.zoom, 'release');
         hud!.suppressDetail();
         hud!.reopenDetail();
-        hud!.updateSelection([]);
+        hud!.updateSelection([], site);
         expect(reset).not.toHaveBeenCalled();
         expect(release).not.toHaveBeenCalled();
       });
 
-      it('桌面版显示详情不 inert，也不调', () => {
-        mk();
-        const reset = vi.spyOn(hud!.stick, 'reset'), release = vi.spyOn(hud!.zoom, 'release');
-        hud!.updateSelection([u1]);
-        expect(reset).not.toHaveBeenCalled();
-        expect(release).not.toHaveBeenCalled();
-      });
-
-      it('桌面版详情显示着时切到移动版（立刻 inert）：调', () => {
+      it('切换到移动布局仍放掉原布局的手势', () => {
         mk();
         hud!.updateSelection([u1]);
         const release = vi.spyOn(hud!.zoom, 'release');
@@ -1389,9 +1381,7 @@ describe('Hud 移动版新增的界面', () => {
       });
     });
 
-    describe('suppressDetail / detailShown / 小地图块的 inert', () => {
-      const mini = (): FakeEl & { inert?: boolean } => find(x => x.classList.contains('mini') && x.classList.contains('panel'))!;
-
+    describe('suppressDetail / detailShown', () => {
       it('detailShown 随详情显示 / 收起', () => {
         mk();
         expect(hud!.detailShown).toBe(false);
@@ -1429,42 +1419,7 @@ describe('Hud 移动版新增的界面', () => {
         expect(detail().hidden).toBe(false);
       });
 
-      it('移动版详情显示着：小地图块 inert；详情收起（关闭按钮、suppressDetail、取消选择）后恢复', () => {
-        mk();
-        hud!.setMobile(true);
-        expect(mini().inert).not.toBe(true);
-        hud!.updateSelection([u1]);
-        expect(mini().inert).toBe(true);
-        tapOn(dclose());
-        expect(mini().inert).toBe(false);
-        hud!.reopenDetail();
-        hud!.updateSelection([u1]);
-        expect(mini().inert).toBe(true);
-        hud!.suppressDetail();
-        expect(mini().inert).toBe(false);
-        hud!.reopenDetail();
-        hud!.updateSelection([u2]);
-        expect(mini().inert).toBe(true);
-        hud!.updateSelection([]);
-        expect(mini().inert).toBe(false);
-      });
 
-      it('据点详情显示着同样 inert', () => {
-        mk();
-        hud!.setMobile(true);
-        hud!.updateSelection([], site);
-        expect(mini().inert).toBe(true);
-      });
-
-      it('桌面版详情显示着不 inert；移动版显示着时切到桌面版立刻恢复，切回移动版再设上', () => {
-        mk();
-        hud!.updateSelection([u1]);
-        expect(mini().inert).not.toBe(true);
-        hud!.setMobile(true);
-        expect(mini().inert).toBe(true);
-        hud!.setMobile(false);
-        expect(mini().inert).toBe(false);
-      });
     });
 
     describe('详情重画的条件', () => {
@@ -1649,7 +1604,7 @@ describe('Hud 移动版新增的界面', () => {
     const choice = (label: string, offer: UpgradeChoice['offer'], total: number, run: () => void = () => {}, need = 0, size = Math.max(total, 1)): UpgradeChoice =>
       ({ label, offer, total, need, size, run });
     /** CardBar 长按卡片时回调的 holdCard（Hud 自己接的那个） */
-    const hold = (kind: 'type' | 'group' | 'all', id: number): void => {
+    const hold = (kind: 'type' | 'all', id: number): void => {
       const bar = hud!.cards as unknown as { cb: { holdCard(k: string, i: number, r: unknown): void } };
       bar.cb.holdCard(kind, id, rectOf(100, 500, 60, 100));
     };
@@ -1709,12 +1664,9 @@ describe('Hud 移动版新增的界面', () => {
       expect(title()).toBe(`${UNITS[3].name} · 升级`);
     });
 
-    it('编队卡片标题「第 g 队 · 升级」，全选卡片「全选 · 升级」，并按各自的 (kind, id) 取升级项', () => {
+    it('全选卡片标题「全选 · 升级」，并按 (kind, id) 取升级项', () => {
       mk();
       cb.upgradeChoices.mockReturnValue([choice('升级这些人', { count: 1, cost: 10 }, 1)]);
-      hold('group', 2);
-      expect(cb.upgradeChoices).toHaveBeenLastCalledWith('group', 2);
-      expect(title()).toBe('第 2 队 · 升级');
       hold('all', -1);
       expect(cb.upgradeChoices).toHaveBeenLastCalledWith('all', -1);
       expect(title()).toBe('全选 · 升级');
@@ -1896,7 +1848,7 @@ describe('Hud 移动版新增的界面', () => {
       cb.upgradeChoices.mockReturnValue([choice('甲', { count: 1, cost: 1 }, 1, a)]);
       hold('type', 3);
       cb.upgradeChoices.mockReturnValue([choice('乙', { count: 1, cost: 1 }, 1, b)]);
-      hold('group', 1);
+      hold('type', 5);
       clickItem(0);
       expect(a).not.toHaveBeenCalled();
       expect(b).toHaveBeenCalledTimes(1);
@@ -3782,7 +3734,7 @@ describe('Hud 移动版新增的界面', () => {
           key('keydown', ' ', btnNodes()[0]);
           const n = cb.upgradeChoices.mock.calls.length;
           cb.upgradeChoices.mockReturnValue([choice('乙', { count: 2, cost: 99 }, 2)]);
-          hold('group', 2);
+          hold('type', 5);
           expect(cb.upgradeChoices.mock.calls.length).toBe(n);
           expect(items().map(x => x.label)).toEqual(['甲']);
         });

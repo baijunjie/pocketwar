@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UNIT_BY_KEY } from '../../src/sim/defs';
+import { flatWorld } from '../helpers';
 import { GroupSlots, GROUP_SLOTS } from '../../src/ui/groupSlots';
 import { FakeEl, installFakeDom } from './fakeDom';
 
-describe('GroupSlots 移动版编队按钮排', () => {
+describe('GroupSlots 编队卡片', () => {
   let activate: ReturnType<typeof vi.fn>;
   let row: GroupSlots;
   let root: FakeEl;
+  const world = flatWorld(8);
   const slot = (g: number): FakeEl => root.children.find(b => b.dataset.g === String(g))!;
   const visible = (): FakeEl[] => root.children.filter(b => !b.hidden);
-  const count = (g: number): string => slot(g).lastElementChild!.textContent;
+  const count = (g: number): string => slot(g).querySelector('.n')!.textContent;
   const click = (g: number, detail = 0): void => {
     const e = new Event('click');
     Object.defineProperty(e, 'detail', { value: detail });
@@ -18,7 +21,10 @@ describe('GroupSlots 移动版编队按钮排', () => {
   beforeEach(() => {
     installFakeDom(vi);
     activate = vi.fn();
-    row = new GroupSlots(activate);
+    world.type.fill(UNIT_BY_KEY.dao.idx);
+    world.hp.fill(100);
+    world.maxHp.fill(100);
+    row = new GroupSlots(world, type => `portrait-${type}`, activate);
     root = row.el as unknown as FakeEl;
   });
 
@@ -44,34 +50,116 @@ describe('GroupSlots 移动版编队按钮排', () => {
       expect(root.children.some(b => b.textContent === '取消选择')).toBe(false);
     });
 
-    it('编队按钮里是 <b>队号</b><i>人数</i>，aria-label 为「编为第 N 队」，开始人数为空', () => {
+    it('空编队卡片显示队号，读屏提示可编为这一队', () => {
       for (let g = 1; g <= 8; g++) {
-        const [b, i] = slot(g).children;
-        expect(b.tagName).toBe('b');
-        expect(b.textContent).toBe(String(g));
-        expect(i.tagName).toBe('i');
-        expect(i.textContent).toBe('');
-        expect(slot(g).attrs['aria-label']).toBe(`编为第 ${g} 队`);
+        const button = slot(g);
+        expect(button.classList.contains('ucard')).toBe(true);
+        expect(button.classList.contains('gcard')).toBe(true);
+        expect(button.querySelector('.gno')?.textContent).toBe(String(g));
+        expect(count(g)).toBe('');
+        expect(button.attrs['aria-label']).toBe(`编为第 ${g} 队`);
       }
+    });
+
+  });
+
+  describe('横向滚轮', () => {
+    const wheel = (init: { deltaX?: number; deltaY?: number; deltaMode?: number; ctrlKey?: boolean }): Event => {
+      const e = new Event('wheel', { cancelable: true });
+      Object.assign(e, { deltaMode: 0, deltaX: 0, deltaY: 0, ctrlKey: false, ...init });
+      root.dispatchEvent(e);
+      return e;
+    };
+
+    it('横向可滚时把竖向滚轮换成 scrollLeft 并阻止默认行为', () => {
+      Object.assign(root, { scrollWidth: 800, clientWidth: 400 });
+      const e = wheel({ deltaY: 120 });
+      expect(root.scrollLeft).toBe(120);
+      expect(e.defaultPrevented).toBe(true);
+      wheel({ deltaY: -50 });
+      expect(root.scrollLeft).toBe(70);
+    });
+
+    it('取主导轴：横扫（deltaX 更大）按 deltaX 滚，两者都是 0 不处理', () => {
+      Object.assign(root, { scrollWidth: 800, clientWidth: 400 });
+      const e = wheel({ deltaX: -30, deltaY: 5 });
+      expect(root.scrollLeft).toBe(-30);
+      expect(e.defaultPrevented).toBe(true);
+      root.scrollLeft = 0;
+      const none = wheel({});
+      expect(root.scrollLeft).toBe(0);
+      expect(none.defaultPrevented).toBe(false);
+    });
+
+    it('触控板捏合（ctrlKey）不横滚、不阻止默认行为', () => {
+      Object.assign(root, { scrollWidth: 800, clientWidth: 400 });
+      const e = wheel({ deltaY: 120, ctrlKey: true });
+      expect(root.scrollLeft).toBe(0);
+      expect(e.defaultPrevented).toBe(false);
+    });
+
+    it('按 deltaMode 换算：行 = 16px，页 = 容器宽', () => {
+      Object.assign(root, { scrollWidth: 800, clientWidth: 400 });
+      wheel({ deltaY: 2, deltaMode: 1 });
+      expect(root.scrollLeft).toBe(32);
+      wheel({ deltaY: 1, deltaMode: 2 });
+      expect(root.scrollLeft).toBe(432);
+    });
+
+    it('不溢出时不处理，也不阻止默认行为', () => {
+      Object.assign(root, { scrollWidth: 400, clientWidth: 400 });
+      const e = wheel({ deltaY: 120 });
+      expect(root.scrollLeft).toBe(0);
+      expect(e.defaultPrevented).toBe(false);
+    });
+
+    it('destroy() 后不再处理', () => {
+      Object.assign(root, { scrollWidth: 800, clientWidth: 400 });
+      row.destroy();
+      wheel({ deltaY: 120 });
+      expect(root.scrollLeft).toBe(0);
+    });
+  });
+
+  describe('溢出时接鼠标（scroll 类）', () => {
+    it('尺寸变化后按是否溢出切换 scroll 类，destroy() 时停止观察', () => {
+      let notify = (): void => {};
+      const disconnect = vi.fn();
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(cb: () => void) { notify = cb; }
+        observe(): void {}
+        disconnect = disconnect;
+      });
+      row.destroy();
+      row = new GroupSlots(world, type => `portrait-${type}`, activate);
+      root = row.el as unknown as FakeEl;
+      Object.assign(root, { scrollWidth: 800, clientWidth: 400 });
+      notify();
+      expect(root.classList.contains('scroll')).toBe(true);
+      Object.assign(root, { scrollWidth: 400 });
+      notify();
+      expect(root.classList.contains('scroll')).toBe(false);
+      row.destroy();
+      expect(disconnect).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('按钮回调', () => {
-    it('键盘或读屏激活空队时回调队号，状态是未占用、未选中', () => {
+    it('键盘或读屏激活空队时回调队号，状态是未占用', () => {
       for (let g = 1; g <= 8; g++) {
         click(g);
-        expect(activate).toHaveBeenLastCalledWith(g, false, false);
+        expect(activate).toHaveBeenLastCalledWith(g, false);
       }
       expect(activate).toHaveBeenCalledTimes(8);
     });
 
-    it('键盘或读屏激活已有队伍时，回调包含当前的占用与选中状态', () => {
+    it('键盘或读屏激活已有队伍时传回占用状态，与是否已选中无关', () => {
       row.setGroups([{ g: 2, slots: [10, 11] }]);
       row.update([]);
       click(2);
       row.update([10, 11]);
       click(2);
-      expect(activate.mock.calls).toEqual([[2, true, false], [2, true, true]]);
+      expect(activate.mock.calls).toEqual([[2, true], [2, true]]);
     });
 
     it('非键盘 click 不重复激活已由指针处理的按钮', () => {
@@ -109,6 +197,28 @@ describe('GroupSlots 移动版编队按钮排', () => {
         expect(slot(g).classList.contains('has')).toBe(false);
         expect(count(g)).toBe('');
       }
+    });
+
+    it('编队卡片显示人数、主要兵种头像和平均生命比例，并原地更新', () => {
+      world.type[11] = UNIT_BY_KEY.nu.idx;
+      world.maxHp[11] = 50;
+      world.hp[11] = 25;
+      const button = slot(1);
+      row.setGroups([{ g: 1, slots: [10, 11, 12] }]);
+      row.update([]);
+      expect(count(1)).toBe('3');
+      expect(button.querySelector('img')!.attrs.src).toBe(`portrait-${UNIT_BY_KEY.dao.idx}`);
+      expect(button.querySelector('.nm')?.textContent).toBe(`${UNIT_BY_KEY.dao.name} 等`);
+      const health = button.querySelector('.hp u')!;
+      expect(health.style.width).toBe('83%');
+
+      row.setGroups([{ g: 1, slots: [11] }]);
+      row.update([]);
+      expect(slot(1)).toBe(button);
+      expect(count(1)).toBe('1');
+      expect(button.querySelector('img')!.attrs.src).toBe(`portrait-${UNIT_BY_KEY.nu.idx}`);
+      expect(button.querySelector('.nm')?.textContent).toBe(UNIT_BY_KEY.nu.name);
+      expect(health.style.width).toBe('50%');
     });
 
     it('整队的人都在 sel 里带 on 类；只选了一部分或没选不带', () => {
@@ -154,7 +264,7 @@ describe('GroupSlots 移动版编队按钮排', () => {
       expect(count(1)).toBe('2');
     });
 
-    it('编队消失（setGroups 里不再有它）后下一次 update 去掉 has / on、清空人数', () => {
+    it('编队消失后卡片恢复为空队，可再次编队', () => {
       row.setGroups([{ g: 2, slots: [20, 21] }]);
       row.update([20, 21]);
       expect(slot(2).classList.contains('has')).toBe(true);
@@ -163,7 +273,8 @@ describe('GroupSlots 移动版编队按钮排', () => {
       row.update([20, 21]);
       expect(slot(2).classList.contains('has')).toBe(false);
       expect(slot(2).classList.contains('on')).toBe(false);
-      expect(count(2)).toBe('');
+      click(2);
+      expect(activate).toHaveBeenCalledExactlyOnceWith(2, false);
     });
 
     it('更新队伍状态时保留按钮节点，读屏可读到人数与选中状态', () => {
@@ -171,15 +282,14 @@ describe('GroupSlots 移动版编队按钮排', () => {
       row.setGroups([{ g: 1, slots: [10, 11] }]);
       row.update([10, 11]);
       expect(slot(1)).toBe(original);
-      expect(original.attrs['aria-label']).toBe('第 1 队，2 人');
-      expect(original.attrs['aria-pressed']).toBe('true');
+      expect(original.attrs['aria-label']).toBe('第 1 队，2 人，已选中');
       row.update([10]);
-      expect(original.attrs['aria-pressed']).toBe('false');
+      expect(original.attrs['aria-label']).toBe('第 1 队，2 人');
       row.setGroups([]);
       row.update([]);
       expect(slot(1)).toBe(original);
       expect(original.attrs['aria-label']).toBe('编为第 1 队');
-      expect(original.attrs['aria-pressed']).toBeUndefined();
+      expect('aria-pressed' in original.attrs).toBe(false);
     });
 
     it('同一编队状态重复刷新时不重写辅助功能属性', () => {
@@ -190,7 +300,7 @@ describe('GroupSlots 移动版编队按钮排', () => {
       row.update([10, 11]);
       expect(writeAttribute).not.toHaveBeenCalled();
       row.update([]);
-      expect(writeAttribute).toHaveBeenCalledExactlyOnceWith('aria-pressed', 'false');
+      expect(writeAttribute).toHaveBeenCalledExactlyOnceWith('aria-label', '第 1 队，2 人');
     });
 
     it('9 和 0 队有成员时可见且可激活，失去成员后恢复隐藏', () => {
@@ -203,7 +313,7 @@ describe('GroupSlots 移动版编队按钮排', () => {
       expect(count(0)).toBe('1');
       click(9);
       click(0);
-      expect(activate.mock.calls).toEqual([[9, true, false], [0, true, true]]);
+      expect(activate.mock.calls).toEqual([[9, true], [0, true]]);
 
       row.setGroups([{ g: 0, slots: [20] }]);
       row.update([20]);
