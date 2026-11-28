@@ -235,7 +235,6 @@ export class Hud {
   private readonly speedBtn: HTMLButtonElement;
   /** 最近一次的运行速度：暂停时速度按钮写它 */
   private runSpeed = 1;
-  private soundBtn!: HTMLButtonElement;
   private readonly effectsSwitch = el('button');
   private readonly musicSwitch = el('button');
   private settingsBtn!: HTMLButtonElement;
@@ -305,17 +304,14 @@ export class Hud {
       if (document.fullscreenElement) void document.exitFullscreen();
       else void document.documentElement.requestFullscreen();
     };
-    // iPhone 的 Safari 没有全屏接口：不放这个按钮（不用 hidden 占着位置，移动版菜单按网格排，靠子元素个数让「退出」铺满末行）
+    // iPhone 的 Safari 没有全屏接口时，省去这个菜单项。
     const canFullscreen = !!document.documentElement.requestFullscreen;
-    this.soundBtn = el('button', '', '');
-    this.soundBtn.title = '开 / 关音效（M）';
-    this.soundBtn.onclick = () => this.setSound(cb.toggleSound());
     const hb = el('button', '', '帮助');
     hb.onclick = () => this.toggleHelp();
     const sb = (this.settingsBtn = el('button', '', '设置'));
     const xb = el('button', '', '退出');
     xb.onclick = () => cb.exit();
-    ctl.append(...(canFullscreen ? [fs] : []), this.soundBtn, sb, hb, xb);
+    ctl.append(...(canFullscreen ? [fs] : []), sb, hb, xb);
     root.appendChild(ctl);
 
     // ---- 设置面板 ----
@@ -987,8 +983,6 @@ export class Hud {
 
   setSound(on: boolean): void {
     this.setAudioSwitch(this.effectsSwitch, on);
-    this.soundBtn.textContent = on ? '音效：开' : '音效：关';
-    this.soundBtn.classList.toggle('on', on);
   }
 
   setSpeed(s: number): void {

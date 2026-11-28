@@ -388,13 +388,32 @@ describe('Hud 移动版新增的界面', () => {
     });
   });
 
-  it('设置中的音效与音乐可独立切换，顶栏音效按钮及 M 的状态更新只同步音效', () => {
+  it.each([false, true])('音效与音乐只在设置中独立开关，快捷键状态只同步音效（移动版 %s）', mobile => {
     const hud = mk();
-    const buttons: FakeEl[] = [];
-    walk(host, el => { if (el.attrs.role === 'switch') buttons.push(el); });
-    const effects = buttons.find(b => b.attrs['aria-label'] === '音效')!;
-    const music = buttons.find(b => b.attrs['aria-label'] === '音乐')!;
-    const top = find(b => b.tagName === 'button' && b.textContent === '音效：关')!;
+    hud.setMobile(mobile);
+    if (mobile) find(b => b.classList.contains('menubtn'))!.onclick!(new Event('click'));
+
+    const controls = find(b => b.classList.contains('ctl'))!;
+    const topbar = find(b => b.classList.contains('topbar'))!;
+    const outsideSettings: FakeEl[] = [];
+    for (const region of [topbar, controls]) {
+      walk(region, b => {
+        const title = (b as FakeEl & { title?: string }).title;
+        if (b.tagName === 'button' && /音效|音乐/.test(`${b.textContent} ${title} ${b.attrs['aria-label']}`)) outsideSettings.push(b);
+      });
+    }
+    expect(outsideSettings).toEqual([]);
+
+    find(b => b.tagName === 'button' && b.textContent === '设置')!.onclick!(new Event('click'));
+    expect(hud.settingsOpen).toBe(true);
+    const settings = find(b => b.classList.contains('settings'))!;
+    const switches: FakeEl[] = [];
+    walk(settings, b => {
+      if (b.attrs.role === 'switch' && ['音乐', '音效'].includes(b.attrs['aria-label'])) switches.push(b);
+    });
+    expect(switches.map(b => b.attrs['aria-label']).sort()).toEqual(['音乐', '音效'].sort());
+    const effects = switches.find(b => b.attrs['aria-label'] === '音效')!;
+    const music = switches.find(b => b.attrs['aria-label'] === '音乐')!;
     expect(effects.attrs['aria-checked']).toBe('false');
     expect(music.attrs['aria-checked']).toBe('false');
 
@@ -405,16 +424,14 @@ describe('Hud 移动版新增的界面', () => {
     expect(music.attrs['aria-checked']).toBe('true');
     expect(effects.attrs['aria-checked']).toBe('false');
 
-    cb.toggleSound.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    cb.toggleSound.mockReturnValue(true);
     effects.onclick!(new Event('click'));
-    expect(top.textContent).toBe('音效：开');
+    expect(cb.toggleSound).toHaveBeenCalledTimes(1);
     expect(effects.attrs['aria-checked']).toBe('true');
-    top.onclick!(new Event('click'));
-    expect(effects.attrs['aria-checked']).toBe('false');
 
-    hud.setSound(true);
-    expect(top.textContent).toBe('音效：开');
-    expect(effects.attrs['aria-checked']).toBe('true');
+    // M 键和设置按钮共用这条音效状态更新入口。
+    hud.setSound(false);
+    expect(effects.attrs['aria-checked']).toBe('false');
     expect(music.attrs['aria-checked']).toBe('true');
     expect(cb.toggleMusic).toHaveBeenCalledTimes(1);
   });
