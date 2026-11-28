@@ -15,13 +15,14 @@ describe('CardBar 拖卡片', () => {
   let calls: string[];
   let drops: { kind: string; id: number; x: number; y: number; target: string }[];
   let holds: { kind: string; id: number; rect: unknown }[];
+  let assigned: number[];
   let taps: unknown[];
   /** cardCount 回调返回的人数（默认 5） */
   let count = 5;
   /** cardCount 被调了几次 */
   let countCalls = 0;
   let area: FakeEl, overlay: FakeEl, view: FakeCanvas, mini: FakeCanvas;
-  let mobileGroups: FakeEl;
+  let groupButtons: FakeEl;
   let bar: CardBar;
   let card: FakeEl, groupCard: FakeEl, allCard: FakeEl, offCard: FakeEl;
   let dom: ReturnType<typeof installFakeDom>;
@@ -75,9 +76,9 @@ describe('CardBar 拖卡片', () => {
 
   let cbs: CardBarCallbacks;
   /** 建 CardBar 并把两排卡片放进 area（真实的 hud 也是这样挂的）；topbar 是传给构造函数的顶栏 */
-  const build = (topbar: FakeEl | null = null): void => {
+  const build = (topbar: FakeEl | null = null, buttons: FakeEl | null = null): void => {
     bar = new CardBar(world, () => '', mini as unknown as HTMLCanvasElement, overlay as unknown as HTMLElement, cbs,
-      area as unknown as HTMLElement, topbar as unknown as HTMLElement | null, null, mobileGroups as unknown as HTMLElement);
+      area as unknown as HTMLElement, topbar as unknown as HTMLElement | null, null, buttons as unknown as HTMLElement | null);
     area.appendChild(bar.groupRow as unknown as FakeEl);
     area.appendChild(bar.roster as unknown as FakeEl);
     card = mkCard({ t: '3' });
@@ -90,11 +91,11 @@ describe('CardBar 拖卡片', () => {
   };
 
   /** 换成传了顶栏的 CardBar：CardBar 销毁时不摘 area 上的监听，所以连 area 一起换新的 */
-  const rebuild = (topbar: FakeEl | null, mobile: boolean): void => {
+  const rebuild = (topbar: FakeEl | null, mobile: boolean, buttons: FakeEl | null = null): void => {
     bar.destroy();
     area = new FakeEl();
     area.rect = rectOf(0, 500, 400, 100);
-    build(topbar);
+    build(topbar, buttons);
     bar.mobile = mobile;
   };
 
@@ -104,12 +105,13 @@ describe('CardBar 拖卡片', () => {
     calls = [];
     drops = [];
     holds = [];
+    assigned = [];
     taps = [];
     count = 5;
     countCalls = 0;
     area = new FakeEl();
     area.rect = rectOf(0, 500, 400, 100);
-    mobileGroups = new FakeEl();
+    groupButtons = new FakeEl();
     overlay = new FakeEl();
     overlay.rect = rectOf(0, 0, 400, 800);
     view = new FakeCanvas();
@@ -130,6 +132,7 @@ describe('CardBar 拖卡片', () => {
         return count;
       },
       holdCard: (kind, id, rect) => holds.push({ kind, id, rect }),
+      holdGroup: g => assigned.push(g),
       dropCard: (kind, id, x, y, target) => drops.push({ kind, id, x, y, target }),
     };
     build();
@@ -150,18 +153,19 @@ describe('CardBar 拖卡片', () => {
       let slot: FakeEl;
       let empty: FakeEl;
       const press = (b: FakeEl): void => {
-        firePointer(mobileGroups, 'pointerdown', { clientX: 150, clientY: 610, buttons: 1 }, b);
+        firePointer(groupButtons, 'pointerdown', { clientX: 150, clientY: 610, buttons: 1 }, b);
       };
       const tap = (b: FakeEl): void => { press(b); up(150, 610); };
 
       beforeEach(() => {
+        rebuild(null, true, groupButtons);
         slot = new FakeEl('button');
-        slot.className = 'ucard slot has';
+        slot.className = 'slot has';
         slot.dataset.g = '2';
         empty = new FakeEl('button');
-        empty.className = 'ucard slot';
+        empty.className = 'slot';
         empty.dataset.g = '3';
-        mobileGroups.append(slot, empty);
+        groupButtons.append(slot, empty);
       });
 
       it('点已有队伍选中，连续点同队两次跳转', () => {
@@ -178,14 +182,15 @@ describe('CardBar 拖卡片', () => {
         expect(calls).toEqual(['unpick group 2', 'group 2 true']);
       });
 
-      it('按空队不会长按或开始拖动，抬起只触发该空队按钮', () => {
+      it('短按空队不会开始拖动，抬起只触发该空队按钮', () => {
         press(empty);
         expect(area.captured).toBe(1);
-        vi.advanceTimersByTime(HOLD_MS);
+        vi.advanceTimersByTime(HOLD_MS - 1);
         move(153, 612);
         expect(ghost()).toBeUndefined();
         up(153, 612);
         expect(taps).toEqual([empty]);
+        expect(assigned).toEqual([]);
         expect(holds).toEqual([]);
         expect(drops).toEqual([]);
       });
@@ -247,12 +252,27 @@ describe('CardBar 拖卡片', () => {
         expect(drops).toEqual([{ kind: 'group', id: 2, x: 190, y: 300, target: 'view' }]);
       });
 
-      it('长按已有队伍打开该队菜单，松手不再点选', () => {
-        press(slot);
-        vi.advanceTimersByTime(HOLD_MS);
+      it.each([false, true])('长按空队或已有队伍直接编队，松手不再触发 (%s)', occupied => {
+        const button = occupied ? slot : empty;
+        press(button);
+        vi.advanceTimersByTime(HOLD_MS - 1);
+        expect(assigned).toEqual([]);
+        vi.advanceTimersByTime(1);
+        expect(assigned).toEqual([Number(button.dataset.g)]);
         up(150, 610);
-        expect(holds).toMatchObject([{ kind: 'group', id: 2 }]);
+        expect(assigned).toHaveLength(1);
+        expect(taps).toEqual([]);
+        expect(holds).toEqual([]);
         expect(calls).toEqual([]);
+      });
+
+      it('按住空队后滑开，超过长按门槛也不会编队', () => {
+        press(empty);
+        move(150 + TAP_SLOP + 1, 610);
+        vi.advanceTimersByTime(HOLD_MS);
+        up(150 + TAP_SLOP + 1, 610);
+        expect(assigned).toEqual([]);
+        expect(taps).toEqual([]);
       });
     });
 

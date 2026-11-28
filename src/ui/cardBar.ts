@@ -26,6 +26,7 @@ export interface CardBarCallbacks {
   tapButton?(btn: HTMLElement): void;
   /** 长按卡片（按住不动 HOLD_MS）：在 rect（卡片的视口矩形）附近弹出升级选择 */
   holdCard(kind: CardKind, id: number, rect: DOMRect): void;
+  holdGroup?(g: number): void;
   /**
    * 把卡片拖到地面（view）或小地图（mini）上松开，(x, y) 是落点的视口坐标（桌面版是鼠标位置，移动版是手指外面的剑尖）：这批人去松开处——松在敌军身上是攻击它（同右键），否则攻击移动。
    * kind：type = 兵种卡片（id 是兵种），group = 编队卡片（id 是队号），all = 全选卡片（id 不用）
@@ -128,7 +129,7 @@ export class CardBar {
   constructor(private readonly world: World, private readonly portrait: (defIdx: number, team: number) => string,
     private readonly minimap: HTMLCanvasElement, private readonly overlay: HTMLElement, private readonly cb: CardBarCallbacks,
     area: HTMLElement, private readonly topbar: HTMLElement | null = null, pressButton: HTMLButtonElement | null = null,
-    private readonly mobileGroups: HTMLElement | null = null) {
+    private readonly groupButtons: HTMLElement | null = null) {
     this.groupRow = el('div', 'cardrow groups');
     this.groupRow.hidden = true;
     this.roster = el('div', 'cardrow unitbar');
@@ -326,12 +327,12 @@ export class CardBar {
 
   /** 页面上所有卡片里最高的上沿（含选中卡片的上移）；没有卡片是 Infinity */
   cardsTop(): number {
-    return Math.min(...this.cards().map(c => c.getBoundingClientRect().top));
+    return Math.min(...this.cards().filter(c => !c.hidden).map(c => c.getBoundingClientRect().top));
   }
 
   private cards(): HTMLElement[] {
-    const groups = this.mobile && this.mobileGroups ? this.mobileGroups : this.groupRow;
-    return [...groups.querySelectorAll<HTMLElement>('.ucard'), ...this.roster.querySelectorAll<HTMLElement>('.ucard')];
+    const groups = this.groupButtons?.querySelectorAll<HTMLElement>('.slot') ?? this.groupRow.querySelectorAll<HTMLElement>('.ucard');
+    return [...groups, ...this.roster.querySelectorAll<HTMLElement>('.ucard')];
   }
 
   /** 按卡片的布局位置判定（选中的卡片上移是 transform，不算进去：否则框的边缘压在卡片附近时，命中与否跟着上移来回跳） */
@@ -370,7 +371,10 @@ export class CardBar {
      * 事件落在哪张卡片上。卡片可能在捕获阶段刚被重建（解冻补画），旧节点已脱离卡片行：只按 `.ucard` 往上找（不带卡片行，
      * 脱离后的旧卡片自己还在），再按身份换成页面上的新卡片（人数、亮不亮、位置都按新的来）
      */
-    const cardOf = (e: Event): HTMLElement | null => liveCard((e.target as HTMLElement).closest?.<HTMLElement>('.ucard') ?? null);
+    const cardOf = (e: Event): HTMLElement | null => {
+      const target = e.target as HTMLElement;
+      return liveCard(target.closest?.<HTMLElement>('.ucard') ?? target.closest?.<HTMLElement>('.slot') ?? null);
+    };
     const liveCard = (c: HTMLElement | null): HTMLElement | null => {
       if (!c || c.isConnected !== false) return c;
       const key = cardKey(c);
@@ -396,7 +400,7 @@ export class CardBar {
     const interrupt = (e: Event): void => {
       if (e.type === 'keydown' && ['Shift', 'Control', 'Alt', 'Meta'].includes((e as KeyboardEvent).key)) return;
       // 卡片带上已有一根手指按着时，落在卡片带里的其它手指一律不理（同卡片带自己的处理），也不打断第一指的连点
-      if (e.type === 'pointerdown' && down && (e as PointerEvent).pointerId !== down.pid && (area.contains(e.target as Node) || pressButton?.contains(e.target as Node) || this.mobileGroups?.contains(e.target as Node))) return;
+      if (e.type === 'pointerdown' && down && (e as PointerEvent).pointerId !== down.pid && (area.contains(e.target as Node) || pressButton?.contains(e.target as Node) || this.groupButtons?.contains(e.target as Node))) return;
       const c = e.type === 'pointerdown' && (e as PointerEvent).button === 0 ? cardOf(e) : null;
       if (!c || cardKey(c) !== last.key) last = { t: 0, key: '' };
       if (settle && (!c || cardKey(c) !== settle.key)) endSettle();
@@ -424,7 +428,8 @@ export class CardBar {
       // 影子写此刻会出动的人数（拖拽中镜头移动、伤亡都会变）；一个人都没有就不能投放
       if (recount) dragN = this.cb.cardCount(kindOf(down.card), down.id);
       const n = dragN;
-      const num = ghost.querySelector<HTMLElement>(kindOf(down.card) === 'all' ? '.ab b' : '.n');
+      const num = ghost.querySelector<HTMLElement>(kindOf(down.card) === 'all' ? '.ab b' : '.n')
+        ?? (down.card.classList.contains('slot') ? ghost.querySelector<HTMLElement>('i') : null);
       if (num && num.textContent !== String(n)) num.textContent = String(n);
       const p = dropAt(x, y), ok = n > 0 && armed(down, x, y) && !!target(p.x, p.y);
       const scr = this.overlay.getBoundingClientRect();
@@ -505,12 +510,20 @@ export class CardBar {
     const pointerDown = (e: PointerEvent): void => {
       // 已有一根手指按着时不理别的（按在卡片上、按钮上都一样）
       if (down) return;
-      // 空队与取消选择只处理点按，已有队员的卡片还可以长按和拖动。
+      // 空队支持点按与长按；已有队员时还可以双击和拖动。
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
       if (btn && (!btn.classList.contains('slot') || isEmptySlot(btn))) {
         if (e.button !== 0 || btn.disabled) return;
         down = { pid: e.pointerId, card: null, btn, x: e.clientX, y: e.clientY, add: false, id: -1, scroll0: area.scrollLeft, intent: 'wait', held: false,
           mouse: e.pointerType === 'mouse' };
+        const press = down;
+        if (isEmptySlot(btn) && this.cb.holdGroup) {
+          holdTimer = window.setTimeout(() => {
+            if (down !== press || press.voided || btn.hidden) return;
+            press.held = true;
+            this.cb.holdGroup?.(Number(btn.dataset.g));
+          }, HOLD_MS);
+        }
         this.held = true;
         btn.classList.add('down');
         area.setPointerCapture(e.pointerId);
@@ -541,14 +554,19 @@ export class CardBar {
           press.held = true;
           // 冻结（DOUBLE_MS）总比长按（HOLD_MS）先结束：此时卡片可能已补画，量页面上的那张；整张没了就不弹
           const live = liveCard(card);
-          if (!live || isEmptySlot(live)) return;
+          if (!live || live.hidden) return;
           live.classList.remove('hot');
+          if (live.classList.contains('slot') && this.cb.holdGroup) {
+            this.cb.holdGroup(id);
+            return;
+          }
+          if (isEmptySlot(live)) return;
           this.cb.holdCard(kindOf(live), id, live.getBoundingClientRect());
         }, HOLD_MS);
       }
       this.held = true;
       // 手指按住的那张先亮起来：还没拖出起手距离、卡片没跟上来之前，也看得出按中了
-      if (this.mobile) card?.classList.add('hot');
+      if (this.mobile || card?.classList.contains('slot')) card?.classList.add('hot');
       area.setPointerCapture(e.pointerId);
       window.addEventListener('keydown', onKey, true);
       guardMenu();
@@ -567,12 +585,12 @@ export class CardBar {
       if (this.mobile && cardOf(e)) pointerDown(e);
     };
     const preventGroupMenu = (e: Event): void => e.preventDefault();
-    this.mobileGroups?.addEventListener('pointerdown', groupDown);
-    this.mobileGroups?.addEventListener('contextmenu', preventGroupMenu);
+    this.groupButtons?.addEventListener('pointerdown', groupDown);
+    this.groupButtons?.addEventListener('contextmenu', preventGroupMenu);
     this.cleanup.push(() => {
       pressButton?.removeEventListener('pointerdown', pointerDown);
-      this.mobileGroups?.removeEventListener('pointerdown', groupDown);
-      this.mobileGroups?.removeEventListener('contextmenu', preventGroupMenu);
+      this.groupButtons?.removeEventListener('pointerdown', groupDown);
+      this.groupButtons?.removeEventListener('contextmenu', preventGroupMenu);
     });
     area.addEventListener('pointermove', e => {
       if (!down || down.held || e.pointerId !== down.pid) return;
@@ -640,8 +658,8 @@ export class CardBar {
           mor.className = 'nm';
           mor.textContent = '拖去下令';
         }
-        ghost.classList.remove('hover', 'hot', 'on');
-        ghost.classList.add('ghost');
+        ghost.classList.remove('hover', 'hot', 'on', 'slot');
+        ghost.classList.add('ucard', 'ghost');
         // 拖拽期间顶栏盖过卡片与剑（样式表里按 dragging 提层级）：剑朝上伸进顶栏时不压住顶栏上的字
         this.overlay.classList.add('dragging');
         // 移动版顶栏的下沿：拖拽中的卡片不往上盖住它（没有顶栏就是 overlay 的上沿）
@@ -665,7 +683,7 @@ export class CardBar {
         stop();
         if (area.hasPointerCapture(e.pointerId)) area.releasePointerCapture(e.pointerId);
         // 按着空队时可能有人用快捷键为该队编组，原来的一按不覆盖新队伍。
-        if (!d.voided && !(d.btn as HTMLButtonElement).disabled && (!d.btn.classList.contains('slot') || isEmptySlot(d.btn))) {
+        if (!d.held && !d.voided && !(d.btn as HTMLButtonElement).disabled && (!d.btn.classList.contains('slot') || isEmptySlot(d.btn))) {
           this.cb.tapButton?.(d.btn);
         }
         return;

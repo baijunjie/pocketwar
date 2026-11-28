@@ -9,7 +9,7 @@ import { MAX_UNITS, S_ROUT, Site, World } from './sim/world';
 import { Minimap } from './render/minimap';
 import { Renderer, type Marker } from './render/renderer';
 import { CardKind, allCardPicked } from './ui/cardBar';
-import { Hud, UpgradeAction, UpgradeChoice, UpgradeOffers } from './ui/hud';
+import { Hud, type HudCallbacks, UpgradeAction, UpgradeChoice, UpgradeOffers } from './ui/hud';
 import { Sound } from './audio/sound';
 import { BackGuard, blocksEdgeSwipe } from './backGuard';
 import { WheelClassifier, WheelMode, asWheelMode, edgeSpeed, exitDirection, fracToZoom, zoomToFrac } from './camInput';
@@ -129,6 +129,7 @@ export class GameApp {
       cardCount: (kind, id) => this.cardUnits(kind, id).length,
       upgradeChoices: (kind, id) => this.upgradeChoices(kind, id),
       groupSlot: g => this.groupSlot(g),
+      groupCard: (kind, id) => this.groupCard(kind, id),
       zoomTo: f => this.zoomAt(this.renderer.viewW / 2, this.renderer.viewH / 2, fracToZoom(f) / this.renderer.cam.zoom),
       dropCard: (kind, id, x, y, target) => this.dropCard(kind, id, x, y, target),
       togglePause: () => this.togglePause(),
@@ -990,9 +991,9 @@ export class GameApp {
   }
 
   /** 把当前选中的部队编为第 g 队（原来的这一队作废） */
-  private assignGroup(g: number): void {
-    this.groups[g] = { slots: this.selList.slice(), uids: this.selUid.slice() };
-    this.hud.message(`已编为第 ${g} 队（${this.selList.length} 人）`, 'info');
+  private assignGroup(g: number, slots = this.selList, uids = this.selUid): void {
+    this.groups[g] = { slots: slots.slice(), uids: uids.slice() };
+    this.hud.message(`已编为第 ${g} 队（${slots.length} 人）`, 'info');
     this.pushGroups();
     this.syncSelection();
   }
@@ -1004,7 +1005,7 @@ export class GameApp {
     this.lastGroup = { t: now, g };
   }
 
-  /** 移动版点空队、或在已有队伍菜单里确认重编队 */
+  /** 点空队或长按队号按键，把所选部队编入该队 */
   private groupSlot(g: number): void {
     if (!this.world.humanTeam) return;
     if (!this.selList.length) {
@@ -1012,6 +1013,22 @@ export class GameApp {
       return;
     }
     this.assignGroup(g);
+  }
+
+  /** 编队确认时复核单位身份，避免把期间复用同一槽位的新单位编入队伍。 */
+  private groupCard(kind: CardKind, id: number): ReturnType<HudCallbacks['groupCard']> {
+    const w = this.world;
+    const units = this.cardUnits(kind, id).map(slot => ({ slot, uid: w.uid[slot] }));
+    if (!units.length) return null;
+    const available = () => units.filter(({ slot, uid }) => w.controllable(slot) && w.uid[slot] === uid);
+    return {
+      get count() { return available().length; },
+      assign: g => {
+        const alive = available();
+        if (alive.length) this.assignGroup(g, alive.map(unit => unit.slot), alive.map(unit => unit.uid));
+        else this.hud.message('这批部队已无法编队', 'info');
+      },
+    };
   }
 
   /** 单击亮着的卡片：兵种卡片去掉选中的这个兵种，编队卡片去掉这一队，全选卡片清空选择 */

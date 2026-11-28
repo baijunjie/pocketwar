@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AU_RANGED_TAKEN, ELITE, RULES, T_GRASS, EXPAND_RULES, SIZES, SITE_CAMP, SITE_CITY, UNITS, UNIT_BY_KEY, expandUnit, isContentUnit, unitKind } from '../../src/sim/defs';
 import { unitUpgradeCost } from '../../src/sim/systems/economy';
 import { createGame } from '../../src/sim/setup';
+import { HOLD_MS } from '../../src/touchInput';
 import { S_WALL } from '../../src/sim/state';
 import { Hud, tier3Perks } from '../../src/ui/hud';
 import type { HudCallbacks, UpgradeChoice } from '../../src/ui/hud';
@@ -261,19 +262,21 @@ class HudEl extends FakeEl {
     const wasIn = this.contains(doc.activeElement);
     super.innerHTML = v;
     for (const c of this.children.splice(0)) c.parent = null;
-    for (const m of v.matchAll(/<h3>([^<]*)<\/h3>|<p>([^<]*)<\/p>|<button data-i="(\d+)"( disabled)?><b>([^<]*)<\/b><i>([^<]*)<\/i><\/button>/g)) {
-      if (m[1] !== undefined || m[2] !== undefined) {
-        const t = new HudEl(m[1] !== undefined ? 'h3' : 'p');
-        t.textContent = m[1] ?? m[2];
+    for (const m of v.matchAll(/<h3>([^<]*)<\/h3>|<p(?: class="([^"]+)")?>([^<]*)<\/p>|<button data-i="(\d+)"( disabled)?><b>([^<]*)<\/b><i>([^<]*)<\/i><\/button>/g)) {
+      const [, heading, paragraphClass, paragraph, index, disabled, label, detail] = m;
+      if (heading !== undefined || paragraph !== undefined) {
+        const t = new HudEl(heading !== undefined ? 'h3' : 'p');
+        if (paragraphClass) t.className = paragraphClass;
+        t.textContent = heading ?? paragraph;
         this.appendChild(t);
         continue;
       }
       const b = new HudEl('button');
-      b.dataset.i = m[3];
-      b.disabled = !!m[4];
+      b.dataset.i = index;
+      b.disabled = !!disabled;
       const bold = new HudEl('b'), sub = new HudEl('i');
-      bold.textContent = m[5];
-      sub.textContent = m[6];
+      bold.textContent = label;
+      sub.textContent = detail;
       b.append(bold, sub);
       this.appendChild(b);
     }
@@ -319,10 +322,15 @@ describe('Hud 移动版新增的界面', () => {
   };
   const mk = (w = world, rgb: [number, number, number][] = [[0, 0, 0], [200, 0, 0], [0, 0, 200]]): Hud => {
     const callbacks = new Proxy({} as Record<string, ReturnType<typeof vi.fn>>, {
-      get: (t, k: string) => (t[k] ??= vi.fn(['soundOn', 'toggleSound', 'musicOn', 'toggleMusic'].includes(k) ? () => false : undefined)),
+      get: (t, k: string) => (t[k] ??= vi.fn(k === 'groupCard' ? () => null
+        : ['soundOn', 'toggleSound', 'musicOn', 'toggleMusic'].includes(k) ? () => false : undefined)),
     });
     cb = callbacks;
     hud = new Hud(host as unknown as HTMLElement, w, rgb, callbacks as unknown as HudCallbacks);
+    const groups = find(x => x.classList.contains('groupslots'));
+    groups?.children.forEach((button, i) => {
+      if (!button.hidden) button.rect = rectOf(30 * i, 755, 28, 32);
+    });
     return hud;
   };
   const desel = (): FakeEl => find(x => x.classList.contains('desel') && x.tagName === 'button')!;
@@ -512,7 +520,7 @@ describe('Hud 移动版新增的界面', () => {
     });
   });
 
-  describe('移动版卡片带与编队行', () => {
+  describe('卡片带与编队按键', () => {
     const groups = (): FakeEl => find(x => x.classList.contains('groupslots'))!;
     const activate = (b: FakeEl): void => {
       const e = new Event('click');
@@ -532,14 +540,26 @@ describe('Hud 移动版新增的界面', () => {
       expect(cardwrap().contains(h.cards.roster)).toBe(true);
       expect(cardwrap().contains(groups())).toBe(false);
       expect(groups().children.filter(b => !b.hidden).map(b => b.dataset.g)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
-      expect(groups().classList.contains('mobile-only')).toBe(true);
+      const groupButtons = groups();
+      const third = groupButtons.children[2];
+      expect(third.tagName).toBe('button');
 
       h.updateSelection([]);
       expect(h.cards.roster.innerHTML).toMatch(/acard off[^>]*>[\s\S]*全选屏幕/);
       h.setMobile(false);
       h.updateSelection([], -1, [0, 1]);
-      expect(h.cards.groupRow.innerHTML).toContain('data-g="3"');
+      expect(groupButtons.parent).toBe(cardwrap());
+      expect(groups().children[2]).toBe(third);
       expect(h.cards.roster.innerHTML).not.toContain('全选屏幕');
+    });
+
+    it('隐藏的 9、0 队不会把升级菜单的避让上沿拉到屏幕顶端', () => {
+      const h = mk();
+      const first = groups().children[0];
+      first.rect = rectOf(0, 500, 30, 30);
+      expect(groups().children[8].hidden).toBe(true);
+      expect(groups().children[9].hidden).toBe(true);
+      expect(h.cards.cardsTop()).toBe(500);
     });
 
     it('单个部队详情打开时，点独立行的空队仍可编入所选部队', () => {
@@ -552,6 +572,29 @@ describe('Hud 移动版新增的界面', () => {
       firePointer(groups(), 'pointerdown', { clientX: 50, clientY: 500, buttons: 1 }, empty);
       firePointer(cardwrap(), 'pointerup', { clientX: 50, clientY: 500, buttons: 0 });
       expect(cb.groupSlot).toHaveBeenCalledExactlyOnceWith(3);
+    });
+
+    it.each([false, true])('桌面与移动版都能长按空队及已有队号直接编队（移动版 %s）', mobile => {
+      vi.useFakeTimers();
+      try {
+        const h = mk();
+        h.setMobile(mobile);
+        h.setGroups([{ g: 2, slots: [0, 1] }]);
+        h.updateSelection([0, 1]);
+        for (const g of [2, 3]) {
+          const slot = groups().children[g - 1];
+          firePointer(mobile ? groups() : cardwrap(), 'pointerdown',
+            { clientX: 50, clientY: 500, buttons: 1, pointerType: mobile ? 'touch' : 'mouse' }, slot);
+          vi.advanceTimersByTime(HOLD_MS);
+          expect(cb.groupSlot).toHaveBeenLastCalledWith(g);
+          firePointer(cardwrap(), 'pointerup', { clientX: 50, clientY: 500, buttons: 0 });
+        }
+        expect(cb.groupSlot.mock.calls).toEqual([[2], [3]]);
+        expect(cb.selectGroup).not.toHaveBeenCalled();
+        expect(cb.unpickCard).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('键盘点编队按队伍状态选中、取消或编入当前所选', () => {
@@ -1677,63 +1720,83 @@ describe('Hud 移动版新增的界面', () => {
       expect(title()).toBe('全选 · 升级');
     });
 
-    it('移动版已有编队的菜单可重编队并升级，无所选部队时禁用重编队', () => {
-      const h = mk();
-      h.setMobile(true);
-      const upgrade = vi.fn();
-      cb.cardCount.mockReturnValue(2);
-      cb.upgradeChoices.mockReturnValue([choice('升级这些人', { count: 1, cost: 10 }, 1, upgrade)]);
-      hold('group', 2);
-      expect(title()).toBe('第 2 队');
-      expect(items()).toMatchObject([
-        { label: '用所选部队重编队', disabled: true },
-        { label: '升级这些人', disabled: false },
-      ]);
-      clickItem(0, 0);
-      expect(cb.groupSlot).not.toHaveBeenCalled();
-      clickItem(1, 0);
-      expect(upgrade).toHaveBeenCalledOnce();
-
-      h.updateSelection([0, 1]);
-      hold('group', 2);
-      expect(items()[0]).toMatchObject({ label: '用所选部队重编队', disabled: false });
-      clickItem(0, 0);
-      expect(cb.groupSlot).toHaveBeenCalledExactlyOnceWith(2);
-    });
-
-    it('按着重编队确认时，选择发生变化便取消这次重编队', () => {
-      const h = mk();
-      h.setMobile(true);
-      h.updateSelection([0, 1]);
-      cb.cardCount.mockReturnValue(2);
+    it.each([['type', 3], ['all', -1]] as const)('长按 %s 卡片可为卡片代表的部队选择队号', (kind, id) => {
+      mk();
+      const assign = vi.fn();
+      cb.groupCard.mockReturnValue({ count: 5, assign });
       cb.upgradeChoices.mockReturnValue([]);
-      hold('group', 2);
-      const action = btnNodes()[0];
-      expect(action.disabled).toBe(false);
-      press(action);
-      h.selectionChanged();
-      h.updateSelection([2, 3]);
+
+      hold(kind, id);
+      expect(cb.groupCard).toHaveBeenCalledExactlyOnceWith(kind, id);
       expect(upMenu().hidden).toBe(false);
-      release(1, action);
+      expect(upMenu().innerHTML).toContain('编队 · 5 人');
+      expect(items().map(item => item.label)).toEqual(Array.from({ length: 8 }, (_, i) => `第 ${i + 1} 队`));
+      expect(assign).not.toHaveBeenCalled();
+
+      clickItem(4, 0);
+      expect(assign).toHaveBeenCalledExactlyOnceWith(5);
       expect(cb.groupSlot).not.toHaveBeenCalled();
       expect(upMenu().hidden).toBe(true);
     });
 
-    it('按着编队菜单的升级确认时，选择变化后仍按原报价成交', () => {
+    it('卡片里的部队陆续阵亡时就地刷新人数，归零时禁用队号', () => {
       const h = mk();
-      h.setMobile(true);
-      cb.cardCount.mockReturnValue(2);
-      const upgrade = vi.fn();
-      cb.upgradeChoices.mockReturnValue([choice('升级这些人', { count: 1, cost: 10 }, 1, upgrade)]);
-      hold('group', 2);
+      let alive = 5;
+      const assign = vi.fn();
+      cb.groupCard.mockReturnValue({ get count() { return alive; }, assign });
+      cb.upgradeChoices.mockReturnValue([]);
+      hold('type', 3);
+      const label = upMenu().querySelector('.groupcount')!;
+      const button = btnNodes()[0];
+      expect(label.textContent).toContain('编队 · 5 人');
+      expect(button.disabled).toBe(false);
+
+      alive = 2;
+      h.update();
+      expect(upMenu().querySelector('.groupcount')).toBe(label);
+      expect(label.textContent).toContain('编队 · 2 人');
+      expect(btnNodes()[0]).toBe(button);
+      expect(button.disabled).toBe(false);
+
+      alive = 0;
+      h.update();
+      expect(label.textContent).toContain('编队 · 0 人');
+      expect(btnNodes().every(b => b.disabled)).toBe(true);
+      clickItem(0, 0);
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('确认编队前选择变化时，不会把新选择编到该队', () => {
+      const h = mk();
+      const assign = vi.fn();
+      cb.groupCard.mockReturnValue({ count: 5, assign });
+      cb.upgradeChoices.mockReturnValue([]);
+      hold('type', 3);
       const action = btnNodes()[1];
       press(action);
       h.selectionChanged();
       h.updateSelection([2, 3]);
       expect(upMenu().hidden).toBe(false);
       release(1, action);
+      expect(assign).not.toHaveBeenCalled();
+      expect(upMenu().hidden).toBe(true);
+    });
+
+    it('带编队选项的菜单保留升级按钮和原有报价锁', () => {
+      const h = mk();
+      const assign = vi.fn(), upgrade = vi.fn();
+      cb.groupCard.mockReturnValue({ count: 5, assign });
+      cb.upgradeChoices.mockReturnValue([choice('升级这些人', { count: 1, cost: 10 }, 1, upgrade)]);
+      hold('type', 3);
+      expect(items().map(item => item.label)).toEqual([...Array.from({ length: 8 }, (_, i) => `第 ${i + 1} 队`), '升级这些人']);
+      const action = btnNodes().at(-1)!;
+      press(action);
+      h.selectionChanged();
+      h.updateSelection([2, 3]);
+      expect(upMenu().hidden).toBe(false);
+      release(1, action);
       expect(upgrade).toHaveBeenCalledOnce();
-      expect(cb.groupSlot).not.toHaveBeenCalled();
+      expect(assign).not.toHaveBeenCalled();
       expect(upMenu().hidden).toBe(true);
     });
 
@@ -1928,7 +1991,7 @@ describe('Hud 移动版新增的界面', () => {
           },
         });
       };
-      const open = (o: { mobile: boolean; rootW?: number; wrapTop?: number; cardLeft?: number; cardTop?: number; handleW?: number | 'none'; detailTop?: number; detailShown?: boolean; topbarBottom?: number; menuH?: number }): { x: number; y: number } => {
+      const open = (o: { mobile: boolean; rootW?: number; wrapTop?: number; cardLeft?: number; cardTop?: number; handleW?: number | 'none'; detailTop?: number; detailShown?: boolean; topbarBottom?: number; menuH?: number; canGroup?: boolean }): { x: number; y: number } => {
         // 一个用例里要开多次：每次换新的 Hud 与宿主，免得 find 找到上一个的元素
         hud?.destroy();
         host = new HudEl();
@@ -1951,6 +2014,7 @@ describe('Hud 移动版新增的界面', () => {
         upMenu().offsetWidth = 100;
         setMenuHeight(o.menuH ?? 60);
         cb.upgradeChoices.mockReturnValue([choice('甲', { count: 1, cost: 1 }, 1)]);
+        if (o.canGroup) cb.groupCard.mockReturnValue({ count: 5, assign: vi.fn() });
         const bar = hud!.cards as unknown as { cb: { holdCard(k: string, i: number, r: unknown): void } };
         bar.cb.holdCard('type', 3, rectOf(o.cardLeft ?? 100, o.cardTop ?? 700, 60, 100));
         return place();
@@ -1959,6 +2023,13 @@ describe('Hud 移动版新增的界面', () => {
       it('移动版：水平居中在卡片上，底边在卡片带上沿之上 8px（不看卡片自己的上沿）', () => {
         expect(open({ mobile: true })).toEqual({ x: 70, y: 680 - 20 - 60 - 8 });
         expect(open({ mobile: true, cardTop: 650 })).toEqual({ x: 70, y: 680 - 20 - 60 - 8 });
+      });
+
+      it('移动版编队菜单过高时限高在顶栏与卡片带之间', () => {
+        const r = open({ mobile: true, wrapTop: 220, topbarBottom: 96, menuH: 450, canGroup: true });
+        expect(upMenu().style.maxHeight).toBe('108px');
+        expect(r.y).toBe(84);
+        expect(20 + r.y + upMenu().offsetHeight).toBe(212);
       });
 
       it('移动版：左右夹在 edge = ceil(左把手宽 × 42 / 22) 之内（把手 22 + 向内命中延伸 20，按实际宽度等比）', () => {

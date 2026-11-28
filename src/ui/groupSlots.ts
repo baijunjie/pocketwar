@@ -1,4 +1,4 @@
-/** 移动版的编队卡片。保留每个队号的元素，刷新人数时不丢键盘焦点。 */
+/** 桌面与移动版共用的编队按键。保留每个队号的元素，刷新人数时不丢键盘焦点。 */
 import { compactNum } from './unitText';
 
 /** 放几个编队按钮（队号 1 起） */
@@ -17,7 +17,7 @@ export class GroupSlots {
     for (const g of [...Array.from({ length: GROUP_SLOTS }, (_, i) => i + 1), 9, 0]) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'ucard slot';
+      b.className = 'slot';
       b.dataset.g = String(g);
       b.hidden = g === 0 || g > GROUP_SLOTS;
       b.innerHTML = `<b>${g}</b><i></i>`;
