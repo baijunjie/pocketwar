@@ -318,7 +318,9 @@ export class GameApp {
         this.box.style.display = 'none';
         this.hud.cards.markCards(null);
         if (d.active) this.boxSelect(d.x, d.y, p.x, p.y, e.shiftKey);
-        else this.primaryClick(p.x, p.y, e.shiftKey);
+        // 鼠标有右键下令，左键只管选择（点空地即取消选择）；手指和触控笔没有右键，单击地面才下令
+        else if (e.pointerType !== 'mouse') this.primaryClick(p.x, p.y, e.shiftKey);
+        else this.clickSelect(p.x, p.y, e.shiftKey);
       }
     });
     this.on(cv, 'pointercancel', () => this.cancelTouch());
@@ -857,7 +859,7 @@ export class GameApp {
     return best;
   }
 
-  /** 左键与触屏共用的点按入口，先处理选择和直接攻击，再下地面指令。 */
+  /** 触屏点按的入口（移动版的点按，含移动版下的鼠标；桌面版界面下的手指与触控笔），先处理选择和直接攻击，再下地面指令；桌面版界面下鼠标左键只走 clickSelect。 */
   private primaryClick(x: number, y: number, add: boolean): void {
     if (this.over || this.hud.helpOpen) return;
     if (this.mode) return this.modeClick(x, y);

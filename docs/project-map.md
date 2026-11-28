@@ -7,7 +7,7 @@
 | 路径 | 职责 |
 |------|------|
 | `src/main.ts` | 入口：菜单与对局的切换，加载模型素材后启动对局 |
-| `src/game.ts` | 一局游戏：主循环、镜头、选择与指令输入（含鼠标、触控板的镜头操作），把模拟、渲染、界面、音效串起来；还管桌面版与移动版竖屏界面的切换（主要指针是触屏且竖屏时自动进移动版，设置里「界面」可覆盖）与移动版上半屏的触屏输入，移动版不做边缘卷屏；`primaryClick` 是桌面左键与移动触屏共用的点按入口，先处理指令模式、选择与直接攻击，再把地面落点交给 `GroundTaps`。回调通过 `issueMove` 下令，双击的第二下撤掉首条指令的令旗；还为 `Hud` 提供卡片取消选中、编队与升级、暂停与速度档（1 / 2 / 4 循环）的回调。`groupSlot` 用当前选择替换队员，`groupCard` 按打开菜单时卡片代表的单位记录 UID，确认编队时复核身份。`upgradeChoices` 的报价与成交同样以单位 UID 为准 |
+| `src/game.ts` | 一局游戏：主循环、镜头、选择与指令输入（含鼠标、触控板的镜头操作），把模拟、渲染、界面、音效串起来；还管桌面版与移动版竖屏界面的切换（主要指针是触屏且竖屏时自动进移动版，设置里「界面」可覆盖）与移动版上半屏的触屏输入，移动版不做边缘卷屏；`primaryClick` 是触屏点按的入口（移动版的点按，含移动版下的鼠标；桌面版界面下的手指与触控笔），先处理指令模式、选择与直接攻击，再把地面落点交给 `GroundTaps`；桌面版界面下鼠标左键只走 `clickSelect`。回调通过 `issueMove` 下令，双击的第二下撤掉首条指令的令旗；还为 `Hud` 提供卡片取消选中、编队与升级、暂停与速度档（1 / 2 / 4 循环）的回调。`groupSlot` 用当前选择替换队员，`groupCard` 按打开菜单时卡片代表的单位记录 UID，确认编队时复核身份。`upgradeChoices` 的报价与成交同样以单位 UID 为准 |
 | `src/camInput.ts` | 镜头输入的纯判定，不碰 DOM：贴边卷屏速度、鼠标从哪条边离开网页的续卷方向、滚轮事件是鼠标还是触控板（`WheelClassifier`、`WheelMode`）、缩放范围（`ZOOM_MIN` / `ZOOM_MAX`，`render/renderer.ts` 的镜头限幅也用）与缩放条位置的换算（`zoomToFrac` / `fracToZoom`，按对数映射），由 `game.ts` 接到事件上 |
 | `src/touchInput.ts` | 移动版触屏输入的纯判定，不碰 DOM：界面模式（`UiMode`、`asUiMode`、`isMobileUi`）、上半屏手势分类（`TouchGestures`：点、长按、单指框选、双指缩放旋转平移；`pinchOf`）、地面点按判定（`GroundTaps` 按时间与画布距离判断是否为双击的第二下，每次点按立即回调）、卡片带起手方向（`cardIntent`，偏向拖卡片）、拖卡片时落点（剑尖）相对手指的偏移（`dropOffset`：恒定距离，平时朝上，靠近屏幕底时往小地图那一侧放倒）、镜头摇杆读数（`stickVector`，死区与曲线）、抽屉滑动方向（`swipeDir`），由 `game.ts`、`ui/cardBar.ts`、`ui/joystick.ts` 接到事件上 |
 | `src/pointerLock.ts` | 锁定鼠标模式（`PointerLock`：Pointer Lock + 自绘光标）：在 window 捕获阶段拦下真实事件，改发给虚拟光标下元素的合成事件，自带 pointer capture、悬停、连击计数、提示框，全屏时用 Keyboard Lock 拦 Esc；文件开头是不碰 DOM 的纯函数；由 `game.ts` 创建，须早于 `Hud`（监听注册顺序决定它能拦住真实事件） |
